@@ -1,0 +1,1 @@
+ALTER TABLE "Room" ADD COLUMN "autoplayNext" BOOLEAN NOT NULL DEFAULT true;
