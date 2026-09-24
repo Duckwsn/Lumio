@@ -12,6 +12,15 @@ test("new users start without an automatic house", () => {
   const house = store.createHouse(host, "Casa Aurora"); assert.equal(store.role(house.id, host.id), "HOST");
 });
 
+test("House details expose public profiles, not member account emails", () => {
+  const store = new SocialStore();
+  const user: User = { ...host, email: "private@example.test" };
+  const house = store.createHouse(user, "Casa Privada");
+  const details = store.details(house.id, user.id)!;
+  assert.equal(details.members[0].user.email, undefined);
+  assert.equal(details.activity[0].actor?.email, undefined);
+});
+
 test("first member owns the default house and later users are members", () => {
   const store = new SocialStore(); store.ensureDefaultMembership(host); store.ensureDefaultMembership(member);
   assert.equal(store.role("group-silva", host.id), "HOST"); assert.equal(store.role("group-silva", member.id), "MEMBER");

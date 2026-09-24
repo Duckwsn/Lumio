@@ -7,6 +7,7 @@ import { userSchema, type User } from "@lumio/shared";
 const emailKey = (email: string) => email.trim().toLowerCase();
 const tokenHash = (token: string) => crypto.createHash("sha256").update(token).digest("hex");
 const passwordHash = (password: string, salt: string) => crypto.scryptSync(password, salt, 32).toString("hex");
+const dummyPasswordRecord = (() => { const salt = "f9d5ad3c14b00c2374e79446a8f5106a"; return `${salt}:${passwordHash("not-a-real-account", salt)}`; })();
 const legacyFileSchema = z.object({
   version: z.literal(1),
   users: z.array(z.object({ user: userSchema, password: z.string().nullable(), google: z.object({ sub: z.string(), email: z.string().email() }).nullable() })),
@@ -34,7 +35,7 @@ export class AuthStore {
   private readonly sessions = new Map<string, SessionRecord>();
   private readonly tokens = new Map<string, TokenRecord>();
   private readonly colors = ["#f7c98b", "#b8d7c0", "#d6b3e6", "#95b6d5", "#edaa8b", "#e6d392"];
-  constructor(private readonly file = path.resolve(process.cwd(), "../../.data/auth-v2.json"), private readonly ttlDays = Number(process.env.SESSION_TTL_DAYS ?? 14)) {
+  constructor(private readonly file = process.env.AUTH_STORE_FILE ?? path.resolve(process.cwd(), "../../.data/auth-v2.json"), private readonly ttlDays = Number(process.env.SESSION_TTL_DAYS ?? 14)) {
     if (!fs.existsSync(file)) return;
     const raw = JSON.parse(fs.readFileSync(file, "utf8")) as { version?: number };
     if (raw.version === 1 && process.env.NODE_ENV === "production") throw new Error("Migração de contas legadas exige revisão explícita em produção.");
@@ -74,10 +75,9 @@ export class AuthStore {
   }
   login(email: string, password: string) {
     const user = this.getByEmail(email), record = user && this.users.get(user.id)?.password;
-    if (!user || !record) return undefined;
-    const [salt, expected] = record.split(":");
+    const [salt, expected] = (record || dummyPasswordRecord).split(":");
     const actual = passwordHash(password, salt);
-    return actual.length === expected.length && crypto.timingSafeEqual(Buffer.from(actual), Buffer.from(expected)) ? user : undefined;
+    return record && actual.length === expected.length && crypto.timingSafeEqual(Buffer.from(actual), Buffer.from(expected)) ? user : undefined;
   }
   loginGoogle(identity: GoogleIdentity): { user: User; created: boolean } {
     const existingId = this.googleSubjects.get(identity.sub);

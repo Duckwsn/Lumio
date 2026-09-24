@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { publicUser } from "./privacy.js";
 import {
   type ChatMessage,
   type HouseHistoryEntry,
@@ -66,6 +67,7 @@ export class RoomStore {
   private readonly progress = new Map<string, Map<string, { item: QueueItem; position: number; updatedAt: string }>>();
 
   constructor() {
+    if (process.env.NODE_ENV === "production") return;
     const group: GroupSummary = { id: "group-silva", name: "Casa Silva", initials: "CS", memberCount: 6, rooms: [] };
     this.groups.set(group.id, group);
     this.createRoom({ id: "cinema", name: "Party", accent: "green", group, mode: "watch" });
@@ -104,9 +106,9 @@ export class RoomStore {
     const room = this.rooms.get(roomId); if (!room) return null;
     return {
       id: room.id, name: room.name, groupName: room.groupName, accent: room.accent, mode: room.mode,
-      members: [...room.members.values()], queue: this.normalizeQueue(room), queueRevision: room.queueRevision, history: room.history.slice(-100),
+      members: [...room.members.values()].map((member) => ({ ...member, user: publicUser(member.user) })), queue: this.normalizeQueue(room), queueRevision: room.queueRevision, history: room.history.slice(-100),
       skipVote: { count: room.votes.size, required: this.requiredVotes(room), votedBy: [...room.votes] }, settings: room.settings,
-      currentMedia: this.getEffectiveMedia(room.currentMedia), messages: room.messages.slice(-80), connectedCount: room.members.size, screenShare: room.screenShare,
+      currentMedia: this.getEffectiveMedia(room.currentMedia), messages: room.messages.slice(-80).map((message) => ({ ...message, user: publicUser(message.user) })), connectedCount: room.members.size, screenShare: room.screenShare && { ...room.screenShare, user: publicUser(room.screenShare.user) },
     };
   }
 
@@ -124,7 +126,7 @@ export class RoomStore {
   findKnownMedia(roomId: string, query: string) { const room = this.rooms.get(roomId); if (!room) return []; const normalized = query.trim().toLocaleLowerCase("pt-BR"); return [...(this.libraries.get(room.groupId)?.values() ?? [])].filter((item) => `${item.title} ${item.creator ?? ""}`.toLocaleLowerCase("pt-BR").includes(normalized)).slice(0, 12); }
 
   addQueueItem(roomId: string, item: QueueItem) { const room = this.rooms.get(roomId); if (!room) return null; this.rememberMedia(item); room.queue.push({ ...item, id: room.queue.some((candidate) => candidate.id === item.id) ? crypto.randomUUID() : item.id, status: "queued" }); return this.bumpQueue(room); }
-  removeQueueItem(roomId: string, itemId: string) { const room = this.rooms.get(roomId); if (!room) return null; const item = room.queue.find((candidate) => candidate.id === itemId); if (!item || item.id === room.currentItem?.id) return this.normalizeQueue(room); room.queue = room.queue.filter((candidate) => candidate.id !== itemId); return this.bumpQueue(room); }
+  removeQueueItem(roomId: string, itemId: string) { const room = this.rooms.get(roomId); if (!room) return null; const item = room.queue.find((candidate) => candidate.id === itemId); if (!item) return null; room.queue = room.queue.filter((candidate) => candidate.id !== itemId); if (item.id === room.currentItem?.id) { room.currentItem = null; room.historyItemId = null; room.currentMedia = { mediaId: "", provider: "demo", type: "video", title: "Nenhuma mídia", state: "idle", position: 0, duration: 0, playbackRate: 1, startedAt: null, updatedAt: Date.now(), controlledBy: room.currentMedia.controlledBy, revision: room.currentMedia.revision + 1 }; room.votes.clear(); } return this.bumpQueue(room); }
   moveQueueItem(roomId: string, itemId: string, toIndex: number, revision?: number) { const room = this.rooms.get(roomId); if (!room) return null; if (revision !== undefined && revision !== room.queueRevision) return { queue: this.normalizeQueue(room), revision: room.queueRevision, conflict: true }; const fromIndex = room.queue.findIndex((item) => item.id === itemId); if (fromIndex < 0 || room.queue[fromIndex].id === room.currentItem?.id) return { queue: this.normalizeQueue(room), revision: room.queueRevision, conflict: false }; const [item] = room.queue.splice(fromIndex, 1); room.queue.splice(Math.max(0, Math.min(toIndex, room.queue.length)), 0, item); return { queue: this.bumpQueue(room), revision: room.queueRevision, conflict: false }; }
   playNext(roomId: string, item: QueueItem, revision?: number) { const room = this.rooms.get(roomId); if (!room) return null; if (revision !== undefined && revision !== room.queueRevision) return { queue: this.normalizeQueue(room), revision: room.queueRevision, conflict: true }; this.rememberMedia(item); const currentIndex = room.queue.findIndex((candidate) => candidate.id === room.currentItem?.id); room.queue.splice(currentIndex >= 0 ? currentIndex + 1 : 0, 0, { ...item, id: room.queue.some((candidate) => candidate.id === item.id) ? crypto.randomUUID() : item.id, status: "queued" }); return { queue: this.bumpQueue(room), revision: room.queueRevision, conflict: false }; }
   clearQueue(roomId: string, revision?: number) { const room = this.rooms.get(roomId); if (!room) return null; if (revision !== undefined && revision !== room.queueRevision) return { queue: this.normalizeQueue(room), revision: room.queueRevision, conflict: true }; room.queue = room.queue.filter((item) => item.id === room.currentItem?.id); return { queue: this.bumpQueue(room), revision: room.queueRevision, conflict: false }; }

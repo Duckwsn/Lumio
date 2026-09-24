@@ -28,15 +28,17 @@ import { toQueueItem } from "./media/MediaResolver";
 import { shouldIgnoreOffer } from "./rtc/negotiation";
 import { HouseSettingsDialog, InviteDialog, ProfileDialog } from "./components/SocialDialogs";
 import { Avatar } from "./components/Avatar";
+import { ConfirmDialog } from "./components/ConfirmDialog";
 import { LumioLogo } from "./components/LumioLogo";
-import { AuthPage, BootstrapPage, EmailActionPage, HomePage, InvitePage, LandingPage } from "./components/EntryExperience";
-import { PwaInstallAction } from "./components/PwaExperience";
+import { AuthPage, BootstrapPage, EmailActionPage, HomePage, InvitePage } from "./components/EntryExperience";
+import { safeAuthDestination } from "./authNavigation";
 
 const MediaHub = lazy(() => import("./components/MediaHub").then((module) => ({ default: module.MediaHub })));
 const MediaStage = lazy(() => import("./components/MediaStage").then((module) => ({ default: module.MediaStage })));
 const MainStage = lazy(() => import("./components/MainStage").then((module) => ({ default: module.MainStage })));
 const CallSettings = lazy(() => import("./components/CallSettings").then((module) => ({ default: module.CallSettings })));
 const AccountPage = lazy(() => import("./components/AccountPage").then((module) => ({ default: module.AccountPage })));
+const LandingPage = lazy(() => import("./components/LandingPage").then((module) => ({ default: module.LandingPage })));
 
 const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:4000";
 const SOCKET_URL = import.meta.env.VITE_SOCKET_URL ?? API_URL;
@@ -53,11 +55,6 @@ const formatDuration = (value = 0) => value >= 3600
   : `${Math.floor(value / 60)}:${Math.floor(value % 60).toString().padStart(2, "0")}`;
 const providerLabel = (provider: QueueItem["provider"]) => provider === "google-drive" ? "Google Drive" : provider === "youtube" ? "YouTube" : "Lumio";
 const isEditableTarget = (target: EventTarget | null) => { const node = target as HTMLElement | null; return Boolean(node?.isContentEditable || node?.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="textbox"], [role="searchbox"], button, [role="slider"]')); };
-const safeAuthDestination = (value: string | null) => {
-  if (!value || !value.startsWith("/") || value.startsWith("//") || value.includes("\\")) return "/app";
-  try { const url = new URL(value, window.location.origin); return url.origin === window.location.origin && !["/login", "/register", "/"].includes(url.pathname) ? `${url.pathname}${url.search}${url.hash}` : "/app"; }
-  catch { return "/app"; }
-};
 
 export function App() {
   const [session, setSession] = useState<SessionData | null>(() => {
@@ -98,6 +95,7 @@ export function App() {
   const [presentationMode, setPresentationMode] = useState<"video" | "music">(() => localStorage.getItem("lumio.presentation.v1") === "music" ? "music" : "video");
   const [mediaHubRevision, setMediaHubRevision] = useState(0);
   const [confirmClearQueue, setConfirmClearQueue] = useState(false);
+  const [pendingQueueRemoval, setPendingQueueRemoval] = useState<QueueItem | null>(null);
   const [participantVolumes, setParticipantVolumes] = useState<Record<string, number>>({});
   const [playerResyncToken, setPlayerResyncToken] = useState(0);
   const [typingUserIds, setTypingUserIds] = useState<string[]>([]);
@@ -109,6 +107,10 @@ export function App() {
   });
   const [micLevel, setMicLevel] = useState(0);
   const [stageView, setStageView] = useState<MainStageView>("media");
+  const mainMenuAnchor = useRef<HTMLDivElement>(null);
+  const profileMenuAnchor = useRef<HTMLDivElement>(null);
+  const mainMenuTrigger = useRef<HTMLButtonElement>(null);
+  const profileMenuTrigger = useRef<HTMLButtonElement>(null);
   const [localScreenStream, setLocalScreenStream] = useState<MediaStream | null>(null);
   const [remoteScreenStream, setRemoteScreenStream] = useState<MediaStream | null>(null);
   const [callQuality, setCallQuality] = useState<"Calculando" | "Excelente" | "Boa" | "Instável">("Calculando");
@@ -149,7 +151,7 @@ export function App() {
   useEffect(() => { const onPopState = () => setPath(`${window.location.pathname}${window.location.search}`); window.addEventListener("popstate", onPopState); return () => window.removeEventListener("popstate", onPopState); }, []);
   const bootstrap = useCallback(async () => {
     if (!session) { setAuthStatus("unauthenticated"); return; } setBootstrapError("");
-    try { const response = await fetch(`${API_URL}/api/bootstrap`, { headers: { Authorization: `Bearer ${session.token}` } }); if (response.status === 401) { localStorage.removeItem(SESSION_KEY); setSession(null); setHouses([]); setAuthStatus("unauthenticated"); if (pathname !== "/" && !pathname.startsWith("/invite/")) navigate(`/login?next=${encodeURIComponent(path)}`); return; } if (!response.ok) throw new Error(); const data = await response.json() as { user: User; houses: HouseSummary[] }; const nextSession = { ...session, user: data.user }; localStorage.setItem(SESSION_KEY, JSON.stringify(nextSession)); setSession(nextSession); setHouses(data.houses); setAuthStatus("authenticated"); }
+    try { const response = await fetch(`${API_URL}/api/bootstrap`, { headers: { Authorization: `Bearer ${session.token}` } }); if (response.status === 401) { localStorage.removeItem(SESSION_KEY); setSession(null); setHouses([]); setAuthStatus("unauthenticated"); if (pathname !== "/" && !pathname.startsWith("/invite/") && !["/verify-email", "/forgot-password", "/reset-password"].includes(pathname)) navigate(`/login?next=${encodeURIComponent(path)}`); return; } if (!response.ok) throw new Error(); const data = await response.json() as { user: User; houses: HouseSummary[] }; const nextSession = { ...session, user: data.user }; localStorage.setItem(SESSION_KEY, JSON.stringify(nextSession)); setSession(nextSession); setHouses(data.houses); setAuthStatus("authenticated"); }
     catch { setBootstrapError("Não foi possível conectar ao Lumio."); }
   }, [session?.token]);
   useEffect(() => { if (authStatus === "unknown") void bootstrap(); }, [authStatus, bootstrap]);
@@ -201,6 +203,15 @@ export function App() {
     return () => { homeSocket.disconnect(); };
   }, [authStatus, routeHouseId, inviteToken, pathname, session?.token]);
   useEffect(() => { if (routeHouseId && selectedHouse) document.title = `${selectedHouse.name} — Lumio`; }, [routeHouseId, selectedHouse?.name]);
+  useEffect(() => {
+    if (!showMainMenu && !showProfileMenu) return;
+    const onOutside = (event: PointerEvent) => {
+      if (showMainMenu && !mainMenuAnchor.current?.contains(event.target as Node)) setShowMainMenu(false);
+      if (showProfileMenu && !profileMenuAnchor.current?.contains(event.target as Node)) setShowProfileMenu(false);
+    };
+    document.addEventListener("pointerdown", onOutside);
+    return () => document.removeEventListener("pointerdown", onOutside);
+  }, [showMainMenu, showProfileMenu]);
 
   useEffect(() => {
     if (!session || !routeHouseId || !selectedHouse || selectedHouse.id !== routeHouseId) return;
@@ -438,7 +449,7 @@ export function App() {
 
   const finishAuthentication = (data: SessionData) => {
     localStorage.setItem(SESSION_KEY, JSON.stringify(data)); setSession(data); setHouses([]); setAuthStatus("authenticated");
-    const next = new URLSearchParams(path.split("?")[1] ?? "").get("next"); navigate(safeAuthDestination(next));
+    const next = new URLSearchParams(path.split("?")[1] ?? "").get("next"); navigate(safeAuthDestination(next, window.location.origin));
   };
   const authenticate = async (mode: "signup" | "login", input: { displayName: string; email: string; password: string }) => {
     setAuthError("");
@@ -491,10 +502,15 @@ export function App() {
     const result = await socket.timeout(10_000).emitWithAck(eventNames.queuePlayNext, { roomId: snapshot.id, item: toQueueItem(media, session.user), revision: snapshot.queueRevision });
     if (!result.ok) throw new Error(result.message ?? "Não foi possível alterar a fila.");
   };
-  const clearQueue = () => {
-    if (!socket?.connected || !snapshot) return void notifyParty("Sem conexão com a Party. Tente novamente.", "error");
-    socket.emit(eventNames.queueClear, { roomId: snapshot.id, revision: snapshot.queueRevision }, (result) => { if (!result.ok) setVoiceError(result.message ?? "Não foi possível limpar a fila."); });
-    setConfirmClearQueue(false);
+  const clearQueue = async () => {
+    if (!socket?.connected || !snapshot) throw new Error("Sem conexão com a Party. Tente novamente.");
+    const result = await socket.timeout(10_000).emitWithAck(eventNames.queueClear, { roomId: snapshot.id, revision: snapshot.queueRevision });
+    if (!result.ok) throw new Error(result.message ?? "Não foi possível limpar a fila.");
+  };
+  const removeQueueItem = async (item: QueueItem) => {
+    if (!socket?.connected || !snapshot) throw new Error("Sem conexão com a Party. Tente novamente.");
+    const result = await socket.timeout(10_000).emitWithAck(eventNames.queueRemove, { roomId: snapshot.id, itemId: item.id });
+    if (!result.ok) throw new Error(result.message ?? "Não foi possível remover o item da fila.");
   };
 
   const handleProviderEnded = useCallback(() => { const playing = snapshot?.queue.find((item) => item.status === "playing"); if (socket && snapshot && playing) socket.emit(eventNames.queueAdvance, { roomId: snapshot.id, expectedMediaId: snapshot.currentMedia.mediaId, expectedQueueItemId: playing.id, revision: snapshot.queueRevision }); }, [socket, snapshot?.id, snapshot?.currentMedia.mediaId, snapshot?.queueRevision, snapshot?.queue]);
@@ -666,8 +682,9 @@ export function App() {
   }, [micEnabled]);
 
   shortcutActions.current = { toggleDeafen, toggleTheater: () => setTheaterMode((value) => !value), closeTop: () => {
-    if (showMainMenu) setShowMainMenu(false);
-    else if (showProfileMenu) setShowProfileMenu(false);
+    if (showMainMenu) { setShowMainMenu(false); mainMenuTrigger.current?.focus(); }
+    else if (showProfileMenu) { setShowProfileMenu(false); profileMenuTrigger.current?.focus(); }
+    else if (pendingQueueRemoval) setPendingQueueRemoval(null);
     else if (confirmClearQueue) setConfirmClearQueue(false);
     else if (showCallSettings) setShowCallSettings(false);
     else if (showProfile) setShowProfile(false);
@@ -681,15 +698,24 @@ export function App() {
 
   const openHouse = (target: HouseSummary) => { houseRequestVersion.current += 1; setSnapshot(null); setHouse(null); setShowHouseSettings(false); setShowInvite(false); setShowMediaHub(false); setTypingUserIds([]); setUnreadChat(0); localStorage.setItem(HOUSE_KEY, target.id); navigate(`/house/${encodeURIComponent(target.id)}`); };
   const createHomeHouse = async (name: string) => { if (!session) return; const response = await fetch(`${API_URL}/api/houses`, { method: "POST", headers: { Authorization: `Bearer ${session.token}`, "Content-Type": "application/json" }, body: JSON.stringify({ name }) }); if (!response.ok) { setHousesError((await response.json()).message ?? "Não foi possível criar a Casa."); return; } const data = await response.json() as { house: HouseDetails }; await refreshHouses(); openHouse(data.house); };
-  const openInviteInput = () => { const value = window.prompt("Cole o link ou código do convite"); if (!value?.trim()) return; const token = value.includes("/invite/") ? value.split("/invite/")[1]?.split(/[?#]/)[0] : value.includes("?invite=") ? new URL(value).searchParams.get("invite") : value.trim(); if (token) navigate(`/invite/${encodeURIComponent(token)}`); };
+  const openInviteInput = (value: string) => {
+    try {
+      const input = value.trim();
+      const url = new URL(input, window.location.origin);
+      const token = url.pathname.startsWith("/invite/") ? url.pathname.slice(8) : url.searchParams.get("invite") ?? input;
+      if (!/^[A-Za-z0-9_-]{20,128}$/.test(token)) return false;
+      navigate(`/invite/${encodeURIComponent(token)}`);
+      return true;
+    } catch { return false; }
+  };
   const acceptedInvite = async (houseId: string) => { await refreshHouses(); localStorage.setItem(HOUSE_KEY, houseId); setHouse(null); setSnapshot(null); navigate(`/house/${encodeURIComponent(houseId)}`); };
 
-  if (authStatus === "unknown") return <BootstrapPage error={bootstrapError} onRetry={() => void bootstrap()} />;
   if (pathname === "/verify-email" || pathname === "/forgot-password" || pathname === "/reset-password") return <EmailActionPage key={pathname} mode={pathname === "/verify-email" ? "verify" : pathname === "/forgot-password" ? "forgot" : "reset"} apiUrl={API_URL} navigate={navigate} />;
+  if (authStatus === "unknown") return <BootstrapPage error={bootstrapError} onRetry={() => void bootstrap()} />;
   if (!session || authStatus === "unauthenticated") {
     if (inviteToken) return <InvitePage apiUrl={API_URL} token={inviteToken} session={null} navigate={navigate} onAccepted={async () => undefined} />;
     if (pathname === "/login" || pathname === "/register") return <AuthPage key={pathname} mode={pathname === "/login" ? "login" : "register"} error={authError} apiUrl={API_URL} onSubmit={(data) => authenticate(pathname === "/login" ? "login" : "signup", data)} onGoogleLogin={finishAuthentication} navigate={navigate} />;
-    return <LandingPage navigate={navigate} />;
+    return <Suspense fallback={<BootstrapPage onRetry={() => undefined} />}><LandingPage navigate={navigate} /></Suspense>;
   }
   if (inviteToken) return <InvitePage apiUrl={API_URL} token={inviteToken} session={session} navigate={navigate} onAccepted={acceptedInvite} />;
   if (pathname === "/account") return <Suspense fallback={<BootstrapPage onRetry={() => undefined} />}><AccountPage apiUrl={API_URL} token={session.token} onBack={() => navigate("/app")} /></Suspense>;
@@ -697,7 +723,6 @@ export function App() {
   if (!houses.some((item) => item.id === routeHouseId)) return <main className="loading-screen"><LumioLogo /><h1>Casa indisponível</h1><p>Você não faz parte desta Casa.</p><button onClick={() => navigate("/app")}>Voltar para suas Casas</button></main>;
   if (!snapshot || snapshot.id !== selectedHouse?.primaryRoomId) return <LoadingScreen user={session.user} connectionState={connectionState} error={entryError} onBack={() => navigate("/app")} />;
 
-  const currentGroup = selectedHouse;
   const currentQueueItem = snapshot.queue.find((item) => item.status === "playing");
   const mediaRole = snapshot.members.find((member) => member.user.id === session.user.id)?.role;
   const canControlMedia = Boolean(mediaRole && (["OWNER", "HOST", "ADMIN"].includes(mediaRole) || snapshot.settings.mediaControl === "everyone" && mediaRole !== "GUEST" || snapshot.settings.mediaControl === "host-moderators" && ["MODERATOR", "DJ"].includes(mediaRole)));
@@ -705,8 +730,13 @@ export function App() {
   const anotherMemberSpeaking = snapshot.members.some((member) => member.user.id !== session.user.id && member.speaking);
   const mediaVolume = audioSettings.mediaVolume * (audioSettings.duckingEnabled && anotherMemberSpeaking ? audioSettings.duckingVolume / 100 : 1);
   const isSharingScreen = snapshot.screenShare?.user.id === session.user.id;
-  const switchHouse = (id: string) => { const target = houses.find((item) => item.id === id); if (target) openHouse(target); setShowMainMenu(false); };
-  const createHouse = async () => { const name = window.prompt("Nome da nova Casa"); if (!name?.trim()) return; await createHomeHouse(name); };
+  const leaveParty = () => {
+    if (callActiveRef.current || displayStream.current) leaveCall();
+    setShowMainMenu(false); setShowProfileMenu(false); setShowMediaHub(false); setShowHouseSettings(false); setShowInvite(false); setShowProfile(false); setShowCallSettings(false);
+    setConfirmClearQueue(false); setPendingQueueRemoval(null); setRightPanelCollapsed(true); setPartyNotice(null); setTypingUserIds([]); setUnreadChat(0); setReaction(null);
+    localStorage.removeItem(HOUSE_KEY);
+    navigate("/app");
+  };
   const openDrawer = (panel: "chat" | "members" | "queue") => { if (document.activeElement instanceof HTMLElement) drawerReturnFocus.current = document.activeElement; setActivePanel(panel); setRightPanelCollapsed(false); if (panel === "chat") setUnreadChat(0); };
   const closeDrawer = () => { setRightPanelCollapsed(true); requestAnimationFrame(() => drawerReturnFocus.current?.focus()); };
   const micLabel = !micEnabled ? callState === "idle" ? "Entrar na call" : "Ativar microfone" : muted ? "Ativar microfone" : "Desativar microfone";
@@ -716,14 +746,14 @@ export function App() {
     <a className="skip-link" href="#party-content">Ir para o conteúdo principal</a>
     <main className="party-main" id="party-content">
       <header className="party-header">
-        <div className="header-identity">
-          <button className="brand-menu-trigger" onClick={() => { setShowMainMenu((value) => !value); setShowProfileMenu(false); }} aria-label="Abrir menu do Lumio" aria-expanded={showMainMenu} aria-haspopup="menu"><LumioLogo /><span className="brand-name">Lumio</span><ChevronDown size={15} aria-hidden="true" /></button>
-          {showMainMenu ? <nav className="main-menu-popover" aria-label="Menu principal"><strong>{currentGroup?.name ?? snapshot.groupName}</strong><button onClick={() => navigate("/app")}>Suas Casas</button>{houses.length > 1 ? <div className="house-switcher">{houses.map((item) => <button key={item.id} className={item.id === routeHouseId ? "active" : ""} onClick={() => switchHouse(item.id)}>{item.initials} · {item.name}<small>{item.onlineCount} online</small></button>)}</div> : null}<button className="active">Party</button><button onClick={() => { setShowMediaHub(true); setShowMainMenu(false); }}>Explorar mídia</button><button onClick={() => { setShowMediaHub(true); setShowMainMenu(false); }}><Library size={15} aria-hidden="true" /> Biblioteca</button><button onClick={() => { openDrawer("queue"); setShowHistory(true); setShowMainMenu(false); }}><Activity size={15} aria-hidden="true" /> Atividade</button><button onClick={() => { setShowHouseSettings(true); setShowMainMenu(false); }}><Settings size={15} aria-hidden="true" /> Casa e membros</button><button onClick={() => void createHouse()}><Plus size={15} /> Criar Casa</button><PwaInstallAction /><span className="menu-rule" /><button onClick={() => setPresentationMode((value) => value === "video" ? "music" : "video")}><Sparkles size={15} aria-hidden="true" /> Visualização: {presentationMode === "music" ? "Ambiente" : "Vídeo"}</button><button onClick={() => setAmbientMode((value) => !value)}><Sparkles size={15} aria-hidden="true" /> Luz ambiente {ambientMode ? "ligada" : "desligada"}</button><button onClick={() => { setTheaterMode((value) => !value); setShowMainMenu(false); }}><Maximize2 size={15} aria-hidden="true" /> {theaterMode ? "Sair do modo cinema" : "Modo cinema"}</button></nav> : null}
+        <div className="header-identity" ref={mainMenuAnchor}>
+          <button ref={mainMenuTrigger} className="brand-menu-trigger" onClick={() => { setShowMainMenu((value) => !value); setShowProfileMenu(false); }} aria-label="Abrir menu da Casa e Party" aria-expanded={showMainMenu}><LumioLogo /><span className="brand-name">Lumio</span><ChevronDown size={15} aria-hidden="true" /></button>
+          {showMainMenu ? <nav className="main-menu-popover" aria-label="Menu da Casa e Party"><strong title={snapshot.groupName}>{snapshot.groupName}</strong><button onClick={() => { setShowMediaHub(true); setShowMainMenu(false); }}><Library size={15} aria-hidden="true" /> Biblioteca</button><button onClick={() => { openDrawer("queue"); setShowHistory(true); setShowMainMenu(false); }}><Activity size={15} aria-hidden="true" /> Atividade</button><button onClick={() => { setShowHouseSettings(true); setShowMainMenu(false); }}><Settings size={15} aria-hidden="true" /> Casa e membros</button><span className="menu-rule" /><button onClick={() => setPresentationMode((value) => value === "video" ? "music" : "video")}><Sparkles size={15} aria-hidden="true" /> Visualização: {presentationMode === "music" ? "Ambiente" : "Vídeo"}</button><button onClick={() => setAmbientMode((value) => !value)}><Sparkles size={15} aria-hidden="true" /> Luz ambiente {ambientMode ? "ligada" : "desligada"}</button><button onClick={() => { setTheaterMode((value) => !value); setShowMainMenu(false); }}><Maximize2 size={15} aria-hidden="true" /> {theaterMode ? "Sair do modo cinema" : "Modo cinema"}</button><span className="menu-rule" /><button className="menu-leave-party" onClick={leaveParty}><LogOut size={15} aria-hidden="true" /> Sair da Party</button></nav> : null}
           <span className="header-divider" aria-hidden="true" />
           <h1>{snapshot.groupName}</h1>
           <span className={`sync-dot ${connectionState}`} role="status" aria-label={syncLabel} data-tooltip={syncLabel}><span /></span>
         </div>
-        <div className="header-actions"><button className="header-icon" onClick={() => openDrawer("members")} aria-label={`Abrir pessoas, ${snapshot.members.length} na Party`} data-tooltip="Pessoas na Party"><Users size={18} aria-hidden="true" /><span>{snapshot.members.length}</span></button>{house?.permissions.includes("INVITE_CREATE") ? <button className="share-action" onClick={() => setShowInvite(true)}><Share2 size={17} aria-hidden="true" /> Convidar</button> : null}<div className="profile-anchor"><button className="header-avatar" onClick={() => { setShowProfileMenu((value) => !value); setShowMainMenu(false); }} aria-label="Abrir perfil" aria-expanded={showProfileMenu}><Avatar name={session.user.displayName} src={session.user.avatar} color={session.user.color} /></button>{showProfileMenu ? <div className="profile-popover"><strong>{session.user.displayName}</strong><small>{house?.role === "HOST" ? "Anfitrião" : house?.role === "ADMIN" ? "Admin" : "Membro"}</small>{session.user.status ? <small>{session.user.status}</small> : null}<button onClick={() => { setShowProfile(true); setShowProfileMenu(false); }}><Settings size={16} /> Editar perfil</button><button onClick={() => { navigate("/account"); setShowProfileMenu(false); }}><Settings size={16} /> Conta</button><button onClick={logout}><LogOut size={16} aria-hidden="true" /> Sair</button></div> : null}</div></div>
+        <div className="header-actions"><button className="header-icon" onClick={() => openDrawer("members")} aria-label={`Abrir pessoas, ${snapshot.members.length} na Party`} data-tooltip="Pessoas na Party"><Users size={18} aria-hidden="true" /><span>{snapshot.members.length}</span></button>{house?.permissions.includes("INVITE_CREATE") ? <button className="share-action" onClick={() => setShowInvite(true)}><Share2 size={17} aria-hidden="true" /> Convidar</button> : null}<div className="profile-anchor" ref={profileMenuAnchor}><button ref={profileMenuTrigger} className="header-avatar" onClick={() => { setShowProfileMenu((value) => !value); setShowMainMenu(false); }} aria-label="Abrir perfil" aria-expanded={showProfileMenu}><Avatar name={session.user.displayName} src={session.user.avatar} color={session.user.color} /></button>{showProfileMenu ? <nav className="profile-popover" aria-label="Menu do perfil"><div className="profile-popover-identity"><Avatar name={session.user.displayName} src={session.user.avatar} color={session.user.color} /><span><strong title={session.user.displayName}>{session.user.displayName}</strong><small>Conta Lumio</small></span></div><button onClick={() => { navigate("/account"); setShowProfileMenu(false); }}><Settings size={16} aria-hidden="true" /> Conta</button><button onClick={() => { setShowProfile(true); setShowProfileMenu(false); }}><Users size={16} aria-hidden="true" /> Editar perfil</button><button onClick={leaveParty}><Users size={16} aria-hidden="true" /> Suas Casas</button><span className="menu-rule" /><button onClick={logout}><LogOut size={16} aria-hidden="true" /> Sair</button></nav> : null}</div></div>
       </header>
 
       {connectionState !== "connected" ? <div className={`party-connection ${connectionState}`} role="status">{connectionState === "offline" ? "Sem conexão com a Party. Tentando reconectar..." : connectionState === "reconnecting" ? "Reconectando à Party..." : "Entrando na Party..."}</div> : null}
@@ -731,7 +761,7 @@ export function App() {
 
       <div className={`party-workspace ${rightPanelCollapsed ? "" : "drawer-open"}`}>
         <section className="party-content">
-          <MainStage screenShare={snapshot.screenShare} screenStream={isSharingScreen ? localScreenStream : remoteScreenStream} view={stageView} onViewChange={setStageView} media={<MediaStage media={snapshot.currentMedia} roomId={snapshot.id} onSkip={nextMedia} onRemove={() => { if (currentQueueItem && window.confirm(`Remover “${currentQueueItem.title}” da fila?`)) socket?.emit(eventNames.queueRemove, { roomId: snapshot.id, itemId: currentQueueItem.id }); }} onAddMedia={() => setShowMediaHub(true)} onPlaybackCommand={sendPlaybackCommand} onEnded={handleProviderEnded} apiUrl={API_URL} token={session.token} theater={theaterMode} onTheaterChange={setTheaterMode} ambient={ambientMode} musicView={presentationMode === "music"} volume={audioSettings.mediaVolume} effectiveVolume={mediaVolume} onVolumeChange={(value) => setAudioSettings((current) => ({ ...current, mediaVolume: value }))} resyncToken={playerResyncToken} />} />
+          <MainStage screenShare={snapshot.screenShare} screenStream={isSharingScreen ? localScreenStream : remoteScreenStream} view={stageView} onViewChange={setStageView} media={<MediaStage media={snapshot.currentMedia} roomId={snapshot.id} onSkip={nextMedia} onRemove={() => { if (currentQueueItem) setPendingQueueRemoval(currentQueueItem); }} onAddMedia={() => setShowMediaHub(true)} onPlaybackCommand={sendPlaybackCommand} onEnded={handleProviderEnded} apiUrl={API_URL} token={session.token} theater={theaterMode} onTheaterChange={setTheaterMode} ambient={ambientMode} musicView={presentationMode === "music"} volume={audioSettings.mediaVolume} effectiveVolume={mediaVolume} onVolumeChange={(value) => setAudioSettings((current) => ({ ...current, mediaVolume: value }))} resyncToken={playerResyncToken} />} />
           {reaction ? <div className="reaction-float" key={reaction.id} aria-live="polite"><span>{reaction.emoji}</span><small>{reaction.user.displayName}</small></div> : null}
           {theaterMode ? <div className="theater-members" aria-label="Participantes">{snapshot.members.slice(0, 6).map((member) => <span key={member.user.id} className={member.speaking ? "speaking" : ""} title={member.user.displayName} style={{ background: member.user.color }}>{avatarLetters(member.user.displayName)}</span>)}</div> : null}
 
@@ -741,7 +771,7 @@ export function App() {
           </section>
         </section>
 
-        {!rightPanelCollapsed ? <aside className={`party-drawer ${activePanel === "chat" ? "is-chat" : ""}`} aria-label="Painel da Party"><div className="drawer-header"><div className="drawer-tabs" role="tablist" aria-label="Conteúdo da Party"><button className={activePanel === "chat" ? "active" : ""} onClick={() => setActivePanel("chat")} role="tab" aria-selected={activePanel === "chat"}>Chat</button><button className={activePanel === "members" ? "active" : ""} onClick={() => setActivePanel("members")} role="tab" aria-selected={activePanel === "members"}>Pessoas</button><button className={activePanel === "queue" ? "active" : ""} onClick={() => setActivePanel("queue")} role="tab" aria-selected={activePanel === "queue"}>Fila</button></div><button className="icon-button" onClick={closeDrawer} aria-label="Fechar painel" data-tooltip="Fechar"><X size={18} /></button></div>{activePanel === "chat" ? <ChatPanel messages={snapshot.messages} currentUser={session.user} typingNames={(house?.members ?? []).filter((member) => typingUserIds.includes(member.user.id)).map((member) => member.user.displayName)} onTyping={(typing) => socket?.emit(eventNames.chatTyping, { roomId: snapshot.id, typing })} onSend={sendChat} /> : activePanel === "members" ? <MembersPanel members={house?.members ?? snapshot.houseMembers ?? []} currentUserId={session.user.id} participantVolumes={participantVolumes} onVolume={(userId, volume) => setParticipantVolumes((current) => ({ ...current, [userId]: volume }))} /> : <div className="drawer-queue"><div className="drawer-section-title"><div><strong>Fila da Party</strong><span>{snapshot.queue.length} {snapshot.queue.length === 1 ? "item" : "itens"} · rev. {snapshot.queueRevision}</span></div><div className="drawer-title-actions"><button className={showHistory ? "active" : ""} onClick={() => setShowHistory((value) => !value)} aria-label="Alternar histórico" data-tooltip="Histórico"><History size={17} /></button>{house?.permissions.includes("QUEUE_MANAGE") && snapshot.queue.length > 1 ? <button onClick={() => setConfirmClearQueue(true)} aria-label="Limpar fila" data-tooltip="Limpar fila"><Trash2 size={16} /></button> : null}</div></div>{showHistory ? <HistoryList history={snapshot.history} /> : null}<QueueList queue={snapshot.queue} onPlay={(item) => socket?.emit(eventNames.mediaChange, { roomId: snapshot.id, item })} onRemove={(item) => { if (window.confirm(`Remover “${item.title}” da fila?`)) socket?.emit(eventNames.queueRemove, { roomId: snapshot.id, itemId: item.id }); }} onMove={moveQueueItem} onNext={nextMedia} onPrevious={previousMedia} onAdd={() => setShowMediaHub(true)} /></div>}</aside> : null}
+        {!rightPanelCollapsed ? <aside className={`party-drawer ${activePanel === "chat" ? "is-chat" : ""}`} aria-label="Painel da Party"><div className="drawer-header"><div className="drawer-tabs" role="tablist" aria-label="Conteúdo da Party"><button className={activePanel === "chat" ? "active" : ""} onClick={() => setActivePanel("chat")} role="tab" aria-selected={activePanel === "chat"}>Chat</button><button className={activePanel === "members" ? "active" : ""} onClick={() => setActivePanel("members")} role="tab" aria-selected={activePanel === "members"}>Pessoas</button><button className={activePanel === "queue" ? "active" : ""} onClick={() => setActivePanel("queue")} role="tab" aria-selected={activePanel === "queue"}>Fila</button></div><button className="icon-button" onClick={closeDrawer} aria-label="Fechar painel" data-tooltip="Fechar"><X size={18} /></button></div>{activePanel === "chat" ? <ChatPanel messages={snapshot.messages} currentUser={session.user} typingNames={(house?.members ?? []).filter((member) => typingUserIds.includes(member.user.id)).map((member) => member.user.displayName)} onTyping={(typing) => socket?.emit(eventNames.chatTyping, { roomId: snapshot.id, typing })} onSend={sendChat} /> : activePanel === "members" ? <MembersPanel members={house?.members ?? snapshot.houseMembers ?? []} currentUserId={session.user.id} participantVolumes={participantVolumes} onVolume={(userId, volume) => setParticipantVolumes((current) => ({ ...current, [userId]: volume }))} /> : <div className="drawer-queue"><div className="drawer-section-title"><div><strong>Fila da Party</strong><span>{snapshot.queue.length} {snapshot.queue.length === 1 ? "item" : "itens"} · rev. {snapshot.queueRevision}</span></div><div className="drawer-title-actions"><button className={showHistory ? "active" : ""} onClick={() => setShowHistory((value) => !value)} aria-label="Alternar histórico" data-tooltip="Histórico"><History size={17} /></button>{house?.permissions.includes("QUEUE_MANAGE") && snapshot.queue.length > 1 ? <button onClick={() => setConfirmClearQueue(true)} aria-label="Limpar fila" data-tooltip="Limpar fila"><Trash2 size={16} /></button> : null}</div></div>{showHistory ? <HistoryList history={snapshot.history} /> : null}<QueueList queue={snapshot.queue} onPlay={(item) => socket?.emit(eventNames.mediaChange, { roomId: snapshot.id, item })} onRemove={setPendingQueueRemoval} onMove={moveQueueItem} onNext={nextMedia} onPrevious={previousMedia} onAdd={() => setShowMediaHub(true)} /></div>}</aside> : null}
         {!rightPanelCollapsed && activePanel === "chat" ? <MobileCallControls
           micEnabled={micEnabled} muted={muted} deafened={deafened} callState={callState} voiceError={voiceError}
           micLabel={micLabel} isSharingScreen={isSharingScreen} shareOccupied={Boolean(snapshot.screenShare && !isSharingScreen)}
@@ -768,7 +798,8 @@ export function App() {
     </main>
 
     {showMediaHub ? <Suspense fallback={<div className="overlay-loading" role="status">Abrindo Media Hub...</div>}><MediaHub apiUrl={API_URL} token={session.token} roomId={snapshot.id} queueRevision={snapshot.queueRevision} refreshSignal={mediaHubRevision} permissions={house?.permissions ?? []} canControl={canControlMedia} canAdd={canAddMedia} onClose={() => setShowMediaHub(false)} onAdd={addMedia} onPlayNext={playMediaNext} /></Suspense> : null}
-    {confirmClearQueue ? <div className="dialog-backdrop"><section className="dialog confirm-dialog" role="alertdialog" aria-modal="true" aria-labelledby="clear-queue-title"><h2 id="clear-queue-title">Limpar a fila?</h2><p>A mídia atual continua tocando. Os próximos itens serão removidos para todos.</p><div className="dialog-actions"><button onClick={() => setConfirmClearQueue(false)}>Cancelar</button><button className="danger-action" onClick={clearQueue}>Limpar fila</button></div></section></div> : null}
+    {pendingQueueRemoval ? <ConfirmDialog title="Remover da fila?" description={`“${pendingQueueRemoval.title}” será removido da fila para todos.`} confirmLabel="Remover" onClose={() => setPendingQueueRemoval(null)} onConfirm={() => removeQueueItem(pendingQueueRemoval)} /> : null}
+    {confirmClearQueue ? <ConfirmDialog title="Limpar a fila?" description="A mídia atual continua tocando. Os próximos itens serão removidos para todos." confirmLabel="Limpar fila" onClose={() => setConfirmClearQueue(false)} onConfirm={clearQueue} /> : null}
     {showInvite && house ? <InviteDialog apiUrl={API_URL} token={session.token} house={house} onClose={() => setShowInvite(false)} onChanged={(next) => setHouse(next)} /> : null}
     {showHouseSettings && house ? <HouseSettingsDialog apiUrl={API_URL} token={session.token} house={house} currentUserId={session.user.id} roomSettings={snapshot.settings} onRoomSettings={(settings) => socket?.emit(eventNames.roomSettings, { roomId: snapshot.id, settings })} onClose={() => setShowHouseSettings(false)} onLeft={() => { setShowHouseSettings(false); setSnapshot(null); setHouse(null); localStorage.removeItem(HOUSE_KEY); navigate("/app"); void refreshHouses(); }} onChanged={(next) => { setHouse(next); void refreshHouses(); }} /> : null}
     {showProfile ? <ProfileDialog apiUrl={API_URL} token={session.token} user={session.user} onClose={() => setShowProfile(false)} onSaved={(user) => { const nextSession = { ...session, user }; setSession(nextSession); localStorage.setItem(SESSION_KEY, JSON.stringify(nextSession)); }} /> : null}

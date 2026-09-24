@@ -1,4 +1,4 @@
-import { defineConfig } from "vite";
+import { defineConfig, loadEnv } from "vite";
 import react from "@vitejs/plugin-react";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -6,8 +6,33 @@ import { fileURLToPath } from "node:url";
 
 const workerSource = fileURLToPath(new URL("./pwa/sw.js", import.meta.url));
 
-export default defineConfig({
-  plugins: [react(), {
+const projectRoot = fileURLToPath(new URL("../../", import.meta.url));
+const webHeaders = {
+  "X-Content-Type-Options": "nosniff",
+  "X-Frame-Options": "DENY",
+  "Referrer-Policy": "strict-origin-when-cross-origin",
+  "Permissions-Policy": "camera=(), microphone=(self), display-capture=(self)",
+};
+
+export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, projectRoot, "VITE_");
+  const api = new URL(env.VITE_API_URL || "http://localhost:4000");
+  const socket = new URL(env.VITE_SOCKET_URL || api.origin);
+  const websocket = new URL(socket.toString()); websocket.protocol = socket.protocol === "https:" ? "wss:" : "ws:";
+  const connect = ["'self'", api.origin, socket.origin, websocket.origin, "https://accounts.google.com", "https://www.youtube.com", ...(mode === "development" ? ["ws:"] : [])];
+  const csp = [
+    "default-src 'self'", "object-src 'none'", "base-uri 'self'", "form-action 'self'",
+    "script-src 'self' https://www.youtube.com https://s.ytimg.com https://accounts.google.com/gsi/client",
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://accounts.google.com/gsi/style",
+    "font-src 'self' https://fonts.gstatic.com", "img-src 'self' data: blob: https:",
+    `media-src 'self' blob: ${api.origin}`, `connect-src ${[...new Set(connect)].join(" ")}`,
+    "frame-src https://www.youtube-nocookie.com https://www.youtube.com https://accounts.google.com",
+    "worker-src 'self'",
+  ].join("; ");
+  return { envDir: projectRoot, plugins: [react(), {
+    name: "lumio-security-policy",
+    transformIndexHtml(html) { return html.replace('<meta name="referrer" content="strict-origin-when-cross-origin" />', `<meta name="referrer" content="strict-origin-when-cross-origin" /><meta http-equiv="Content-Security-Policy" content="${csp}" />`); },
+  }, {
     name: "lumio-versioned-service-worker",
     apply: "build",
     generateBundle(_options, bundle) {
@@ -23,5 +48,7 @@ export default defineConfig({
       this.emitFile({ type: "asset", fileName: "sw.js", source });
     },
   }],
-  server: { port: 5173 },
+  server: { port: 5173, headers: webHeaders },
+  preview: { headers: webHeaders },
+  };
 });

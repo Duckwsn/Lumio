@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import type { HouseActivity, HouseDetails, HouseInvite, HouseMember, HouseRole, HouseSummary, PresenceStatus, User } from "@lumio/shared";
 import { rolePermissions } from "./authorization.js";
+import { publicUser } from "./privacy.js";
 
 interface HouseRecord { id: string; name: string; avatar?: string; primaryRoomId: string; members: Map<string, HouseMember>; invites: Map<string, HouseInvite>; activity: HouseActivity[] }
 
@@ -11,6 +12,7 @@ export class SocialStore {
   private inviteByToken = new Map<string, HouseInvite>();
 
   ensureDefaultMembership(user: User) {
+    if (process.env.NODE_ENV === "production") throw new Error("Casa de demonstração indisponível em produção.");
     let house = this.houses.get("group-silva");
     if (!house) {
       house = { id: "group-silva", name: "Casa Silva", primaryRoomId: "cinema", members: new Map(), invites: new Map(), activity: [] };
@@ -39,7 +41,7 @@ export class SocialStore {
   }
   details(houseId: string, userId: string): HouseDetails | null {
     const house = this.houses.get(houseId); const membership = house?.members.get(userId); if (!house || !membership) return null;
-    return { ...this.summary(house, userId), members: [...house.members.values()], permissions: [...rolePermissions[membership.role]], invites: rolePermissions[membership.role].includes("INVITE_REVOKE") ? [...house.invites.values()].filter((i) => !i.revokedAt).map((invite) => ({ ...invite, token: "" })) : [], activity: house.activity.slice(-40).reverse() };
+    return { ...this.summary(house, userId), members: [...house.members.values()].map((member) => ({ ...member, user: publicUser(member.user) })), permissions: [...rolePermissions[membership.role]], invites: rolePermissions[membership.role].includes("INVITE_REVOKE") ? [...house.invites.values()].filter((i) => !i.revokedAt).map((invite) => ({ ...invite, token: "", createdBy: publicUser(invite.createdBy) })) : [], activity: house.activity.slice(-40).reverse().map((entry) => ({ ...entry, actor: entry.actor && publicUser(entry.actor) })) };
   }
   getHouse(houseId: string) { return this.houses.get(houseId); }
   getByRoom(roomId: string) { return [...this.houses.values()].find((house) => house.primaryRoomId === roomId); }

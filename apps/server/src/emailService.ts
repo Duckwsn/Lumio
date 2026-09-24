@@ -7,8 +7,9 @@ type EmailPurpose = "verify" | "reset";
 export class EmailService {
   readonly provider = process.env.EMAIL_PROVIDER ?? (process.env.NODE_ENV === "production" ? "" : "dev-file");
   private readonly publicUrl = process.env.APP_PUBLIC_URL ?? "http://localhost:5173";
-  constructor(private readonly outbox = path.resolve(process.cwd(), "../../.data/dev-mailbox.jsonl")) {
-    if (!new URL(this.publicUrl).origin || !["resend", "dev-file"].includes(this.provider)) throw new Error("Configure EMAIL_PROVIDER e APP_PUBLIC_URL.");
+  constructor(private readonly outbox = process.env.EMAIL_DEV_OUTBOX_FILE ?? path.resolve(process.cwd(), "../../.data/dev-mailbox.jsonl"), private readonly fetcher: typeof fetch = fetch) {
+    const publicUrl = new URL(this.publicUrl);
+    if (publicUrl.username || publicUrl.password || publicUrl.search || publicUrl.hash || !["resend", "dev-file"].includes(this.provider)) throw new Error("Configure EMAIL_PROVIDER e APP_PUBLIC_URL.");
     if (process.env.NODE_ENV === "production" && (this.provider !== "resend" || !this.publicUrl.startsWith("https://"))) throw new Error("Produção exige e-mail real e APP_PUBLIC_URL HTTPS.");
     if (this.provider === "resend" && (!process.env.RESEND_API_KEY || !process.env.EMAIL_FROM)) throw new Error("Configure RESEND_API_KEY e EMAIL_FROM no servidor.");
   }
@@ -23,7 +24,7 @@ export class EmailService {
       fs.appendFileSync(this.outbox, JSON.stringify({ to, subject, text, createdAt: new Date().toISOString() }) + "\n", { mode: 0o600 });
       return;
     }
-    const response = await fetch("https://api.resend.com/emails", {
+    const response = await this.fetcher("https://api.resend.com/emails", {
       method: "POST",
       headers: { Authorization: `Bearer ${process.env.RESEND_API_KEY}`, "Content-Type": "application/json" },
       body: JSON.stringify({ from: process.env.EMAIL_FROM, to: [to], subject, text }),

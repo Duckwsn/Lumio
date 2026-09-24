@@ -1,4 +1,7 @@
 import { useEffect, useState } from "react";
+import { ArrowDownToLine } from "lucide-react";
+import { LumioLogo } from "./LumioLogo";
+import { resolvePwaInstallState } from "../pwaInstallState";
 
 interface InstallPromptEvent extends Event {
   prompt: () => Promise<void>;
@@ -6,6 +9,7 @@ interface InstallPromptEvent extends Event {
 }
 
 let installPrompt: InstallPromptEvent | null = null;
+let installedInSession = false;
 let waitingWorker: ServiceWorker | null = null;
 let applyingUpdateRequested = false;
 const listeners = new Set<() => void>();
@@ -18,7 +22,7 @@ export function registerPwa() {
     installPrompt = event as InstallPromptEvent;
     notify();
   });
-  window.addEventListener("appinstalled", () => { installPrompt = null; notify(); });
+  window.addEventListener("appinstalled", () => { installPrompt = null; installedInSession = true; notify(); });
   if (!import.meta.env.PROD || !("serviceWorker" in navigator)) return;
   window.addEventListener("load", () => {
     void navigator.serviceWorker.register("/sw.js").then((registration) => {
@@ -37,7 +41,7 @@ export function registerPwa() {
 function usePwaState() {
   const [, setVersion] = useState(0);
   useEffect(() => { const listener = () => setVersion((version) => version + 1); listeners.add(listener); return () => { listeners.delete(listener); }; }, []);
-  return { canInstall: Boolean(installPrompt) && !isInstalled(), updateReady: Boolean(waitingWorker) };
+  return { canInstall: Boolean(installPrompt) && !isInstalled() && !installedInSession, installed: isInstalled() || installedInSession, updateReady: Boolean(waitingWorker) };
 }
 
 export function PwaInstallAction() {
@@ -52,6 +56,19 @@ export function PwaInstallAction() {
     notify();
     if (prompt) void prompt.prompt().then(() => prompt.userChoice).catch(() => undefined);
   }}>Instalar Lumio</button>;
+}
+
+export function PwaInstallShowcase() {
+  const { canInstall, installed } = usePwaState();
+  const appleMobile = /iPad|iPhone|iPod/.test(navigator.userAgent) || navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1;
+  const state = resolvePwaInstallState(canInstall, installed, appleMobile);
+  const startInstall = () => {
+    const prompt = installPrompt;
+    installPrompt = null;
+    notify();
+    if (prompt) void prompt.prompt().then(() => prompt.userChoice).catch(() => undefined);
+  };
+  return <section className="landing-install" aria-labelledby="landing-install-title"><div className="landing-container landing-install-inner"><span className="landing-install-logo"><LumioLogo /></span><div className="landing-install-copy"><h2 id="landing-install-title">Leve o Lumio com você.</h2><p>Abra sua Casa direto do dispositivo, sempre que a turma se reunir. Para assistir e conversar, você ainda precisa de internet.</p></div>{state === "available" ? <button className="landing-button" type="button" onClick={startInstall}><ArrowDownToLine size={17} /> Instalar Lumio</button> : <span className="landing-install-note">{state === "installed" ? "Lumio já está instalado neste dispositivo." : state === "ios" ? "No Safari: Compartilhar → Adicionar à Tela de Início." : "O botão aparece aqui quando o navegador permite. No Chrome para Android, procure Instalar no menu ⋮."}</span>}</div></section>;
 }
 
 export function PwaUpdateNotice() {

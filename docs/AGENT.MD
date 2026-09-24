@@ -24,11 +24,14 @@ Landing pública
 ```
 
 O Home não deve inicializar Socket.IO, WebRTC, busca de mídia ou componentes pesados da Party. Esses recursos pertencem à rota `/house/:houseId` e devem continuar lazy-loaded quando possível.
+Na Landing pública, a demonstração da Party é apenas visual e local: sem socket, player/provider, WebRTC, permissões ou dados privados. Os recursos anunciados devem existir no produto; a instalação PWA só recebe botão quando o navegador oferece um prompt funcional.
 
 ## Regras de backend
 
 - Use as funções de autenticação e autorização existentes, como `requireUser`, `requireRoomMember` e as verificações de permissão centralizadas.
 - Toda rota sensível deve validar usuário, membership e papel no servidor.
+- Contas novas com e-mail/senha não têm acesso normal antes da verificação; Google Identity validado não autoriza Drive. Tokens de verificação/reset são específicos, expiráveis e de uso único.
+- Não exponha e-mail de membros em payloads sociais/Party, nem trate `fileId`, `houseId` ou estado do frontend como autorização.
 - Ao alterar um contrato de API, atualize primeiro `packages/shared` e depois os consumidores.
 - Valide payloads de entrada; não aceite IDs, tokens, URLs ou papéis sem validação.
 - Ao mudar estado social que aparece em tempo real, atualize o snapshot/evento correspondente.

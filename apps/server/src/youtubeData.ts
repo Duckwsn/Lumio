@@ -78,6 +78,7 @@ export class YouTubeDataService {
   }
 
   async getVideo(videoId: string) {
+    if (!/^[A-Za-z0-9_-]{11}$/.test(videoId)) throw new YouTubeDataError(400, "INVALID", "Vídeo do YouTube inválido.");
     try { this.requireConfigured(); }
     catch (error) { if (error instanceof YouTubeDataError && error.code === "NOT_CONFIGURED") return this.getOEmbedVideo(videoId); throw error; }
     let result: MediaSearchResult | null;
@@ -146,6 +147,6 @@ export class YouTubeDataService {
   }
 
   private log(query: string, cache: "HIT" | "MISS") {
-    if (process.env.NODE_ENV !== "production") console.info(`YouTube search query=${JSON.stringify(query)} cache=${cache}`);
+    if (process.env.NODE_ENV !== "production") console.info(`YouTube search cache=${cache}`);
   }
 }

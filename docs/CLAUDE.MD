@@ -32,6 +32,7 @@ Antes de alterar o projeto, leia também:
 ## Rotas e ciclo de vida
 
 - `/` — Landing pública; não deve abrir Socket.IO, WebRTC, YouTube ou Google Drive.
+- Na Landing V3, a prévia da Party usa somente conteúdo visual local. A visita pública sem sessão carrega a Landing antes do bundle do App; CTAs preservam `/login` e `/register`, e a instalação usa o prompt PWA existente quando disponível.
 - `/login` e `/register` — autenticação.
 - `/app` — Home autenticada; lista Casas e permite criar uma nova.
 - `/house/:houseId` — entrada na Casa e acesso à Party.
@@ -92,7 +93,7 @@ Só encerre o processo depois de confirmar que ele pertence ao projeto.
 
 - Contas e hashes de sessão novos usam arquivo local; Casas e parte do estado social ainda usam armazenamento em memória durante o desenvolvimento.
 - Reiniciar o servidor pode apagar estado runtime.
-- Recuperação de senha e verificação de e-mail ainda não estão implementadas. Transferência de host funciona no adapter em memória, mas exigirá transação ao migrar para Prisma. Google Login usa Google Identity Services e é separado do OAuth do Google Drive; consulte `docs/AUTH_V2.md`.
+- Verificação e recuperação de e-mail/senha usam tokens de uso único e provedor configurável; em desenvolvimento o outbox é local e não equivale a e-mail real. Transferência de host funciona no adapter em memória, mas exigirá transação ao migrar para Prisma. Google Login usa Google Identity Services e é separado do OAuth do Google Drive; consulte `docs/AUTH_V2.md`.
 - Prisma/schema estão preparados para evolução, mas não devem ser tratados como persistência completa sem uma implementação explícita.
 
 ## Media Hub V3

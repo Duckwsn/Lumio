@@ -286,7 +286,7 @@ export const modeChangeSchema = z.object({ roomId: z.string(), mode: roomModeSch
 export const roomSettingsInputSchema = z.object({ roomId: z.string(), settings: roomSettingsSchema });
 export const chatInputSchema = z.object({ roomId: z.string(), body: z.string().min(1).max(1000) });
 export const presenceInputSchema = z.object({ roomId: z.string(), speaking: z.boolean(), muted: z.boolean(), deafened: z.boolean().optional() });
-export const voiceSignalSchema = z.object({ roomId: z.string(), targetUserId: z.string(), targetSocketId: z.string(), signal: z.union([z.object({ type: z.enum(["offer", "answer"]), sdp: z.string() }), z.object({ candidate: z.object({ candidate: z.string(), sdpMid: z.string().nullable().optional(), sdpMLineIndex: z.number().nullable().optional(), usernameFragment: z.string().nullable().optional() }) })]) });
+export const voiceSignalSchema = z.object({ roomId: z.string().max(100), targetUserId: z.string().max(100), targetSocketId: z.string().max(100), signal: z.union([z.object({ type: z.enum(["offer", "answer"]), sdp: z.string().max(32_000) }), z.object({ candidate: z.object({ candidate: z.string().max(4_000), sdpMid: z.string().max(100).nullable().optional(), sdpMLineIndex: z.number().int().min(0).max(100).nullable().optional(), usernameFragment: z.string().max(256).nullable().optional() }) })]) });
 export interface VoicePeer { user: User; socketId: string }
 
 export interface ServerToClientEvents {
@@ -322,7 +322,7 @@ export interface ClientToServerEvents {
   "media:rate": (input: z.infer<typeof mediaCommandSchema>) => void;
   "media:change": (input: z.infer<typeof changeMediaSchema>, respond?: (result: { ok: boolean; message?: string }) => void) => void;
   "queue:add": (input: z.infer<typeof addQueueInputSchema>, respond?: (result: { ok: boolean; item?: QueueItem; position?: number; message?: string }) => void) => void;
-  "queue:remove": (input: { roomId: string; itemId: string }) => void;
+  "queue:remove": (input: { roomId: string; itemId: string }, respond?: (result: { ok: boolean; message?: string }) => void) => void;
   "queue:next": (input: { roomId: string }) => void;
   "queue:previous": (input: { roomId: string }) => void;
   "queue:move": (input: z.infer<typeof queueMoveSchema>) => void;

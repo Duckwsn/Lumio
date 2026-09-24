@@ -52,6 +52,8 @@ export class GoogleDriveService {
   }
   createAuthorizationUrl(userId: string) {
     if (!this.isConfigured()) throw new DriveError("UNAVAILABLE", "Google Drive não está configurado no servidor.");
+    if (this.states.size > 5_000) for (const [key, pending] of this.states) if (pending.expiresAt <= Date.now()) this.states.delete(key);
+    if (this.states.size > 10_000) throw new DriveError("RATE_LIMIT", "Muitas autorizações pendentes. Aguarde alguns minutos.");
     const state = crypto.randomBytes(32).toString("base64url"), verifier = crypto.randomBytes(32).toString("base64url");
     this.states.set(state, { userId, verifier, expiresAt: Date.now() + 600_000 });
     const url = new URL("https://accounts.google.com/o/oauth2/v2/auth");
@@ -71,7 +73,8 @@ export class GoogleDriveService {
     this.saveVault(); return pending.userId;
   }
   async disconnect(userId: string) {
-    const connection = this.connections.get(userId); this.connections.delete(userId); this.saveVault();
+    const connection = this.connections.get(userId); this.connections.delete(userId);
+    try { this.saveVault(); } catch (error) { if (connection) this.connections.set(userId, connection); throw error; }
     for (const [key, grant] of this.grants) if (grant.ownerId === userId) this.grants.delete(key);
     for (const [key, ticket] of this.tickets) if (ticket.ownerId === userId) this.tickets.delete(key);
     if (connection) await this.fetcher("https://oauth2.googleapis.com/revoke", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ token: connection.refreshToken }) }).catch(() => undefined);
@@ -142,18 +145,21 @@ export class GoogleDriveService {
     this.grants.set(this.grantKey(roomId, fileId), { ownerId, expiresAt: Date.now() + 24 * 60 * 60_000 });
     return item;
   }
-  getGrant(roomId: string, fileId: string) { const grant = this.grants.get(this.grantKey(roomId, fileId)); return grant && grant.expiresAt > Date.now() && this.connections.has(grant.ownerId) ? grant : undefined; }
+  getGrant(roomId: string, fileId: string) { const key = this.grantKey(roomId, fileId), grant = this.grants.get(key); if (grant && grant.expiresAt <= Date.now()) this.grants.delete(key); return grant && grant.expiresAt > Date.now() && this.connections.has(grant.ownerId) ? grant : undefined; }
   revokeOwnerFromHouse(roomId: string, ownerId: string) { for (const [key, grant] of this.grants) if (key.startsWith(`${roomId}:`) && grant.ownerId === ownerId) this.grants.delete(key); }
   revokeViewer(viewerId: string) { for (const [key, ticket] of this.tickets) if (ticket.viewerId === viewerId) this.tickets.delete(key); }
   createPlaybackTicket(input: { roomId: string; fileId: string; viewerId: string; sessionToken: string; ownerIsMember: boolean; mediaIsListed: boolean }) {
     const grant = this.getGrant(input.roomId, input.fileId);
     if (!grant || !input.ownerIsMember || !input.mediaIsListed) throw new DriveError("FORBIDDEN", "Este vídeo não está disponível nesta Party.");
+    if (this.tickets.size > 5_000) for (const [key, entry] of this.tickets) if (entry.expiresAt <= Date.now()) this.tickets.delete(key);
+    if (this.tickets.size > 20_000) throw new DriveError("RATE_LIMIT", "Muitas reproduções pendentes. Aguarde alguns minutos.");
     const ticket = crypto.randomBytes(32).toString("base64url");
     this.tickets.set(ticket, { roomId: input.roomId, fileId: input.fileId, ownerId: grant.ownerId, viewerId: input.viewerId, sessionHash: crypto.createHash("sha256").update(input.sessionToken).digest("hex"), expiresAt: Date.now() + 5 * 60_000 });
     return ticket;
   }
   verifyTicket(ticket: string, sessionToken: string) {
     const record = this.tickets.get(ticket);
+    if (record && record.expiresAt < Date.now()) this.tickets.delete(ticket);
     if (!record || record.expiresAt < Date.now() || !sessionToken || crypto.createHash("sha256").update(sessionToken).digest("hex") !== record.sessionHash || !this.getGrant(record.roomId, record.fileId)) throw new DriveError("FORBIDDEN", "Autorização de reprodução expirada.");
     return record;
   }

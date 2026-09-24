@@ -2,6 +2,33 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { RoomStore } from "./store.js";
 
+test("removing the current queue item stops playback without clearing the remaining queue", () => {
+  const store = new RoomStore();
+  const user = { id: "u1", displayName: "Duck", color: "#fff" };
+  const base = { provider: "youtube" as const, type: "video" as const, duration: 120, addedBy: user, addedAt: new Date().toISOString() };
+  const first = { ...base, id: "q1", providerMediaId: "first", title: "First" };
+  const second = { ...base, id: "q2", providerMediaId: "second", title: "Second" };
+  store.addQueueItem("cinema", first);
+  store.addQueueItem("cinema", second);
+  store.changeMedia("cinema", first);
+  const revision = store.getQueueRevision("cinema");
+  assert.deepEqual(store.removeQueueItem("cinema", first.id)?.map((item) => item.id), [second.id]);
+  assert.equal(store.getQueueRevision("cinema"), revision + 1);
+  assert.equal(store.getSnapshot("cinema")?.currentMedia.state, "idle");
+  assert.equal(store.getSnapshot("cinema")?.currentMedia.mediaId, "");
+  assert.equal(store.getSnapshot("cinema")?.queue[0].status, "queued");
+});
+
+test("Party snapshot does not expose a member's account email", () => {
+  const store = new RoomStore();
+  const user = { id: "private", displayName: "Duck", color: "#fff", email: "private@example.test" };
+  store.addMember("cinema", user);
+  store.addMessage("cinema", user, "Olá");
+  const snapshot = store.getSnapshot("cinema")!;
+  assert.equal(snapshot.members[0].user.email, undefined);
+  assert.equal(snapshot.messages.at(-1)?.user.email, undefined);
+});
+
 test("room store keeps media position authoritative", () => {
   const store = new RoomStore();
   const user = { id: "u1", displayName: "Duck", color: "#fff" };

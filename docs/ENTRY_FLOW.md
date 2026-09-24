@@ -12,12 +12,17 @@
 
 The frontend uses the History API and Vite's development fallback. A production static host must rewrite unknown paths to `index.html`.
 The PWA manifest starts at `/app`; unauthenticated visitors are redirected by the existing auth flow. Deep links such as `/invite/:token` and `/house/:houseId` still require the host's history fallback. The service worker does not replace that server-side rewrite and does not make authenticated routes work offline.
+On a fresh unauthenticated visit to `/`, the public Landing mounts without the App/Party JavaScript chunk. Its Party showcase is local, illustrative markup; it does not connect sockets, load providers or request permissions. Landing CTAs navigate to the existing auth routes. The install section reuses the existing browser-driven PWA prompt and shows platform guidance when no prompt is available.
 
 ## Bootstrap and network behavior
 
 When a local token exists, `/api/bootstrap` returns the current profile and House summaries in one request. The UI stays in an `unknown` authentication state until this finishes, preventing a Landing flash. A `401` clears the invalid local session; a network failure keeps it and presents a retry state.
 
 The Home performs a light metadata refresh every 20 seconds and receives `home:update` over one authenticated, lightweight socket. It does not join Party rooms or initialize media, WebRTC, screen sharing or device discovery. Cards distinguish online members from members in the Party. Heavy Party components are loaded as separate Vite chunks only after entering `/house/:houseId`. Route House ID is authoritative for Party selection; older House-detail fetches are canceled on switch.
+
+**Sair da Party** returns to `/app`, disconnects Party presence and releases local call, screen-share and player resources. It does not leave the House, clear its queue, disconnect Google Drive or sign out of Lumio. **Sair** in the profile menu signs out of the account; House membership is managed separately in Casa e membros.
+
+The YouTube embedded player requires the site origin as HTTP Referer. The frontend uses `strict-origin-when-cross-origin` for this purpose, including on the iframe. A production host must not override it with `no-referrer`; the API's own `no-referrer` policy remains separate.
 
 ## New-user flow
 
