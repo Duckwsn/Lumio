@@ -13,6 +13,11 @@ export const permissionSchema = z.enum([
   "CHAT_SEND", "CHAT_MODERATE", "CALL_JOIN", "SCREEN_SHARE",
 ]);
 export type Permission = z.infer<typeof permissionSchema>;
+export const houseRolePermissions: Record<HouseRole, readonly Permission[]> = {
+  HOST: [...permissionSchema.options],
+  ADMIN: ["MEMBER_MANAGE", "INVITE_CREATE", "INVITE_REVOKE", "MEDIA_ADD", "MEDIA_CONTROL", "QUEUE_MANAGE", "LIBRARY_MANAGE", "PLAYLIST_CREATE", "PLAYLIST_EDIT", "PLAYLIST_DELETE", "CHAT_SEND", "CHAT_MODERATE", "CALL_JOIN", "SCREEN_SHARE"],
+  MEMBER: ["MEDIA_ADD", "LIBRARY_MANAGE", "PLAYLIST_CREATE", "PLAYLIST_EDIT", "CHAT_SEND", "CALL_JOIN", "SCREEN_SHARE"],
+};
 
 export const roomModeSchema = z.enum(["watch", "jam"]);
 export type RoomMode = z.infer<typeof roomModeSchema>;
@@ -51,7 +56,7 @@ export type HouseMember = z.infer<typeof houseMemberSchema>;
 
 export const houseSummarySchema = z.object({
   id: z.string(), name: z.string(), initials: z.string(), avatar: z.string().optional(),
-  role: houseRoleSchema, memberCount: z.number(), onlineCount: z.number(), primaryRoomId: z.string(),
+  role: houseRoleSchema, memberCount: z.number(), onlineCount: z.number(), partyCount: z.number(), primaryRoomId: z.string(),
   nowPlaying: z.object({ title: z.string(), provider: mediaProviderSchema }).nullable().optional(),
 });
 export type HouseSummary = z.infer<typeof houseSummarySchema>;
@@ -276,14 +281,17 @@ export const changeMediaSchema = z.object({ roomId: z.string(), item: queueItemS
 export const queueMoveSchema = z.object({ roomId: z.string(), itemId: z.string(), toIndex: z.number().int().min(0), revision: z.number().int().nonnegative().optional() });
 export const queueRevisionSchema = z.object({ roomId: z.string(), revision: z.number().int().nonnegative().optional() });
 export const queuePlayNextSchema = queueRevisionSchema.extend({ item: queueItemSchema });
-export const queueAdvanceSchema = queueRevisionSchema.extend({ expectedMediaId: z.string() });
+export const queueAdvanceSchema = queueRevisionSchema.extend({ expectedMediaId: z.string(), expectedQueueItemId: z.string().min(1) });
 export const modeChangeSchema = z.object({ roomId: z.string(), mode: roomModeSchema });
 export const roomSettingsInputSchema = z.object({ roomId: z.string(), settings: roomSettingsSchema });
 export const chatInputSchema = z.object({ roomId: z.string(), body: z.string().min(1).max(1000) });
 export const presenceInputSchema = z.object({ roomId: z.string(), speaking: z.boolean(), muted: z.boolean(), deafened: z.boolean().optional() });
-export const voiceSignalSchema = z.object({ roomId: z.string(), targetUserId: z.string(), signal: z.unknown() });
+export const voiceSignalSchema = z.object({ roomId: z.string(), targetUserId: z.string(), targetSocketId: z.string(), signal: z.union([z.object({ type: z.enum(["offer", "answer"]), sdp: z.string() }), z.object({ candidate: z.object({ candidate: z.string(), sdpMid: z.string().nullable().optional(), sdpMLineIndex: z.number().nullable().optional(), usernameFragment: z.string().nullable().optional() }) })]) });
+export interface VoicePeer { user: User; socketId: string }
 
 export interface ServerToClientEvents {
+  "home:update": (houses: HouseSummary[]) => void;
+  "profile:update": (user: User) => void;
   "room:snapshot": (snapshot: RoomSnapshot) => void;
   "presence:update": (members: RoomMember[]) => void;
   "media:sync": (state: MediaState) => void;
@@ -294,9 +302,9 @@ export interface ServerToClientEvents {
   "vote:skip": (vote: { count: number; required: number; votedBy: string[]; advanced: boolean }) => void;
   "chat:message": (message: ChatMessage) => void;
   "reaction:send": (reaction: { id: string; emoji: string; user: User }) => void;
-  "voice:signal": (payload: { fromUserId: string; signal: unknown }) => void;
-  "voice:peer-joined": (user: User) => void;
-  "voice:peer-left": (userId: string) => void;
+  "voice:signal": (payload: { fromUserId: string; fromSocketId: string; signal: z.infer<typeof voiceSignalSchema>["signal"] }) => void;
+  "voice:peer-joined": (peer: VoicePeer) => void;
+  "voice:peer-left": (peer: { userId: string; socketId: string }) => void;
   "screen:state": (state: ScreenShareState) => void;
   "house:update": (house: HouseDetails) => void;
   "media-hub:update": (payload: { houseId: string; kind: "library" | "favorite" | "playlist" | "history" }) => void;
@@ -312,7 +320,7 @@ export interface ClientToServerEvents {
   "media:pause": (input: z.infer<typeof mediaCommandSchema>) => void;
   "media:seek": (input: z.infer<typeof mediaCommandSchema>) => void;
   "media:rate": (input: z.infer<typeof mediaCommandSchema>) => void;
-  "media:change": (input: z.infer<typeof changeMediaSchema>) => void;
+  "media:change": (input: z.infer<typeof changeMediaSchema>, respond?: (result: { ok: boolean; message?: string }) => void) => void;
   "queue:add": (input: z.infer<typeof addQueueInputSchema>, respond?: (result: { ok: boolean; item?: QueueItem; position?: number; message?: string }) => void) => void;
   "queue:remove": (input: { roomId: string; itemId: string }) => void;
   "queue:next": (input: { roomId: string }) => void;
@@ -328,7 +336,7 @@ export interface ClientToServerEvents {
   "chat:message": (input: z.infer<typeof chatInputSchema>) => void;
   "reaction:send": (input: { roomId: string; emoji: string }) => void;
   "presence:update": (input: z.infer<typeof presenceInputSchema>) => void;
-  "voice:join": (input: { roomId: string }) => void;
+  "voice:join": (input: { roomId: string }, respond?: (result: { ok: boolean; message?: string }) => void) => void;
   "voice:leave": (input: { roomId: string }) => void;
   "voice:speaking": (input: z.infer<typeof presenceInputSchema>) => void;
   "voice:signal": (input: z.infer<typeof voiceSignalSchema>) => void;

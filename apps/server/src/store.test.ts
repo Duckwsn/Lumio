@@ -6,10 +6,11 @@ test("room store keeps media position authoritative", () => {
   const store = new RoomStore();
   const user = { id: "u1", displayName: "Duck", color: "#fff" };
   store.addMember("cinema", user);
-  store.changeMedia("cinema", { id: "q1", provider: "youtube", providerMediaId: "abc", type: "video", title: "Test", duration: 120, addedBy: user, addedAt: new Date().toISOString() });
+  const item = { id: "q1", provider: "youtube" as const, providerMediaId: "abc", type: "video" as const, title: "Test", duration: 120, addedBy: user, addedAt: new Date().toISOString() };
+  store.addQueueItem("cinema", item); store.changeMedia("cinema", item);
   const playing = store.updateMedia("cinema", user.id, "play", 12);
   assert.equal(playing?.state, "playing");
-  assert.equal(playing?.position, 12);
+  assert.ok((playing?.position ?? 0) >= 12 && (playing?.position ?? 0) < 12.1);
   const paused = store.updateMedia("cinema", user.id, "pause");
   assert.equal(paused?.state, "paused");
   assert.ok((paused?.position ?? 0) >= 12);
@@ -32,11 +33,12 @@ test("starts as one empty Party and infers presentation mode from media", () => 
   assert.equal(groups[0]?.rooms[0]?.name, "Party");
   assert.equal(store.getSnapshot("cinema")?.queue.length, 0);
   assert.equal(store.getSnapshot("cinema")?.currentMedia.state, "idle");
-  store.changeMedia("cinema", { id: "audio", provider: "google-drive", providerMediaId: "song", type: "audio", title: "Song", duration: 120, addedBy: user, addedAt: new Date().toISOString() });
+  const song = { id: "audio", provider: "google-drive" as const, providerMediaId: "song", type: "audio" as const, title: "Song", duration: 120, addedBy: user, addedAt: new Date().toISOString() };
+  store.addQueueItem("cinema", song); store.changeMedia("cinema", song);
   assert.equal(store.getSnapshot("cinema")?.mode, "jam");
 });
 
-test("queue rejects accidental duplicates", () => {
+test("queue preserves repeated media as distinct occurrences", () => {
   const store = new RoomStore();
   const user = { id: "u1", displayName: "Duck", color: "#fff" };
   const item = {
@@ -49,8 +51,10 @@ test("queue rejects accidental duplicates", () => {
     addedAt: new Date().toISOString(),
   };
   const first = store.addQueueItem("cinema", item);
+  assert.equal(first?.length, 1);
   const second = store.addQueueItem("cinema", { ...item, id: "q2" });
-  assert.equal(first?.length, second?.length);
+  assert.equal(second?.length, 2);
+  assert.notEqual(second?.[0].id, second?.[1].id);
 });
 
 test("mode and history are session state once playback really starts", () => {
@@ -125,7 +129,7 @@ test("playlist ordering survives reads and can be inserted into the queue", () =
   const second = { id: "m2", provider: "youtube" as const, providerMediaId: "second", type: "video" as const, title: "Second" };
   store.addPlaylistItem("cinema", playlist.id, user, first);
   const withItems = store.addPlaylistItem("cinema", playlist.id, user, second)!;
-  store.reorderPlaylist("cinema", playlist.id, [withItems.items![1].itemId, withItems.items![0].itemId]);
+  store.reorderPlaylist("cinema", playlist.id, [withItems.items![1].itemId, withItems.items![0].itemId], withItems.updatedAt);
   const ordered = store.getPlaylist("cinema", playlist.id)!;
   assert.deepEqual(ordered.items?.map((item) => item.title), ["Second", "First"]);
   const queued = store.enqueuePlaylist("cinema", playlist.id, user, "append", false)!;
@@ -152,6 +156,93 @@ test("ended events are idempotent for the same current media", () => {
   assert.equal(store.advanceQueue("cinema", "first", user.id).advanced, true);
   assert.equal(store.advanceQueue("cinema", "first", user.id).advanced, false);
   assert.equal(store.getSnapshot("cinema")?.currentMedia.mediaId, "second");
+});
+
+test("repeated media advances by queue occurrence and records each playback once", () => {
+  const store = new RoomStore();
+  const user = { id: "u1", displayName: "Duck", color: "#fff" };
+  const item = { id: "q1", provider: "youtube" as const, providerMediaId: "repeat", type: "video" as const, title: "Repeat", duration: 90, addedBy: user, addedAt: new Date().toISOString() };
+  store.addQueueItem("cinema", item);
+  store.addQueueItem("cinema", { ...item, id: "q2" });
+  store.changeMedia("cinema", item);
+  store.updateMedia("cinema", user.id, "play", 0);
+  store.updateMedia("cinema", user.id, "seek", 20);
+  store.updateMedia("cinema", user.id, "pause");
+  store.updateMedia("cinema", user.id, "play", 20);
+  assert.equal(store.getHistoryPage("cinema")?.total, 1);
+  assert.equal(store.advanceQueue("cinema", "repeat", user.id, "q1").advanced, true);
+  assert.equal(store.advanceQueue("cinema", "repeat", user.id, "q1").advanced, false);
+  assert.equal(store.getSnapshot("cinema")?.queue.find((entry) => entry.status === "playing")?.id, "q2");
+  assert.equal(store.getHistoryPage("cinema")?.total, 2);
+});
+
+test("playlist reorder rejects a stale timestamp and preserves latest order", () => {
+  const store = new RoomStore();
+  const user = { id: "u1", displayName: "Duck", color: "#fff" };
+  const playlist = store.createPlaylist("cinema", user, "Shared")!;
+  const first = store.addPlaylistItem("cinema", playlist.id, user, { id: "a", provider: "youtube", providerMediaId: "a", type: "video", title: "A" })!;
+  const second = store.addPlaylistItem("cinema", playlist.id, user, { id: "b", provider: "youtube", providerMediaId: "b", type: "video", title: "B" })!;
+  const ids = second.items!.map((entry) => entry.itemId);
+  assert.ok(store.reorderPlaylist("cinema", playlist.id, [...ids].reverse(), second.updatedAt));
+  assert.equal(store.reorderPlaylist("cinema", playlist.id, ids, second.updatedAt), null);
+  assert.deepEqual(store.getPlaylist("cinema", playlist.id)?.items?.map((entry) => entry.title), ["B", "A"]);
+  assert.ok(first.updatedAt);
+});
+
+test("playlist batch keeps duplicates in the queue, skips unavailable items and rejects stale revisions", () => {
+  const store = new RoomStore();
+  const user = { id: "u1", displayName: "Duck", color: "#fff" };
+  const playlist = store.createPlaylist("cinema", user, "Mixed")!;
+  store.addPlaylistItem("cinema", playlist.id, user, { id: "a", provider: "youtube", providerMediaId: "a", type: "video", title: "A" });
+  store.addPlaylistItem("cinema", playlist.id, user, { id: "b", provider: "google-drive", providerMediaId: "b", type: "video", title: "B" });
+  const revision = store.getQueueRevision("cinema");
+  const first = store.enqueuePlaylist("cinema", playlist.id, user, "append", false, revision, (item) => item.provider === "youtube")!;
+  assert.equal(first.skipped, 1);
+  assert.deepEqual(first.queue.map((item) => item.title), ["A"]);
+  const conflict = store.enqueuePlaylist("cinema", playlist.id, user, "append", false, revision)!;
+  assert.equal(conflict.conflict, true);
+  const second = store.enqueuePlaylist("cinema", playlist.id, user, "append", false, store.getQueueRevision("cinema"), (item) => item.provider === "youtube")!;
+  assert.deepEqual(second.queue.map((item) => item.title), ["A", "A"]);
+  assert.notEqual(second.queue[0].id, second.queue[1].id);
+});
+
+test("unavailable next item is skipped without a loop", () => {
+  const store = new RoomStore();
+  const user = { id: "u1", displayName: "Duck", color: "#fff" };
+  const first = { id: "a", provider: "youtube" as const, providerMediaId: "a", type: "video" as const, title: "A", addedBy: user, addedAt: new Date().toISOString() };
+  const unavailable = { ...first, id: "b", provider: "google-drive" as const, providerMediaId: "b", title: "B" };
+  const last = { ...first, id: "c", providerMediaId: "c", title: "C" };
+  store.addQueueItem("cinema", first); store.addQueueItem("cinema", unavailable); store.addQueueItem("cinema", last);
+  store.changeMedia("cinema", first); store.updateMedia("cinema", user.id, "play", 0);
+  assert.equal(store.advanceQueue("cinema", "a", user.id, "a", (item) => item.id !== "b").advanced, true);
+  assert.equal(store.getSnapshot("cinema")?.currentMedia.mediaId, "c");
+  assert.deepEqual(store.getSnapshot("cinema")?.queue.map((item) => item.providerMediaId), ["c"]);
+});
+
+test("replaying an ended occurrence records one new history event", () => {
+  const store = new RoomStore();
+  const user = { id: "u1", displayName: "Duck", color: "#fff" };
+  const item = { id: "a", provider: "youtube" as const, providerMediaId: "a", type: "video" as const, title: "A", duration: 60, addedBy: user, addedAt: new Date().toISOString() };
+  store.addQueueItem("cinema", item); store.changeMedia("cinema", item); store.updateMedia("cinema", user.id, "play", 0);
+  store.advanceQueue("cinema", "a", user.id, "a");
+  assert.equal(store.getSnapshot("cinema")?.currentMedia.state, "ended");
+  const replay = store.updateMedia("cinema", user.id, "play", 60);
+  assert.equal(replay?.position, 0);
+  assert.equal(store.getHistoryPage("cinema")?.total, 2);
+});
+
+test("favorites remain complete when library is paginated", () => {
+  const store = new RoomStore();
+  const user = { id: "u1", displayName: "Duck", color: "#fff" };
+  for (let index = 0; index < 70; index += 1) {
+    const item = { id: String(index), provider: "youtube" as const, providerMediaId: String(index), type: "video" as const, title: `Item ${index}` };
+    store.saveLibrary("cinema", user, item);
+    if (index === 0) store.toggleFavorite("cinema", user, item);
+  }
+  const page = store.getMediaHub("cinema", user.id, { limit: 10 });
+  assert.equal(page?.library.length, 10);
+  assert.equal(page?.favorites.length, 1);
+  assert.equal(page?.favorites[0].providerMediaId, "0");
 });
 
 test("playback revision rejects stale commands and commands for another media", () => {

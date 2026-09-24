@@ -8,7 +8,7 @@
     "build": "npm run build --workspace @lumio/shared && npm run build --workspace @lumio/server && npm run build --workspace @lumio/web",
     "typecheck": "npm run typecheck --workspace @lumio/shared && npm run typecheck --workspace @lumio/server && npm run typecheck --workspace @lumio/web",
     "lint": "npm run lint --workspace @lumio/web && npm run lint --workspace @lumio/server",
-    "test": "npm run test --workspace @lumio/server"
+    "test": "npm run test --workspace @lumio/server && npm run test --workspace @lumio/web"
   },
   "devDependencies": {
     "concurrently": "^9.1.2",

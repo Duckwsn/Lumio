@@ -1,4 +1,4 @@
-# Lumio Media Hub V2
+# Lumio Media Hub V3
 
 ## Escopo
 
@@ -10,7 +10,7 @@ O Media Hub é o centro de mídia da Casa. Ele reúne descoberta, biblioteca com
 - `HouseLibraryItem`: mídia que alguém decidiu guardar na Casa.
 - `HouseFavorite`: marca compartilhada da Casa; favoritar também garante que a mídia esteja na biblioteca.
 - `HouseHistoryEntry`: registro criado na primeira transição real para playback de uma mídia.
-- `Playlist` e `PlaylistItem`: coleção persistente e ordenada da Casa.
+- `Playlist` e `PlaylistItem`: coleção ordenada da Casa; no runtime atual ainda é mantida em memória.
 - `QueueItem`: ocorrência colaborativa na fila da Party, com autor, posição, status e horário.
 
 Biblioteca, favorito, histórico, playlist e fila são estados independentes. Adicionar à fila não salva automaticamente na biblioteca e adicionar à playlist não favorita.
@@ -18,19 +18,20 @@ Biblioteca, favorito, histórico, playlist e fila são estados independentes. Ad
 ## API
 
 - `GET /api/media-hub/:roomId` — resumo paginado, filtros, histórico e playlists.
+- `GET /api/media-hub/:roomId/history?cursor=&limit=` — histórico paginado da Casa, mais recente primeiro.
 - `POST|DELETE /api/media-hub/:roomId/library` — salva ou remove da biblioteca.
 - `POST /api/media-hub/:roomId/favorite` — alterna favorito compartilhado.
 - `POST /api/media-hub/:roomId/playlists` — cria playlist.
 - `GET|PATCH|DELETE /api/media-hub/:roomId/playlists/:playlistId` — detalhe, edição e exclusão.
 - `POST|DELETE /api/media-hub/:roomId/playlists/:playlistId/items` — itens da playlist.
-- `PUT /api/media-hub/:roomId/playlists/:playlistId/order` — ordem completa validada pelo servidor.
-- `POST /api/media-hub/:roomId/playlists/:playlistId/queue` — adiciona ao final, a seguir, substitui ou reproduz.
+- `PUT /api/media-hub/:roomId/playlists/:playlistId/order` — ordem completa com `expectedUpdatedAt`; conflito `409` exige carregar a versão atual.
+- `POST /api/media-hub/:roomId/playlists/:playlistId/queue` — adiciona ao final, a seguir, substitui ou reproduz; requer `revision` da fila e devolve quantidade de itens indisponíveis ignorados.
 
 Todos os endpoints validam sessão, membership e permissões no backend.
 
 ## Realtime e fila
 
-Cada mutação incrementa `queueRevision`. Reordenações com revisão obsoleta são rejeitadas e o servidor retransmite a ordem atual, permitindo rollback/convergência no cliente.
+Cada mutação incrementa `queueRevision`. Reordenações com revisão obsoleta são rejeitadas e o servidor retransmite a ordem atual, permitindo rollback/convergência no cliente. A mesma mídia pode aparecer mais de uma vez na fila: cada ocorrência possui `QueueItem.id` próprio. O status de reprodução, a remoção, o avanço e o `ENDED` referem-se à ocorrência, não apenas ao par provider/media ID.
 
 Eventos principais:
 
@@ -40,7 +41,7 @@ Eventos principais:
 - `queue:advance`
 - `media-hub:update`
 
-O provider envia `ended`; o cliente solicita `queue:advance` com a mídia esperada. Depois do primeiro avanço, pedidos concorrentes com o ID anterior se tornam no-op. O servidor registra histórico, escolhe o próximo item, atualiza fila/revisão e transmite mídia e fila.
+O provider envia `ended`; o cliente solicita `queue:advance` com mídia e ocorrência esperadas. Depois do primeiro avanço, pedidos concorrentes tornam-se no-op. O histórico é criado somente no primeiro `play` da ocorrência, não em `seek`, reconexão ou entrada na fila. O servidor pula itens indisponíveis de forma limitada pelo tamanho da fila e transmite mídia e fila.
 
 ## Lumio Player e sincronização
 
@@ -50,7 +51,7 @@ O tráfego realtime é orientado a eventos: `play`, `pause`, `seek`, `rate`, mud
 
 Volume e mute são preferências locais. Play, pause, seek e velocidade pertencem à Party. O avanço automático respeita `RoomSettings.autoplayNext`; com a opção desligada, a mídia termina e o próximo item permanece na fila.
 
-O YouTube usa apenas o IFrame Player API oficial. O adapter de Google Drive existente é uma preparação técnica; seleção de arquivos, OAuth e a experiência completa de provider continuam reservados para a Etapa 9.
+O YouTube usa apenas o IFrame Player API oficial. O Google Drive usa OAuth separado da autenticação Lumio, um explorador por pastas no Media Hub e streaming protegido pelo backend; consulte `docs/GOOGLE_DRIVE.md` para configuração e limitações.
 
 ## Experiência musical
 
@@ -59,6 +60,15 @@ A opção local “Visualização: Ambiente” adiciona capa, título, criador e
 ## Persistência
 
 O schema Prisma e a migration `0005_media_hub_v2` definem mídia canônica, playlists, favoritos da Casa, posições, índices e revisão da fila. O servidor atual ainda usa o adapter em memória; refresh do navegador preserva dados, mas reiniciar a API os apaga.
+
+## Fluxo V3 e limites
+
+- Cinco áreas: Descobrir, Biblioteca, Playlists, Histórico e Google Drive. Descobrir pesquisa apenas YouTube com debounce, cancelamento, geração de request e paginação. Trocar de aba não apaga a consulta digitada.
+- A biblioteca pesquisa apenas os itens da Casa no backend local, com filtros e paginação. Favoritos são calculados para toda a biblioteca, não somente para a primeira página.
+- Google Drive só consulta status e lista pastas ao abrir sua aba. Não há busca no Drive. Os vídeos usam as mesmas ações contextuais do YouTube; um `fileId` continua sem conceder acesso sozinho.
+- Adição à fila e início de reprodução aguardam confirmação do servidor antes do feedback positivo. Playlist para fila é um lote com revisão; itens do Drive sem grant ativo são ignorados e relatados. Replay após `ended` reinicia do começo e cria um novo evento legítimo no histórico.
+- O servidor valida acesso e permissões mesmo que a interface oculte ações. A playlist continua sem duplicatas de mídia por regra atual; a fila aceita duplicatas intencionais.
+- A migração do adapter de Casa/Party/Media Hub para banco transacional permanece pendente. Os índices Prisma existentes são preparação, não garantia de persistência runtime ou transações entre processos.
 
 ## Validação da Etapa 7
 

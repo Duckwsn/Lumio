@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import dotenv from "dotenv";
 import express from "express";
 import cors from "cors";
-import { Server } from "socket.io";
+import { Server, type Socket } from "socket.io";
 import { z } from "zod";
 import {
   addQueueInputSchema,
@@ -36,8 +36,12 @@ import {
 import { RoomStore } from "./store.js";
 import { SocialStore } from "./socialStore.js";
 import { can } from "./authorization.js";
-import { GoogleDriveService } from "./googleDrive.js";
+import { DriveError, GoogleDriveService } from "./googleDrive.js";
+import { AuthError, AuthStore } from "./authStore.js";
+import { EmailService } from "./emailService.js";
+import { GoogleIdentityService } from "./googleIdentity.js";
 import { YouTubeDataError, YouTubeDataService } from "./youtubeData.js";
+import { CallRegistry } from "./callRegistry.js";
 
 // npm workspaces execute this package with apps/server as the working directory.
 // Resolve the project-level environment file from this module so dev and dist agree.
@@ -55,48 +59,73 @@ const corsOrigin = (origin: string | undefined, callback: (error: Error | null, 
 };
 const io = new Server<ClientToServerEvents, ServerToClientEvents>(httpServer, {
   cors: { origin: corsOrigin, credentials: true },
+  maxHttpBufferSize: 64 * 1024,
+  allowRequest: (request, callback) => corsOrigin(request.headers.origin, (_error, allowed) => callback(null, Boolean(allowed))),
 });
 const store = new RoomStore();
 const social = new SocialStore();
 const googleDrive = new GoogleDriveService();
+const auth = new AuthStore();
+const emailService = new EmailService();
+const googleIdentity = new GoogleIdentityService();
 const youtube = new YouTubeDataService();
 
 app.use(cors({ origin: corsOrigin, credentials: true }));
-app.use(express.json());
+app.use(express.json({ limit: "64kb" }));
+app.disable("x-powered-by");
+app.use((_request, response, next) => {
+  response.setHeader("X-Content-Type-Options", "nosniff");
+  response.setHeader("Referrer-Policy", "no-referrer");
+  response.setHeader("X-Frame-Options", "DENY");
+  response.setHeader("Permissions-Policy", "camera=(), microphone=(self), display-capture=(self)");
+  response.setHeader("Cache-Control", "no-store");
+  next();
+});
 
-const sessions = new Map<string, User>();
-const passwords = new Map<string, string>();
-const usersByEmail = new Map<string, User>();
 const authAttempts = new Map<string, { count: number; resetAt: number }>();
-const colorPalette = ["#f7c98b", "#b8d7c0", "#d6b3e6", "#95b6d5", "#edaa8b", "#e6d392"];
-
-const hashPassword = (password: string, salt: string) => crypto.scryptSync(password, salt, 32).toString("hex");
-const createUser = (displayName: string, password = "demo", email?: string) => {
-  const id = crypto.randomUUID();
-  const user: User = { id, displayName: displayName.trim().slice(0, 32), email: email?.trim().toLowerCase(), color: colorPalette[sessions.size % colorPalette.length] };
-  const salt = crypto.randomBytes(16).toString("hex");
-  passwords.set(id, `${salt}:${hashPassword(password, salt)}`);
-  if (user.email) usersByEmail.set(user.email, user);
-  return user;
-};
+const googleChallenges = new Map<string, { mode: "login" | "link"; userId?: string; expiresAt: number }>();
 const authRateLimit = (request: express.Request, response: express.Response) => {
-  const key = request.ip ?? "local"; const now = Date.now(); const entry = authAttempts.get(key);
-  if (!entry || entry.resetAt <= now) { authAttempts.set(key, { count: 1, resetAt: now + 15 * 60_000 }); return true; }
-  entry.count += 1; if (entry.count > 20) { response.status(429).json({ message: "Muitas tentativas. Aguarde alguns minutos e tente novamente." }); return false; } return true;
+  const now = Date.now();
+  if (authAttempts.size > 10_000) for (const [key, entry] of authAttempts) if (entry.resetAt <= now) authAttempts.delete(key);
+  const email = typeof request.body?.email === "string" ? request.body.email.trim().toLowerCase() : "";
+  const keys = [`${request.path}:ip:${request.ip ?? "local"}`];
+  if (email) keys.push(`${request.path}:email:${crypto.createHash("sha256").update(email).digest("hex")}`);
+  let limited = false;
+  for (const key of keys) {
+    const entry = authAttempts.get(key);
+    const next = entry && entry.resetAt > now ? { count: entry.count + 1, resetAt: entry.resetAt } : { count: 1, resetAt: now + 15 * 60_000 };
+    authAttempts.set(key, next);
+    if (next.count > (key.includes(":email:") ? 8 : 30)) limited = true;
+  }
+  if (limited) response.status(429).json({ message: "Muitas tentativas. Aguarde alguns minutos e tente novamente." });
+  return !limited;
 };
-const createSession = (user: User) => {
-  const token = crypto.randomBytes(32).toString("hex");
-  sessions.set(token, user);
-  return token;
+const createSession = (user: User) => auth.createSession(user.id);
+const getAuthToken = (request: express.Request) => {
+  const header = request.header("authorization");
+  return header?.startsWith("Bearer ") ? header.slice(7) : undefined;
 };
 const getUser = (request: express.Request) => {
-  const header = request.header("authorization");
-  const token = header?.startsWith("Bearer ") ? header.slice(7) : undefined;
-  return token ? sessions.get(token) : undefined;
+  const token = getAuthToken(request);
+  return token ? auth.resolveSession(token)?.user : undefined;
+};
+const driveStatus = (error: unknown) => error instanceof DriveError ? ({ RECONNECT: 401, UNAVAILABLE: 502, FORBIDDEN: 403, NOT_FOUND: 404, RATE_LIMIT: 429, BAD_REQUEST: 400 }[error.code]) : 502;
+const driveMessage = (error: unknown) => error instanceof DriveError ? error.message : "Google Drive indisponível.";
+const driveMediaListed = (roomId: string, fileId: string) => {
+  const room = store.getRoom(roomId);
+  return Boolean(room && (room.currentMedia.provider === "google-drive" && room.currentMedia.mediaId === fileId || room.queue.some((item) => item.provider === "google-drive" && item.providerMediaId === fileId)));
+};
+const mediaAvailableInRoom = (roomId: string, item: QueueItem) => {
+  if (item.available === false) return false;
+  if (item.provider !== "google-drive") return true;
+  const grant = googleDrive.getGrant(roomId, item.providerMediaId);
+  const house = social.getByRoom(roomId);
+  return Boolean(grant && house && social.isMember(house.id, grant.ownerId));
 };
 const requireUser = (request: express.Request, response: express.Response) => {
   const user = getUser(request);
   if (!user) response.status(401).json({ message: "Sessão ausente ou expirada." });
+  else if (!auth.isVerified(user.id)) { response.status(403).json({ code: "EMAIL_UNVERIFIED", message: "Confirme seu e-mail antes de usar o Lumio." }); return undefined; }
   return user;
 };
 const requireHousePermission = (request: express.Request, response: express.Response, permission: Permission) => {
@@ -117,7 +146,16 @@ const requireRoomPermission = (request: express.Request, response: express.Respo
 const emitMediaHubUpdate = (roomId: string, kind: "library" | "favorite" | "playlist" | "history") => { const house = social.getByRoom(roomId); if (house) io.to(roomId).emit("media-hub:update", { houseId: house.id, kind }); };
 
 app.get("/api/health", (_request, response) => response.json({ ok: true, service: "lumio-server" }));
-app.get("/api/groups", (_request, response) => response.json({ groups: store.listGroups() }));
+app.get("/api/rtc/config", (request, response) => {
+  if (!requireRoomMember(request, response, String(request.query.roomId ?? ""))) return;
+  const stun = (process.env.RTC_STUN_URLS ?? "stun:stun.l.google.com:19302").split(",").map((url) => url.trim()).filter(Boolean);
+  const turn = (process.env.RTC_TURN_URLS ?? "").split(",").map((url) => url.trim()).filter(Boolean);
+  const iceServers: { urls: string[]; username?: string; credential?: string }[] = [];
+  if (stun.length) iceServers.push({ urls: stun });
+  if (turn.length && process.env.RTC_TURN_USERNAME && process.env.RTC_TURN_CREDENTIAL) iceServers.push({ urls: turn, username: process.env.RTC_TURN_USERNAME, credential: process.env.RTC_TURN_CREDENTIAL });
+  response.setHeader("Cache-Control", "no-store");
+  response.json({ iceServers, turnConfigured: iceServers.some((server) => Boolean(server.credential)) });
+});
 app.get("/api/rooms/:roomId", (request, response) => {
   const user = requireRoomMember(request, response, String(request.params.roomId)); if (!user) return;
   const snapshot = store.getSnapshot(request.params.roomId);
@@ -146,34 +184,154 @@ app.get("/api/youtube/videos/:videoId", async (request, response) => {
   catch (error) { return youtubeError(response, error); }
 });
 
-app.post("/api/auth/demo", (request, response) => {
-  if (!authRateLimit(request, response)) return;
-  const body = z.object({ displayName: z.string().min(1).max(32) }).safeParse(request.body);
-  if (!body.success) return response.status(400).json({ message: "Informe um nome válido." });
-  const user = createUser(body.data.displayName);
-  return response.json({ user, token: createSession(user) });
-});
-
-app.post("/api/auth/signup", (request, response) => {
+app.post("/api/auth/signup", async (request, response) => {
   if (!authRateLimit(request, response)) return;
   const body = z.object({ displayName: z.string().trim().min(2).max(32), email: z.string().trim().email().max(160), password: z.string().min(8).max(100) }).safeParse(request.body);
   if (!body.success) return response.status(400).json({ message: "Confira nome, e-mail e senha." });
-  if (usersByEmail.has(body.data.email.toLowerCase())) return response.status(409).json({ message: "Este e-mail já está em uso." });
-  const user = createUser(body.data.displayName, body.data.password, body.data.email);
-  return response.status(201).json({ user, token: createSession(user) });
+  try {
+    const user = auth.createLocal(body.data.displayName, body.data.email, body.data.password);
+    const token = auth.issueToken(user.id, "EMAIL_VERIFICATION", 24 * 60 * 60_000, 60_000)!;
+    try { await emailService.send(user.email!, "verify", token); }
+    catch { return response.status(503).json({ message: "Conta criada, mas não foi possível enviar a confirmação. Solicite um novo e-mail em alguns minutos." }); }
+    return response.status(201).json({ pendingVerification: true, message: "Enviamos um link de confirmação para seu e-mail." });
+  }
+  catch (error) { if (error instanceof AuthError && error.code === "EMAIL_EXISTS") return response.status(409).json({ message: "Não foi possível criar esta conta. Confira o e-mail ou entre com sua conta existente." }); throw error; }
 });
 
 app.post("/api/auth/login", (request, response) => {
   if (!authRateLimit(request, response)) return;
   const body = z.object({ email: z.string().trim().email().max(160), password: z.string().min(1).max(100) }).safeParse(request.body);
   if (!body.success) return response.status(400).json({ message: "Informe e-mail e senha." });
-  const user = usersByEmail.get(body.data.email.toLowerCase());
-  const record = user ? passwords.get(user.id) : undefined;
-  if (!user || !record) return response.status(401).json({ message: "E-mail ou senha incorretos." });
-  const [salt, expected] = record.split(":");
-  const actual = hashPassword(body.data.password, salt);
-  if (actual !== expected) return response.status(401).json({ message: "E-mail ou senha incorretos." });
+  const user = auth.login(body.data.email, body.data.password);
+  if (!user) return response.status(401).json({ message: "E-mail ou senha incorretos." });
+  if (!auth.isVerified(user.id)) return response.status(403).json({ code: "EMAIL_UNVERIFIED", message: "Confirme seu e-mail antes de entrar. Você pode solicitar um novo link." });
   return response.json({ user, token: createSession(user) });
+});
+
+const emailInput = z.object({ email: z.string().trim().email().max(160) });
+const tokenInput = z.object({ token: z.string().regex(/^[A-Za-z0-9_-]{43}$/) });
+const genericEmailMessage = "Se houver uma conta elegível, enviaremos uma mensagem para este e-mail.";
+app.post("/api/auth/verification/resend", async (request, response) => {
+  if (!authRateLimit(request, response)) return;
+  const parsed = emailInput.safeParse(request.body);
+  if (!parsed.success) return response.status(400).json({ message: "Informe um e-mail válido." });
+  const user = auth.getByEmail(parsed.data.email);
+  if (user && auth.hasPassword(user.id) && !auth.isVerified(user.id)) {
+    const token = auth.issueToken(user.id, "EMAIL_VERIFICATION", 24 * 60 * 60_000, 60_000);
+    if (token) try { await emailService.send(user.email!, "verify", token); } catch { /* Generic response; delivery failure is not proof of account existence. */ }
+  }
+  return response.json({ message: genericEmailMessage });
+});
+app.post("/api/auth/verification/confirm", (request, response) => {
+  if (!authRateLimit(request, response)) return;
+  const parsed = tokenInput.safeParse(request.body);
+  if (!parsed.success || !auth.consumeVerification(parsed.data.token)) return response.status(400).json({ message: "Link inválido, expirado ou já utilizado." });
+  return response.status(204).end();
+});
+app.post("/api/auth/password/forgot", async (request, response) => {
+  if (!authRateLimit(request, response)) return;
+  const parsed = emailInput.safeParse(request.body);
+  if (!parsed.success) return response.status(400).json({ message: "Informe um e-mail válido." });
+  const user = auth.getByEmail(parsed.data.email);
+  if (user && auth.hasPassword(user.id)) {
+    const token = auth.issueToken(user.id, "PASSWORD_RESET", 30 * 60_000, 60_000);
+    if (token) try { await emailService.send(user.email!, "reset", token); } catch { /* Preserve anti-enumeration response. */ }
+  }
+  return response.json({ message: genericEmailMessage });
+});
+app.post("/api/auth/password/reset", (request, response) => {
+  if (!authRateLimit(request, response)) return;
+  const parsed = tokenInput.extend({ password: z.string().min(8).max(100) }).safeParse(request.body);
+  const userId = parsed.success ? auth.consumePasswordReset(parsed.data.token, parsed.data.password) : null;
+  if (!userId) return response.status(400).json({ message: "Link inválido, expirado ou já utilizado." });
+  googleDrive.revokeViewer(userId);
+  for (const house of social.listForUser(userId)) abortHouseDriveStreams(house.primaryRoomId, userId);
+  for (const peer of io.sockets.sockets.values()) if (!auth.resolveSession(peer.handshake.auth?.token ?? "")) peer.disconnect(true);
+  return response.status(204).end();
+});
+
+const accountAuthError = (response: express.Response, error: unknown) => {
+  if (error instanceof AuthError) {
+    if (error.code === "EMAIL_EXISTS") return response.status(409).json({ code: error.code, message: "Já existe uma conta Lumio com este e-mail. Entre com sua senha e vincule o Google em Conta." });
+    if (error.code === "GOOGLE_IN_USE") return response.status(409).json({ code: error.code, message: "Esta conta Google já está vinculada a outra conta Lumio." });
+    if (error.code === "LAST_METHOD") return response.status(409).json({ code: error.code, message: "Defina uma senha antes de remover seu último método de login." });
+    return response.status(400).json({ code: error.code, message: "Não foi possível alterar as formas de login." });
+  }
+  return response.status(400).json({ message: "Não foi possível confirmar sua identidade. Tente novamente." });
+};
+const recentSession = (request: express.Request) => {
+  const token = getAuthToken(request), session = token ? auth.resolveSession(token) : undefined;
+  return Boolean(session && Date.now() - session.authenticatedAt < 10 * 60_000);
+};
+const authOrigin = (request: express.Request) => allowedOrigins.includes(request.header("origin") ?? "");
+
+app.get("/api/auth/google/config", (_request, response) => response.json({ configured: googleIdentity.isConfigured(), clientId: googleIdentity.publicClientId() }));
+app.post("/api/auth/google/challenge", (request, response) => {
+  if (!authRateLimit(request, response)) return;
+  if (!authOrigin(request)) return response.status(403).json({ message: "Origem não autorizada." });
+  if (!googleIdentity.isConfigured()) return response.status(503).json({ message: "Google Login não configurado." });
+  const body = z.object({ mode: z.enum(["login", "link"]), password: z.string().optional() }).safeParse(request.body);
+  if (!body.success) return response.status(400).json({ message: "Solicitação inválida." });
+  const user = body.data.mode === "link" ? requireUser(request, response) : undefined;
+  if (body.data.mode === "link" && !user) return;
+  if (body.data.mode === "link" && !recentSession(request)) return response.status(403).json({ message: "Entre novamente antes de vincular uma conta." });
+  if (body.data.mode === "link" && (!user?.email || !body.data.password || auth.login(user.email, body.data.password)?.id !== user.id)) return response.status(403).json({ message: "Confirme sua senha Lumio antes de vincular Google." });
+  const nonce = crypto.randomBytes(32).toString("base64url");
+  googleChallenges.set(nonce, { mode: body.data.mode, userId: user?.id, expiresAt: Date.now() + 10 * 60_000 });
+  response.setHeader("Set-Cookie", `lumio_google_nonce=${nonce}; HttpOnly; SameSite=Strict; Path=/api/auth/google; Max-Age=600${request.secure ? "; Secure" : ""}`);
+  response.setHeader("Cache-Control", "no-store");
+  return response.json({ clientId: googleIdentity.publicClientId(), nonce });
+});
+app.post("/api/auth/google/verify", async (request, response) => {
+  if (!authRateLimit(request, response)) return;
+  if (!authOrigin(request)) return response.status(403).json({ message: "Origem não autorizada." });
+  const body = z.object({ credential: z.string().min(100).max(16_000), nonce: z.string().min(20).max(100) }).safeParse(request.body);
+  if (!body.success) return response.status(400).json({ message: "Resposta Google inválida." });
+  const cookie = request.header("cookie")?.match(/(?:^|;\s*)lumio_google_nonce=([^;]+)/)?.[1];
+  const pending = googleChallenges.get(body.data.nonce); googleChallenges.delete(body.data.nonce);
+  if (!cookie || cookie !== body.data.nonce || !pending || pending.expiresAt < Date.now()) return response.status(403).json({ message: "Tentativa de login expirada. Tente novamente." });
+  response.setHeader("Set-Cookie", `lumio_google_nonce=; HttpOnly; SameSite=Strict; Path=/api/auth/google; Max-Age=0${request.secure ? "; Secure" : ""}`);
+  try {
+    const identity = await googleIdentity.verify(body.data.credential, body.data.nonce);
+    if (pending.mode === "link") {
+      const user = requireUser(request, response);
+      if (!user) return;
+      if (user.id !== pending.userId || !recentSession(request)) return response.status(403).json({ message: "Entre novamente antes de vincular uma conta." });
+      auth.linkGoogle(user.id, identity);
+      return response.json({ linked: true });
+    }
+    const { user } = auth.loginGoogle(identity);
+    return response.json({ user, token: createSession(user) });
+  } catch (error) { return accountAuthError(response, error); }
+});
+
+app.get("/api/account", (request, response) => {
+  const user = requireUser(request, response); if (!user) return;
+  const google = auth.getIdentity(user.id);
+  return response.json({ email: user.email, hasPassword: auth.hasPassword(user.id), google: google ? { connected: true, email: google.email } : { connected: false }, drive: googleDrive.getStatus(user.id) });
+});
+app.post("/api/account/password", (request, response) => {
+  const user = requireUser(request, response); if (!user) return;
+  if (!authRateLimit(request, response)) return;
+  const body = z.object({ currentPassword: z.string().optional(), newPassword: z.string().min(8).max(100) }).safeParse(request.body);
+  if (!body.success) return response.status(400).json({ message: "A nova senha precisa ter pelo menos 8 caracteres." });
+  if (!auth.hasPassword(user.id) && !recentSession(request)) return response.status(403).json({ message: "Entre novamente antes de definir uma senha." });
+  try {
+    auth.setPassword(user.id, body.data.newPassword, body.data.currentPassword);
+    const currentToken = getAuthToken(request)!; auth.revokeOtherSessions(user.id, currentToken);
+    googleDrive.revokeViewer(user.id);
+    for (const peer of io.sockets.sockets.values()) { const peerToken = peer.handshake.auth?.token; if (peerToken && peerToken !== currentToken && !auth.resolveSession(peerToken)) peer.disconnect(true); }
+    return response.status(204).end();
+  }
+  catch (error) { return accountAuthError(response, error); }
+});
+app.post("/api/account/google/unlink", (request, response) => {
+  const user = requireUser(request, response); if (!user) return;
+  if (!authRateLimit(request, response)) return;
+  const body = z.object({ password: z.string().min(1) }).safeParse(request.body);
+  if (!body.success) return response.status(400).json({ message: "Confirme sua senha para desvincular." });
+  try { auth.unlinkGoogle(user.id, body.data.password); return response.status(204).end(); }
+  catch (error) { return accountAuthError(response, error); }
 });
 
 app.get("/api/auth/session", (request, response) => {
@@ -184,8 +342,10 @@ app.get("/api/auth/session", (request, response) => {
 app.get("/api/bootstrap", (request, response) => { const user = requireUser(request, response); if (!user) return; const houses = social.listForUser(user.id).map((house) => { const media = store.getSnapshot(house.primaryRoomId)?.currentMedia; return { ...house, nowPlaying: media?.mediaId ? { title: media.title, provider: media.provider } : null }; }); return response.json({ user, houses }); });
 
 app.post("/api/auth/logout", (request, response) => {
-  const token = request.header("authorization")?.slice(7);
-  if (token) sessions.delete(token);
+  const token = getAuthToken(request);
+  const user = token ? auth.resolveSession(token)?.user : undefined;
+  if (user) googleDrive.revokeViewer(user.id);
+  if (token) { auth.revokeSession(token); for (const peer of io.sockets.sockets.values()) if (peer.handshake.auth?.token === token) peer.disconnect(true); }
   return response.status(204).end();
 });
 
@@ -193,7 +353,7 @@ app.get("/api/houses", (request, response) => { const user = requireUser(request
 app.post("/api/houses", (request, response) => {
   const user = requireUser(request, response); if (!user) return;
   const parsed = z.object({ name: z.string().trim().min(2).max(48) }).safeParse(request.body); if (!parsed.success) return response.status(400).json({ message: "Informe um nome para a Casa." });
-  const house = social.createHouse(user, parsed.data.name); store.addHouseRoom({ houseId: house.id, houseName: house.name, roomId: house.primaryRoomId });
+  const house = social.createHouse(user, parsed.data.name); store.addHouseRoom({ houseId: house.id, houseName: house.name, roomId: house.primaryRoomId }); emitHouse(house.id);
   return response.status(201).json({ house: social.details(house.id, user.id) });
 });
 app.get("/api/houses/:houseId", (request, response) => { const user = requireUser(request, response); if (!user) return; const house = social.details(request.params.houseId, user.id); return house ? response.json({ house }) : response.status(404).json({ message: "Casa não encontrada." }); });
@@ -205,9 +365,9 @@ app.patch("/api/houses/:houseId", (request, response) => {
 app.patch("/api/profile", (request, response) => {
   const user = requireUser(request, response); if (!user) return;
   const parsed = z.object({ displayName: z.string().trim().min(2).max(32), avatar: z.string().url().max(500).optional().or(z.literal("")), status: z.string().trim().max(80).optional() }).safeParse(request.body); if (!parsed.success) return response.status(400).json({ message: "Perfil inválido." });
-  social.updateProfile(user, { ...parsed.data, avatar: parsed.data.avatar || undefined }); for (const house of social.listForUser(user.id)) emitHouse(house.id); return response.json({ user });
+  social.updateProfile(user, { ...parsed.data, avatar: parsed.data.avatar || undefined }); auth.saveProfile(user.id); for (const house of social.listForUser(user.id)) { emitHouse(house.id); emitSnapshot(house.primaryRoomId); } for (const peer of io.sockets.sockets.values()) if ((peer.data.user as User | undefined)?.id === user.id) peer.emit("profile:update", user); return response.json({ user });
 });
-app.get("/api/invites/:token", (request, response) => { const state = social.inspectInvite(request.params.token); const user = getUser(request); const invite = state.status === "VALID" ? social.getInvite(request.params.token) : undefined; return response.json({ ...state, isMember: Boolean(user && invite && social.isMember(invite.houseId, user.id)) }); });
+app.get("/api/invites/:token", (request, response) => { const state = social.inspectInvite(request.params.token); const user = getUser(request); const invite = social.getInvite(request.params.token); const isMember = Boolean(user && invite && social.isMember(invite.houseId, user.id)); return response.json({ ...state, houseId: isMember ? invite?.houseId : state.status === "VALID" ? state.houseId : undefined, isMember }); });
 app.post("/api/invites/:token/accept", (request, response) => { const user = requireUser(request, response); if (!user) return; const result = social.acceptInvite(request.params.token, user); if (!result.ok) return response.status(410).json(result); emitHouse(result.houseId); return response.json(result); });
 app.post("/api/houses/:houseId/invites", (request, response) => {
   const user = requireHousePermission(request, response, "INVITE_CREATE"); if (!user) return;
@@ -218,8 +378,16 @@ app.delete("/api/houses/:houseId/invites/:inviteId", (request, response) => { co
 app.patch("/api/houses/:houseId/members/:userId", (request, response) => {
   const user = requireHousePermission(request, response, "MEMBER_MANAGE"); if (!user) return; const parsed = z.object({ role: houseRoleSchema }).safeParse(request.body); if (!parsed.success || !social.changeRole(request.params.houseId, user.id, request.params.userId, parsed.data.role)) return response.status(409).json({ message: "O papel do anfitrião não pode ser alterado." }); const house = social.getHouse(request.params.houseId); const connected = house && store.getRoom(house.primaryRoomId)?.members.get(request.params.userId); if (connected) connected.role = parsed.data.role; emitHouse(request.params.houseId); if (house) emitSnapshot(house.primaryRoomId); return response.status(204).end();
 });
-app.delete("/api/houses/:houseId/members/:userId", (request, response) => { const user = requireHousePermission(request, response, "MEMBER_MANAGE"); if (!user) return; if (!social.removeMember(request.params.houseId, request.params.userId)) return response.status(409).json({ message: "O anfitrião não pode ser removido." }); disconnectHouseMember(request.params.houseId, request.params.userId); emitHouse(request.params.houseId); return response.status(204).end(); });
-app.post("/api/houses/:houseId/leave", (request, response) => { const user = requireUser(request, response); if (!user) return; if (!social.leave(request.params.houseId, user.id)) return response.status(409).json({ message: "O anfitrião precisa transferir a Casa antes de sair." }); disconnectHouseMember(request.params.houseId, user.id); emitHouse(request.params.houseId); return response.status(204).end(); });
+app.post("/api/houses/:houseId/transfer-host", (request, response) => {
+  const user = requireHousePermission(request, response, "HOUSE_MANAGE"); if (!user) return;
+  const parsed = z.object({ targetUserId: z.string().min(1) }).safeParse(request.body);
+  if (!parsed.success || !social.transferHost(request.params.houseId, user.id, parsed.data.targetUserId)) return response.status(409).json({ message: "Escolha outro membro desta Casa para assumir como host." });
+  const house = social.getHouse(request.params.houseId);
+  if (house) { for (const id of [user.id, parsed.data.targetUserId]) { const connected = store.getRoom(house.primaryRoomId)?.members.get(id); if (connected) connected.role = social.role(house.id, id)!; } emitSnapshot(house.primaryRoomId); }
+  emitHouse(request.params.houseId); return response.status(204).end();
+});
+app.delete("/api/houses/:houseId/members/:userId", (request, response) => { const user = requireHousePermission(request, response, "MEMBER_MANAGE"); if (!user) return; if (!social.removeMember(request.params.houseId, request.params.userId)) return response.status(409).json({ message: "O anfitrião não pode ser removido." }); const house = social.getHouse(request.params.houseId); if (house) { googleDrive.revokeOwnerFromHouse(house.primaryRoomId, request.params.userId); abortHouseDriveStreams(house.primaryRoomId, request.params.userId); } disconnectHouseMember(request.params.houseId, request.params.userId); emitHouse(request.params.houseId); return response.status(204).end(); });
+app.post("/api/houses/:houseId/leave", (request, response) => { const user = requireUser(request, response); if (!user) return; if (!social.leave(request.params.houseId, user.id)) return response.status(409).json({ message: "O anfitrião precisa transferir a Casa antes de sair." }); const house = social.getHouse(request.params.houseId); if (house) { googleDrive.revokeOwnerFromHouse(house.primaryRoomId, user.id); abortHouseDriveStreams(house.primaryRoomId, user.id); } disconnectHouseMember(request.params.houseId, user.id); emitHouse(request.params.houseId); return response.status(204).end(); });
 
 app.get("/api/media-hub/:roomId", (request, response) => {
   const user = requireRoomMember(request, response, String(request.params.roomId)); if (!user) return;
@@ -228,6 +396,14 @@ app.get("/api/media-hub/:roomId", (request, response) => {
   const hub = store.getMediaHub(request.params.roomId, user.id, { query: query.data.q, filter: query.data.filter, cursor: query.data.cursor, limit: query.data.limit });
   if (!hub) return response.status(404).json({ message: "Sala não encontrada." });
   return response.json(hub);
+});
+
+app.get("/api/media-hub/:roomId/history", (request, response) => {
+  const user = requireRoomMember(request, response, String(request.params.roomId)); if (!user) return;
+  const query = z.object({ cursor: z.coerce.number().int().min(0).default(0), limit: z.coerce.number().int().min(1).max(60).default(30) }).safeParse(request.query);
+  if (!query.success) return response.status(400).json({ message: "Paginação inválida." });
+  const page = store.getHistoryPage(request.params.roomId, query.data.cursor, query.data.limit);
+  return page ? response.json(page) : response.status(404).json({ message: "Party não encontrada." });
 });
 
 app.post("/api/media-hub/:roomId/favorite", (request, response) => {
@@ -270,8 +446,8 @@ app.delete("/api/media-hub/:roomId/playlists/:playlistId", (request, response) =
 
 app.post("/api/media-hub/:roomId/playlists/:playlistId/items", (request, response) => { const user = requireRoomPermission(request, response, String(request.params.roomId), "PLAYLIST_EDIT"); if (!user) return; const parsed = mediaItemSchema.safeParse(request.body.item); if (!parsed.success) return response.status(400).json({ message: "Mídia inválida." }); const playlist = store.addPlaylistItem(request.params.roomId, request.params.playlistId, user, parsed.data); if (!playlist) return response.status(404).json({ message: "Playlist não encontrada." }); emitMediaHubUpdate(request.params.roomId, "playlist"); return response.status(201).json({ playlist }); });
 app.delete("/api/media-hub/:roomId/playlists/:playlistId/items/:itemId", (request, response) => { const user = requireRoomPermission(request, response, String(request.params.roomId), "PLAYLIST_EDIT"); if (!user) return; const playlist = store.removePlaylistItem(request.params.roomId, request.params.playlistId, request.params.itemId); if (!playlist) return response.status(404).json({ message: "Playlist não encontrada." }); emitMediaHubUpdate(request.params.roomId, "playlist"); return response.json({ playlist }); });
-app.put("/api/media-hub/:roomId/playlists/:playlistId/order", (request, response) => { const user = requireRoomPermission(request, response, String(request.params.roomId), "PLAYLIST_EDIT"); if (!user) return; const parsed = z.object({ itemIds: z.array(z.string()).max(500) }).safeParse(request.body); if (!parsed.success) return response.status(400).json({ message: "Ordem inválida." }); const playlist = store.reorderPlaylist(request.params.roomId, request.params.playlistId, parsed.data.itemIds); if (!playlist) return response.status(409).json({ message: "A playlist mudou. Atualize e tente novamente." }); emitMediaHubUpdate(request.params.roomId, "playlist"); return response.json({ playlist }); });
-app.post("/api/media-hub/:roomId/playlists/:playlistId/queue", (request, response) => { const user = requireRoomPermission(request, response, String(request.params.roomId), "MEDIA_ADD"); if (!user) return; const parsed = z.object({ mode: z.enum(["append", "next", "replace"]).default("append"), playNow: z.boolean().default(false) }).safeParse(request.body); if (!parsed.success) return response.status(400).json({ message: "Opção de fila inválida." }); if (parsed.data.playNow && !store.canControlMedia(request.params.roomId, user.id)) return response.status(403).json({ message: "Você não pode iniciar a reprodução." }); const result = store.enqueuePlaylist(request.params.roomId, request.params.playlistId, user, parsed.data.mode, parsed.data.playNow); if (!result) return response.status(404).json({ message: "Playlist vazia ou não encontrada." }); io.to(request.params.roomId).emit("queue:update", result.queue, result.revision); if (result.media) io.to(request.params.roomId).emit("media:sync", result.media); return response.json(result); });
+app.put("/api/media-hub/:roomId/playlists/:playlistId/order", (request, response) => { const user = requireRoomPermission(request, response, String(request.params.roomId), "PLAYLIST_EDIT"); if (!user) return; const parsed = z.object({ itemIds: z.array(z.string()).max(500), expectedUpdatedAt: z.string().datetime() }).safeParse(request.body); if (!parsed.success) return response.status(400).json({ message: "Ordem inválida." }); const playlist = store.reorderPlaylist(request.params.roomId, request.params.playlistId, parsed.data.itemIds, parsed.data.expectedUpdatedAt); if (!playlist) return response.status(409).json({ message: "A playlist mudou. Atualize e tente novamente.", playlist: store.getPlaylist(request.params.roomId, request.params.playlistId) }); emitMediaHubUpdate(request.params.roomId, "playlist"); return response.json({ playlist }); });
+app.post("/api/media-hub/:roomId/playlists/:playlistId/queue", (request, response) => { const user = requireRoomPermission(request, response, String(request.params.roomId), "MEDIA_ADD"); if (!user) return; const parsed = z.object({ mode: z.enum(["append", "next", "replace"]).default("append"), playNow: z.boolean().default(false), revision: z.number().int().nonnegative() }).safeParse(request.body); if (!parsed.success) return response.status(400).json({ message: "Opção de fila inválida." }); if ((parsed.data.playNow || parsed.data.mode === "replace") && !store.canControlMedia(request.params.roomId, user.id)) return response.status(403).json({ message: "Você não pode controlar a reprodução ou substituir a fila." }); const result = store.enqueuePlaylist(request.params.roomId, request.params.playlistId, user, parsed.data.mode, parsed.data.playNow, parsed.data.revision, (item) => mediaAvailableInRoom(request.params.roomId, item)); if (!result) return response.status(404).json({ message: "Playlist vazia ou não encontrada." }); if (result.conflict) return response.status(409).json({ message: "A fila mudou. Revise a ordem e tente novamente.", revision: result.revision }); if (!result.media && result.skipped && result.skipped === store.getPlaylist(request.params.roomId, request.params.playlistId)?.items?.length) return response.status(409).json({ message: "Todos os itens da playlist estão indisponíveis.", skipped: result.skipped }); io.to(request.params.roomId).emit("queue:update", result.queue, result.revision); if (result.media) { io.to(request.params.roomId).emit("media:sync", result.media); emitMediaHubUpdate(request.params.roomId, "history"); } return response.json(result); });
 
 app.post("/api/media-hub/:roomId/progress", (request, response) => {
   const user = requireRoomMember(request, response, String(request.params.roomId)); if (!user) return;
@@ -293,12 +469,15 @@ app.post("/api/google-drive/auth/start", (request, response) => {
 });
 
 app.get("/api/google-drive/oauth/callback", async (request, response) => {
+  const state = typeof request.query.state === "string" ? request.query.state : "";
+  const origin = allowedOrigins[0] ?? CLIENT_ORIGIN;
+  if (request.query.error) return response.type("html").send(`<!doctype html><meta charset="utf-8"><p>Conexão cancelada. Pode fechar esta janela.</p><script>window.opener?.postMessage({type:"lumio:drive-cancelled"},${JSON.stringify(origin)});window.close()</script>`);
   const parsed = z.object({ state: z.string(), code: z.string() }).safeParse(request.query);
-  if (!parsed.success) return response.status(400).send("Autorização inválida.");
+  if (!parsed.success || !state) return response.status(400).send("Autorização inválida.");
   try {
     await googleDrive.completeAuthorization(parsed.data.state, parsed.data.code);
-    return response.type("html").send("<!doctype html><meta charset=\"utf-8\"><title>Lumio</title><body style=\"background:#0a0f0c;color:#edf4ef;font:16px Inter,system-ui,sans-serif;padding:40px\">Google Drive conectado. Esta janela pode ser fechada.<script>window.opener?.postMessage({type:'lumio:drive-connected'},'*');window.close();</script></body>");
-  } catch (error) { return response.status(400).send(error instanceof Error ? error.message : "Não foi possível conectar o Google Drive."); }
+    return response.type("html").send(`<!doctype html><meta charset="utf-8"><title>Lumio</title><body style="background:#0a0f0c;color:#edf4ef;font:16px system-ui;padding:40px">Google Drive conectado. Esta janela pode ser fechada.<script>window.opener?.postMessage({type:"lumio:drive-connected"},${JSON.stringify(origin)});window.close()</script></body>`);
+  } catch { return response.status(400).send("Não foi possível conectar o Google Drive. Volte ao Lumio e tente novamente."); }
 });
 
 app.post("/api/google-drive/disconnect", async (request, response) => {
@@ -309,41 +488,75 @@ app.post("/api/google-drive/disconnect", async (request, response) => {
 
 app.get("/api/google-drive/files", async (request, response) => {
   const user = requireUser(request, response); if (!user) return;
-  try { return response.json({ files: await googleDrive.listFiles(user.id, typeof request.query.q === "string" ? request.query.q : "") }); }
-  catch (error) { return response.status(error instanceof Error && error.message === "GOOGLE_RECONNECT" ? 401 : 502).json({ message: error instanceof Error && error.message === "GOOGLE_RECONNECT" ? "Precisamos reconectar seu Google Drive." : error instanceof Error ? error.message : "Drive indisponível." }); }
+  const parsed = z.object({ folderId: z.string().max(200).default("root"), pageToken: z.string().max(2048).optional() }).safeParse(request.query);
+  if (!parsed.success) return response.status(400).json({ message: "Pasta ou página inválida." });
+  try { return response.json(await googleDrive.listFolder(user.id, parsed.data.folderId, parsed.data.pageToken)); }
+  catch (error) { return response.status(driveStatus(error)).json({ message: driveMessage(error) }); }
 });
 
 app.get("/api/google-drive/resolve", async (request, response) => {
   const user = requireUser(request, response); if (!user) return;
   const input = typeof request.query.input === "string" ? request.query.input : "";
   try { return response.json({ item: await googleDrive.resolve(user.id, input) }); }
-  catch (error) { return response.status(error instanceof Error && error.message === "GOOGLE_RECONNECT" ? 401 : 400).json({ message: error instanceof Error && error.message === "GOOGLE_RECONNECT" ? "Precisamos reconectar seu Google Drive." : error instanceof Error ? error.message : "Arquivo indisponível." }); }
+  catch (error) { return response.status(driveStatus(error)).json({ message: driveMessage(error) }); }
 });
 
 app.post("/api/google-drive/files/:fileId/playback", async (request, response) => {
   const user = requireUser(request, response); if (!user) return;
+  const roomId = typeof request.body?.roomId === "string" ? request.body.roomId : "";
+  const house = social.getByRoom(roomId);
+  if (!house || !social.isMember(house.id, user.id)) return response.status(403).json({ message: "Você não faz parte desta Casa." });
   try {
-    const ticket = await googleDrive.createPlaybackTicket(user.id, request.params.fileId);
-    return response.json({ url: `${request.protocol}://${request.get("host")}/api/google-drive/playback/${ticket}`, expiresIn: 300 });
-  } catch { return response.status(401).json({ message: "Precisamos reconectar seu Google Drive." }); }
+    const grant = googleDrive.getGrant(roomId, request.params.fileId);
+    const nonce = crypto.randomBytes(32).toString("base64url");
+    const ticket = googleDrive.createPlaybackTicket({ roomId, fileId: request.params.fileId, viewerId: user.id, sessionToken: nonce, ownerIsMember: Boolean(grant && social.isMember(house.id, grant.ownerId)), mediaIsListed: driveMediaListed(roomId, request.params.fileId) });
+    response.setHeader("Set-Cookie", `lumio_drive_playback=${nonce}; HttpOnly; SameSite=Strict; Path=/api/google-drive/playback/${ticket}; Max-Age=300${request.secure ? "; Secure" : ""}`);
+    response.setHeader("Cache-Control", "no-store");
+    return response.json({ url: `/api/google-drive/playback/${ticket}`, expiresIn: 300 });
+  } catch (error) { return response.status(driveStatus(error)).json({ message: driveMessage(error) }); }
 });
 
-app.get("/api/google-drive/playback/:ticket", async (request, response) => {
+const activeDriveStreams = new Map<string, Set<{ viewerId: string; ownerId: string; controller: AbortController }>>();
+const abortHouseDriveStreams = (roomId: string, userId: string) => { for (const entry of activeDriveStreams.get(roomId) ?? []) if (entry.viewerId === userId || entry.ownerId === userId) entry.controller.abort(); };
+const streamDrive = async (request: express.Request, response: express.Response) => {
+  const nonce = request.header("cookie")?.match(/(?:^|;\s*)lumio_drive_playback=([^;]+)/)?.[1] ?? "";
   try {
-    const upstream = await googleDrive.getPlaybackResponse(request.params.ticket, request.header("range"));
-    response.status(upstream.status);
-    for (const header of ["content-type", "content-length", "content-range", "accept-ranges", "etag"]) {
+    const ticket = googleDrive.verifyTicket(String(request.params.ticket), nonce);
+    const house = social.getByRoom(ticket.roomId);
+    if (!house || !social.isMember(house.id, ticket.viewerId) || !social.isMember(house.id, ticket.ownerId) || !driveMediaListed(ticket.roomId, ticket.fileId)) return response.status(403).end();
+    const activeForViewer = [...(activeDriveStreams.get(ticket.roomId) ?? [])].filter((entry) => entry.viewerId === ticket.viewerId).length;
+    if (activeForViewer >= 4) return response.status(429).end();
+    const controller = new AbortController();
+    const entries = activeDriveStreams.get(ticket.roomId) ?? new Set<{ viewerId: string; ownerId: string; controller: AbortController }>();
+    const entry = { viewerId: ticket.viewerId, ownerId: ticket.ownerId, controller }; entries.add(entry); activeDriveStreams.set(ticket.roomId, entries);
+    response.on("close", () => { entries.delete(entry); if (!entries.size) activeDriveStreams.delete(ticket.roomId); if (!response.writableEnded) controller.abort(); });
+    const upstream = await googleDrive.getPlaybackResponse(ticket.ownerId, ticket.fileId, request.method === "HEAD" ? "bytes=0-0" : request.header("range"), controller.signal);
+    if (![200, 206, 416].includes(upstream.status)) { await upstream.body?.cancel(); return response.status(502).end(); }
+    const isHead = request.method === "HEAD" && upstream.status === 206;
+    response.status(isHead ? 200 : upstream.status);
+    response.setHeader("Cache-Control", "private, no-store");
+    for (const header of ["content-type", "content-length", "content-range", "accept-ranges"]) {
+      if (isHead && (header === "content-length" || header === "content-range")) continue;
       const value = upstream.headers.get(header); if (value) response.setHeader(header, value);
     }
+    if (isHead) {
+      const total = upstream.headers.get("content-range")?.match(/\/([0-9]+)$/)?.[1];
+      if (total) response.setHeader("Content-Length", total);
+    }
+    if (request.method === "HEAD") { await upstream.body?.cancel(); return response.end(); }
     if (!upstream.body) return response.end();
-    return Readable.fromWeb(upstream.body as never).pipe(response);
-  } catch { return response.status(401).json({ message: "A autorização de reprodução expirou." }); }
-});
+    const nodeStream = Readable.fromWeb(upstream.body as never);
+    nodeStream.on("error", () => { if (!response.headersSent) response.status(502); response.destroy(); });
+    return nodeStream.pipe(response);
+  } catch (error) { if (response.headersSent) return response.destroy(); return response.status(driveStatus(error)).end(); }
+};
+app.get("/api/google-drive/playback/:ticket", streamDrive);
+app.head("/api/google-drive/playback/:ticket", streamDrive);
 
 io.use((socket, next) => {
   const authToken = typeof socket.handshake.auth?.token === "string" ? socket.handshake.auth.token : undefined;
-  const user = authToken ? sessions.get(authToken) : undefined;
-  if (!user) return next(new Error("Sessão inválida."));
+  const user = authToken ? auth.resolveSession(authToken)?.user : undefined;
+  if (!user || !auth.isVerified(user.id)) return next(new Error("Sessão inválida ou e-mail não confirmado."));
   socket.data.user = user;
   return next();
 });
@@ -352,14 +565,32 @@ const emitSnapshot = (roomId: string) => {
   const snapshot = store.getSnapshot(roomId); const house = social.getByRoom(roomId);
   if (snapshot && house) {
     const viewers = io.sockets.adapter.rooms.get(roomId) ?? new Set<string>();
-    for (const socketId of viewers) { const target = io.sockets.sockets.get(socketId); const viewer = target?.data.user as User | undefined; if (target && viewer) target.emit("room:snapshot", { ...snapshot, houseId: house.id, houseMembers: social.details(house.id, viewer.id)?.members ?? [], permissions: social.details(house.id, viewer.id)?.permissions ?? [] }); }
+    for (const socketId of viewers) { const target = io.sockets.sockets.get(socketId); const viewer = target?.data.user as User | undefined; const details = viewer && social.details(house.id, viewer.id); if (target && details) target.emit("room:snapshot", { ...snapshot, houseId: house.id, houseMembers: details.members, permissions: details.permissions }); }
   } else if (snapshot) io.to(roomId).emit("room:snapshot", snapshot);
+  if (house) emitHomeForHouse(house.id);
 };
-const emitHouse = (houseId: string) => { const house = social.getHouse(houseId); if (!house) return; for (const socket of io.sockets.sockets.values()) { const user = socket.data.user as User | undefined; const details = user && social.details(houseId, user.id); if (details) socket.emit("house:update", details); } };
-const disconnectHouseMember = (houseId: string, userId: string) => { const house = social.getHouse(houseId); if (!house) return; for (const socket of io.sockets.sockets.values()) { if ((socket.data.user as User | undefined)?.id === userId) { socket.emit("member:removed", { houseId, message: "Você não faz mais parte desta Casa." }); socket.leave(house.primaryRoomId); } } store.removeMember(house.primaryRoomId, userId); emitSnapshot(house.primaryRoomId); };
+const houseSummaries = (userId: string) => social.listForUser(userId).map((house) => { const media = store.getSnapshot(house.primaryRoomId)?.currentMedia; return { ...house, nowPlaying: media?.mediaId ? { title: media.title, provider: media.provider } : null }; });
+const homeStateBySocket = new Map<string, string>();
+const emitHomeToSocket = (socket: Socket<ClientToServerEvents, ServerToClientEvents>, userId: string) => { const summaries = houseSummaries(userId); const serialized = JSON.stringify(summaries); if (homeStateBySocket.get(socket.id) !== serialized) { homeStateBySocket.set(socket.id, serialized); socket.emit("home:update", summaries); } };
+const emitHomeForHouse = (houseId: string) => { for (const socket of io.sockets.sockets.values()) { const user = socket.data.user as User | undefined; if (user && social.isMember(houseId, user.id)) emitHomeToSocket(socket, user.id); } };
+const emitHouse = (houseId: string) => { const house = social.getHouse(houseId); if (!house) return; for (const socket of io.sockets.sockets.values()) { const user = socket.data.user as User | undefined; const details = user && social.details(houseId, user.id); if (details) socket.emit("house:update", details); } emitHomeForHouse(houseId); };
+const disconnectHouseMember = (houseId: string, userId: string) => { const house = social.getHouse(houseId); if (!house) return; for (const socket of io.sockets.sockets.values()) { if ((socket.data.user as User | undefined)?.id === userId) { emitHomeToSocket(socket, userId); if (socket.data.joinedRoomId === house.primaryRoomId) { socket.emit("member:removed", { houseId, message: "Você não faz mais parte desta Casa." }); socket.data.revoked = true; socket.leave(house.primaryRoomId); setTimeout(() => socket.disconnect(true), 50); } } } const key = `${house.primaryRoomId}:${userId}`; const timer = offlineTimers.get(key); if (timer) clearTimeout(timer); offlineTimers.delete(key); store.removeMember(house.primaryRoomId, userId); emitSnapshot(house.primaryRoomId); };
 const roomConnections = new Map<string, Map<string, Set<string>>>();
 const offlineTimers = new Map<string, NodeJS.Timeout>();
+const activeUserSockets = new Map<string, Set<string>>();
+const accountOfflineTimers = new Map<string, NodeJS.Timeout>();
+const refreshAccountPresence = (userId: string, status: "ONLINE" | "IDLE" | "OFFLINE") => { social.setPresenceForUser(userId, status); for (const house of social.listForUser(userId)) emitHouse(house.id); };
 const registerConnection = (roomId: string, userId: string, socketId: string) => { const room = roomConnections.get(roomId) ?? new Map<string, Set<string>>(); const set = room.get(userId) ?? new Set<string>(); set.add(socketId); room.set(userId, set); roomConnections.set(roomId, room); const key = `${roomId}:${userId}`; const timer = offlineTimers.get(key); if (timer) clearTimeout(timer); offlineTimers.delete(key); return set.size; };
+const callSockets = new CallRegistry();
+const screenOwnerSockets = new Map<string, string>();
+const leaveCall = (roomId: string, user: User, socketId: string) => {
+  if (!callSockets.leave(roomId, user.id, socketId)) return;
+  io.to(roomId).emit("voice:peer-left", { userId: user.id, socketId });
+  const snapshot = store.updatePresence(roomId, user.id, { speaking: false, muted: true });
+  if (snapshot) io.to(roomId).emit("presence:update", snapshot.members);
+  const house = social.getByRoom(roomId);
+  if (house) { social.setPresence(house.id, user.id, "ONLINE", { inCall: false, speaking: false }); emitHouse(house.id); }
+};
 const unregisterConnection = (roomId: string, userId: string, socketId: string) => { const room = roomConnections.get(roomId), set = room?.get(userId); set?.delete(socketId); if (!set?.size) room?.delete(userId); return set?.size ?? 0; };
 const canControl = (roomId: string, userId: string) => store.canControlMedia(roomId, userId);
 const canManageRoom = (roomId: string, userId: string) => {
@@ -374,6 +605,21 @@ const emitQueueState = (roomId: string, state: { queue: QueueItem[]; history: Ho
 io.on("connection", (socket) => {
   const user = socket.data.user as User;
   let joinedRoomId: string | undefined;
+  socket.data.active = true;
+  const online = activeUserSockets.get(user.id) ?? new Set<string>(); online.add(socket.id); activeUserSockets.set(user.id, online);
+  const offline = accountOfflineTimers.get(user.id); if (offline) clearTimeout(offline); accountOfflineTimers.delete(user.id);
+  refreshAccountPresence(user.id, "ONLINE"); emitHomeToSocket(socket, user.id);
+  const socketLimits = new Map<string, { count: number; resetAt: number }>();
+  socket.use(([event], next) => {
+    if (!auth.resolveSession(socket.handshake.auth?.token ?? "")) return next(new Error("Sessão revogada."));
+    if (socket.data.revoked) return next(new Error("Acesso à Casa revogado."));
+    if (event !== eventNames.roomJoin && joinedRoomId) { const house = social.getByRoom(joinedRoomId); if (!house || !social.isMember(house.id, user.id)) return next(new Error("Acesso à Casa revogado.")); }
+    const ceiling = event === eventNames.chatMessage ? 20 : event === eventNames.reactionSend ? 40 : event === eventNames.chatTyping ? 60 : event === eventNames.voiceSignal ? 240 : 120;
+    const now = Date.now(), bucket = socketLimits.get(event);
+    if (!bucket || bucket.resetAt < now) socketLimits.set(event, { count: 1, resetAt: now + 60_000 });
+    else if (++bucket.count > ceiling) return next(new Error("Muitas ações em pouco tempo."));
+    next();
+  });
 
   socket.on(eventNames.roomJoin, (rawInput) => {
     const parsed = joinRoomInputSchema.safeParse(rawInput);
@@ -381,29 +627,34 @@ io.on("connection", (socket) => {
     const { roomId } = parsed.data;
     const house = social.getByRoom(roomId);
     if (!house || !social.isMember(house.id, user.id)) return socket.emit("server:error", "Você não faz parte desta Casa.");
+    if (joinedRoomId && joinedRoomId !== roomId) {
+      const oldRoomId = joinedRoomId;
+      leaveCall(oldRoomId, user, socket.id);
+      if (screenOwnerSockets.get(oldRoomId) === socket.id) { screenOwnerSockets.delete(oldRoomId); store.stopScreenShare(oldRoomId, user.id); io.to(oldRoomId).emit("screen:state", null); }
+      socket.leave(oldRoomId);
+      if (!unregisterConnection(oldRoomId, user.id, socket.id)) { store.removeMember(oldRoomId, user.id); const oldHouse = social.getByRoom(oldRoomId); if (oldHouse) { social.setPresence(oldHouse.id, user.id, "ONLINE", { inParty: false, inCall: false, speaking: false, screenSharing: false }); emitHouse(oldHouse.id); } }
+      emitSnapshot(oldRoomId);
+    }
     registerConnection(roomId, user.id, socket.id);
     const snapshot = store.addMember(roomId, user, social.role(house.id, user.id));
-    if (!snapshot) return socket.emit("server:error", "Sala não encontrada.");
-    if (joinedRoomId && joinedRoomId !== roomId) {
-      socket.leave(joinedRoomId);
-      store.removeMember(joinedRoomId, user.id);
-      emitSnapshot(joinedRoomId);
-    }
+    if (!snapshot) { unregisterConnection(roomId, user.id, socket.id); return socket.emit("server:error", "Sala não encontrada."); }
     joinedRoomId = roomId;
+    socket.data.joinedRoomId = roomId;
     socket.join(roomId);
     social.setPresence(house.id, user.id, "ONLINE", { inParty: true });
-    socket.to(roomId).emit("voice:peer-joined", user);
     emitSnapshot(roomId);
     emitHouse(house.id);
   });
 
   socket.on(eventNames.roomLeave, (roomId) => {
     if (joinedRoomId !== roomId) return;
+    leaveCall(roomId, user, socket.id);
+    if (screenOwnerSockets.get(roomId) === socket.id) { screenOwnerSockets.delete(roomId); store.stopScreenShare(roomId, user.id); }
     socket.leave(roomId);
     const remaining = unregisterConnection(roomId, user.id, socket.id); const house = social.getByRoom(roomId);
     if (!remaining) { store.removeMember(roomId, user.id); if (house) social.setPresence(house.id, user.id, "ONLINE", { inParty: false, inCall: false, speaking: false, screenSharing: false }); }
     joinedRoomId = undefined;
-    socket.to(roomId).emit("voice:peer-left", user.id);
+    socket.data.joinedRoomId = undefined;
     io.to(roomId).emit("screen:state", store.getSnapshot(roomId)?.screenShare ?? null);
     emitSnapshot(roomId);
     if (house) emitHouse(house.id);
@@ -417,7 +668,7 @@ io.on("connection", (socket) => {
   });
 
   socket.on(eventNames.chatTyping, (input) => { if (input.roomId !== joinedRoomId) return; socket.to(input.roomId).emit("chat:typing", { roomId: input.roomId, userId: user.id, typing: input.typing }); });
-  socket.on(eventNames.presenceActivity, (input) => { if (input.roomId !== joinedRoomId) return; const house = social.getByRoom(input.roomId); if (!house) return; social.setPresence(house.id, user.id, input.active ? "ONLINE" : "IDLE"); emitHouse(house.id); });
+  socket.on(eventNames.presenceActivity, (input) => { if (input.roomId !== joinedRoomId) return; socket.data.active = input.active; const anyActive = [...(activeUserSockets.get(user.id) ?? [])].some((id) => io.sockets.sockets.get(id)?.data.active !== false); refreshAccountPresence(user.id, anyActive ? "ONLINE" : "IDLE"); });
 
   socket.on(eventNames.queueAdd, async (rawInput, respond) => {
     const parsed = addQueueInputSchema.safeParse(rawInput);
@@ -426,6 +677,16 @@ io.on("connection", (socket) => {
       return;
     }
     let item = { ...parsed.data.item, addedBy: user };
+    if (item.provider === "google-drive") {
+      try {
+        const existing = googleDrive.getGrant(parsed.data.roomId, item.providerMediaId);
+        const ownerId = existing?.ownerId ?? user.id;
+        const house = social.getByRoom(parsed.data.roomId);
+        if (!house || !social.isMember(house.id, ownerId)) throw new DriveError("FORBIDDEN", "Vídeo do Drive indisponível nesta Casa.");
+        const verified = await googleDrive.grant(parsed.data.roomId, ownerId, item.providerMediaId);
+        item = { ...verified, id: item.id, addedBy: user, addedAt: item.addedAt };
+      } catch (error) { return respond?.({ ok: false, message: driveMessage(error) }); }
+    }
     if (item.provider === "youtube" && youtube.isConfigured()) {
       try {
         const verified = await youtube.getVideo(item.providerMediaId);
@@ -436,10 +697,11 @@ io.on("connection", (socket) => {
         return socket.emit("server:error", message);
       }
     }
+    if (!social.isMember(social.getByRoom(parsed.data.roomId)?.id ?? "", user.id) || joinedRoomId !== parsed.data.roomId) return respond?.({ ok: false, message: "Acesso à Casa revogado." });
     const queue = store.addQueueItem(parsed.data.roomId, item);
     if (queue) {
       io.to(parsed.data.roomId).emit("queue:update", queue, store.getQueueRevision(parsed.data.roomId));
-      respond?.({ ok: true, item, position: queue.findIndex((candidate) => candidate.id === item.id) + 1 });
+      respond?.({ ok: true, item: queue.at(-1), position: queue.length });
     } else respond?.({ ok: false, message: "Não foi possível adicionar o item à fila." });
   });
 
@@ -453,31 +715,48 @@ io.on("connection", (socket) => {
   socket.on(eventNames.queueNext, (rawInput) => {
     const parsed = z.object({ roomId: z.string() }).safeParse(rawInput);
     if (!parsed.success || parsed.data.roomId !== joinedRoomId || !canControl(parsed.data.roomId, user.id)) return;
-    const next = store.nextQueueItem(parsed.data.roomId);
+    const beforeRevision = store.getQueueRevision(parsed.data.roomId);
+    const next = store.nextQueueItem(parsed.data.roomId, user.id, (item) => mediaAvailableInRoom(parsed.data.roomId, item));
     if (next) {
       emitQueueState(parsed.data.roomId, next);
       io.to(parsed.data.roomId).emit("media:sync", next.media);
-    }
+    } else if (store.getQueueRevision(parsed.data.roomId) !== beforeRevision) { const snapshot = store.getSnapshot(parsed.data.roomId); if (snapshot) io.to(parsed.data.roomId).emit("queue:update", snapshot.queue, snapshot.queueRevision); }
   });
 
   socket.on(eventNames.queuePrevious, (rawInput) => {
     const parsed = z.object({ roomId: z.string() }).safeParse(rawInput);
     if (!parsed.success || parsed.data.roomId !== joinedRoomId || !canControl(parsed.data.roomId, user.id)) return;
-    const previous = store.previousQueueItem(parsed.data.roomId);
+    const previous = store.previousQueueItem(parsed.data.roomId, (item) => mediaAvailableInRoom(parsed.data.roomId, item));
     if (previous) { emitQueueState(parsed.data.roomId, previous); io.to(parsed.data.roomId).emit("media:sync", previous.media); }
   });
 
   socket.on(eventNames.queueMove, (rawInput) => {
     const parsed = queueMoveSchema.safeParse(rawInput);
-    if (!parsed.success || parsed.data.roomId !== joinedRoomId || !canControl(parsed.data.roomId, user.id)) return;
+    if (!parsed.success || parsed.data.roomId !== joinedRoomId) return;
+    if (!canControl(parsed.data.roomId, user.id)) return socket.emit("server:error", "Você não tem permissão para organizar a fila.");
     const result = store.moveQueueItem(parsed.data.roomId, parsed.data.itemId, parsed.data.toIndex, parsed.data.revision);
-    if (result) io.to(parsed.data.roomId).emit("queue:update", result.queue, result.revision);
+    if (result) {
+      io.to(parsed.data.roomId).emit("queue:update", result.queue, result.revision);
+      if (result.conflict) socket.emit("server:error", "A fila mudou. Tente novamente.");
+    }
   });
 
-  socket.on(eventNames.queuePlayNext, (rawInput, respond) => {
+  socket.on(eventNames.queuePlayNext, async (rawInput, respond) => {
     const parsed = queuePlayNextSchema.safeParse(rawInput);
     if (!parsed.success || parsed.data.roomId !== joinedRoomId || !store.canAddToQueue(parsed.data.roomId, user.id)) return respond?.({ ok: false, message: "Você não pode alterar esta fila." });
-    const result = store.playNext(parsed.data.roomId, { ...parsed.data.item, addedBy: user }, parsed.data.revision);
+    let item = { ...parsed.data.item, addedBy: user };
+    if (item.provider === "google-drive") {
+      try {
+        const existing = googleDrive.getGrant(parsed.data.roomId, item.providerMediaId);
+        const ownerId = existing?.ownerId ?? user.id;
+        const house = social.getByRoom(parsed.data.roomId);
+        if (!house || !social.isMember(house.id, ownerId)) throw new DriveError("FORBIDDEN", "Vídeo do Drive indisponível nesta Casa.");
+        const verified = await googleDrive.grant(parsed.data.roomId, ownerId, item.providerMediaId);
+        item = { ...verified, id: item.id, addedBy: user, addedAt: item.addedAt };
+      } catch (error) { return respond?.({ ok: false, message: driveMessage(error) }); }
+    }
+    if (!social.isMember(social.getByRoom(parsed.data.roomId)?.id ?? "", user.id) || joinedRoomId !== parsed.data.roomId) return respond?.({ ok: false, message: "Acesso à Casa revogado." });
+    const result = store.playNext(parsed.data.roomId, item, parsed.data.revision);
     if (!result) return respond?.({ ok: false, message: "Party não encontrada." });
     io.to(parsed.data.roomId).emit("queue:update", result.queue, result.revision);
     respond?.({ ok: !result.conflict, queue: result.queue, revision: result.revision, message: result.conflict ? "A fila mudou; a ordem atual foi restaurada." : undefined });
@@ -493,9 +772,10 @@ io.on("connection", (socket) => {
   socket.on(eventNames.queueAdvance, (rawInput, respond) => {
     const parsed = queueAdvanceSchema.safeParse(rawInput);
     if (!parsed.success || parsed.data.roomId !== joinedRoomId) return respond?.({ ok: false, advanced: false, message: "Pedido inválido." });
-    const result = store.advanceQueue(parsed.data.roomId, parsed.data.expectedMediaId, user.id);
+    const beforeRevision = store.getQueueRevision(parsed.data.roomId);
+    const result = store.advanceQueue(parsed.data.roomId, parsed.data.expectedMediaId, user.id, parsed.data.expectedQueueItemId, (item) => mediaAvailableInRoom(parsed.data.roomId, item));
     if (result.next) { emitQueueState(parsed.data.roomId, result.next); io.to(parsed.data.roomId).emit("media:sync", result.next.media); emitMediaHubUpdate(parsed.data.roomId, "history"); }
-    else if (result.media) io.to(parsed.data.roomId).emit("media:sync", result.media);
+    else if (result.media) { io.to(parsed.data.roomId).emit("media:sync", result.media); if (store.getQueueRevision(parsed.data.roomId) !== beforeRevision) { const snapshot = store.getSnapshot(parsed.data.roomId); if (snapshot) io.to(parsed.data.roomId).emit("queue:update", snapshot.queue, snapshot.queueRevision); } }
     respond?.({ ok: true, advanced: result.advanced });
   });
 
@@ -521,39 +801,51 @@ io.on("connection", (socket) => {
 
   const updateMedia = (action: "play" | "pause" | "seek" | "rate", rawInput: unknown) => {
     const parsed = mediaCommandSchema.safeParse(rawInput);
-    if (!parsed.success || parsed.data.roomId !== joinedRoomId || !canControl(parsed.data.roomId, user.id)) return;
+    if (!parsed.success || parsed.data.roomId !== joinedRoomId) return;
+    if (!canControl(parsed.data.roomId, user.id)) {
+      socket.emit("server:error", "Você não tem permissão para controlar a reprodução.");
+      const room = store.getRoom(parsed.data.roomId);
+      if (room) socket.emit("media:sync", store.getEffectiveMedia(room.currentMedia));
+      return;
+    }
     const media = store.updateMedia(parsed.data.roomId, user.id, action, parsed.data.position, parsed.data);
     if (media) { io.to(parsed.data.roomId).emit("media:sync", media); if (action === "play") { const snapshot = store.getSnapshot(parsed.data.roomId); if (snapshot) io.to(parsed.data.roomId).emit("queue:history", snapshot.history); emitMediaHubUpdate(parsed.data.roomId, "history"); } }
+    else { const room = store.getRoom(parsed.data.roomId); if (room) socket.emit("media:sync", store.getEffectiveMedia(room.currentMedia)); }
   };
   socket.on(eventNames.mediaPlay, (input) => updateMedia("play", input));
   socket.on(eventNames.mediaPause, (input) => updateMedia("pause", input));
   socket.on(eventNames.mediaSeek, (input) => updateMedia("seek", input));
   socket.on(eventNames.mediaRate, (input) => updateMedia("rate", input));
 
-  socket.on(eventNames.mediaChange, (rawInput) => {
+  socket.on(eventNames.mediaChange, (rawInput, respond) => {
     const parsed = changeMediaSchema.safeParse(rawInput);
-    if (!parsed.success || parsed.data.roomId !== joinedRoomId || !canControl(parsed.data.roomId, user.id)) return;
+    if (!parsed.success || parsed.data.roomId !== joinedRoomId || !canControl(parsed.data.roomId, user.id)) return respond?.({ ok: false, message: "Você não pode controlar a reprodução." });
     const room = store.getRoom(parsed.data.roomId);
-    const item = room?.queue.find((candidate) => candidate.provider === parsed.data.item.provider && candidate.providerMediaId === parsed.data.item.providerMediaId);
-    if (!item) return socket.emit("server:error", "Adicione a mídia à fila antes de reproduzir.");
+    const item = room?.queue.find((candidate) => candidate.id === parsed.data.item.id);
+    if (!item) return respond?.({ ok: false, message: "Adicione a mídia à fila antes de reproduzir." });
+    if (!mediaAvailableInRoom(parsed.data.roomId, item)) return respond?.({ ok: false, message: "Esta mídia está indisponível. Peça ao proprietário para adicioná-la novamente." });
     const changed = store.changeMedia(parsed.data.roomId, item);
     const media = changed ? store.updateMedia(parsed.data.roomId, user.id, "play", 0) : null;
     if (media) { io.to(parsed.data.roomId).emit("media:sync", media); const snapshot = store.getSnapshot(parsed.data.roomId); if (snapshot) io.to(parsed.data.roomId).emit("queue:history", snapshot.history); emitMediaHubUpdate(parsed.data.roomId, "history"); emitSnapshot(parsed.data.roomId); }
+    respond?.({ ok: Boolean(media), message: media ? undefined : "Não foi possível reproduzir esta mídia." });
   });
 
   socket.on(eventNames.voteSkip, (rawInput) => {
     const parsed = z.object({ roomId: z.string() }).safeParse(rawInput);
     if (!parsed.success || parsed.data.roomId !== joinedRoomId) return;
-    const vote = store.voteSkip(parsed.data.roomId, user.id);
+    const beforeRevision = store.getQueueRevision(parsed.data.roomId);
+    const vote = store.voteSkip(parsed.data.roomId, user.id, (item) => mediaAvailableInRoom(parsed.data.roomId, item));
     if (!vote) return;
     io.to(parsed.data.roomId).emit("vote:skip", { count: vote.count, required: vote.required, votedBy: vote.votedBy, advanced: vote.advanced });
     if (vote.next) { emitQueueState(parsed.data.roomId, vote.next); io.to(parsed.data.roomId).emit("media:sync", vote.next.media); }
+    else if (store.getQueueRevision(parsed.data.roomId) !== beforeRevision) { const snapshot = store.getSnapshot(parsed.data.roomId); if (snapshot) io.to(parsed.data.roomId).emit("queue:update", snapshot.queue, snapshot.queueRevision); }
   });
 
   socket.on(eventNames.presenceUpdate, (rawInput) => {
     const parsed = presenceInputSchema.safeParse(rawInput);
     if (!parsed.success || parsed.data.roomId !== joinedRoomId) return;
-    const snapshot = store.updatePresence(parsed.data.roomId, user.id, parsed.data);
+    const input = { ...parsed.data, speaking: parsed.data.speaking && !parsed.data.muted && !parsed.data.deafened && callSockets.isJoined(parsed.data.roomId, user.id, socket.id) };
+    const snapshot = store.updatePresence(parsed.data.roomId, user.id, input);
     if (snapshot) io.to(parsed.data.roomId).emit("presence:update", snapshot.members);
   });
 
@@ -569,44 +861,68 @@ io.on("connection", (socket) => {
   socket.on(eventNames.voiceSignal, (rawInput) => {
     const parsed = voiceSignalSchema.safeParse(rawInput);
     if (!parsed.success || parsed.data.roomId !== joinedRoomId) return;
-    for (const [id, peer] of io.sockets.sockets) {
-      if (peer.data.user?.id === parsed.data.targetUserId) peer.emit("voice:signal", { fromUserId: user.id, signal: parsed.data.signal });
-    }
+    if (!callSockets.canSignal(joinedRoomId, user.id, socket.id, parsed.data.targetUserId, parsed.data.targetSocketId)) return;
+    io.to(parsed.data.targetSocketId).emit("voice:signal", { fromUserId: user.id, fromSocketId: socket.id, signal: parsed.data.signal });
   });
 
-  socket.on(eventNames.voiceJoin, (input) => {
-    if (input.roomId === joinedRoomId) { socket.to(input.roomId).emit("voice:peer-joined", user); const house = social.getByRoom(input.roomId); if (house) { social.setPresence(house.id, user.id, "ONLINE", { inCall: true }); emitHouse(house.id); } }
+  socket.on(eventNames.voiceJoin, (input, respond) => {
+    if (input.roomId !== joinedRoomId) return respond?.({ ok: false, message: "Party indisponível." });
+    const house = social.getByRoom(input.roomId);
+    if (!house || !can(social.role(house.id, user.id), "CALL_JOIN")) return respond?.({ ok: false, message: "Você não tem permissão para entrar na call." });
+    const joined = callSockets.join(input.roomId, user.id, socket.id, (id) => io.sockets.sockets.has(id));
+    if (!joined.ok) return respond?.({ ok: false, message: "A call já está aberta em outra aba." });
+    if (joined.alreadyJoined) return respond?.({ ok: true });
+    for (const [, peerSocketId] of joined.peers) {
+      const peer = io.sockets.sockets.get(peerSocketId);
+      if (peer) socket.emit("voice:peer-joined", { user: peer.data.user as User, socketId: peerSocketId });
+    }
+    respond?.({ ok: true });
+    socket.to(input.roomId).emit("voice:peer-joined", { user, socketId: socket.id });
+    social.setPresence(house.id, user.id, "ONLINE", { inCall: true }); emitHouse(house.id);
   });
   socket.on(eventNames.voiceLeave, (input) => {
-    if (input.roomId === joinedRoomId) { socket.to(input.roomId).emit("voice:peer-left", user.id); const house = social.getByRoom(input.roomId); if (house) { social.setPresence(house.id, user.id, "ONLINE", { inCall: false, speaking: false }); emitHouse(house.id); } }
+    if (input.roomId === joinedRoomId) leaveCall(input.roomId, user, socket.id);
   });
   socket.on(eventNames.voiceSpeaking, (rawInput) => {
     const parsed = presenceInputSchema.safeParse(rawInput);
-    if (!parsed.success || parsed.data.roomId !== joinedRoomId) return;
-    const snapshot = store.updatePresence(parsed.data.roomId, user.id, parsed.data);
+    if (!parsed.success || parsed.data.roomId !== joinedRoomId || !callSockets.isJoined(parsed.data.roomId, user.id, socket.id)) return;
+    const input = { ...parsed.data, speaking: parsed.data.speaking && !parsed.data.muted && !parsed.data.deafened };
+    const snapshot = store.updatePresence(parsed.data.roomId, user.id, input);
     if (snapshot) io.to(parsed.data.roomId).emit("presence:update", snapshot.members);
-    const house = social.getByRoom(parsed.data.roomId); if (house) { social.setPresence(house.id, user.id, "ONLINE", { inCall: true, speaking: parsed.data.speaking }); emitHouse(house.id); }
+    const house = social.getByRoom(parsed.data.roomId); if (house) { social.setPresence(house.id, user.id, "ONLINE", { inCall: true, speaking: input.speaking }); emitHouse(house.id); }
   });
 
   socket.on(eventNames.screenStart, (input, respond) => {
     if (input.roomId !== joinedRoomId) return respond({ ok: false, message: "Party inválida." });
+    const house = social.getByRoom(input.roomId);
+    if (!house || !can(social.role(house.id, user.id), "SCREEN_SHARE")) return respond({ ok: false, message: "Você não tem permissão para compartilhar a tela." });
+    const callSocketId = callSockets.socketFor(input.roomId, user.id);
+    if (callSocketId && callSocketId !== socket.id) return respond({ ok: false, message: "A call já está aberta em outra aba." });
+    if (screenOwnerSockets.has(input.roomId) && screenOwnerSockets.get(input.roomId) !== socket.id) return respond({ ok: false, message: "Já existe um compartilhamento de tela ativo." });
     const result = store.startScreenShare(input.roomId, user);
+    if (result.ok) screenOwnerSockets.set(input.roomId, socket.id);
     respond({ ok: result.ok, message: result.ok ? undefined : result.message });
     if (result.ok) io.to(input.roomId).emit("screen:state", result.state);
-    const house = social.getByRoom(input.roomId); if (result.ok && house) { social.setPresence(house.id, user.id, "ONLINE", { screenSharing: true }); emitHouse(house.id); }
+    if (result.ok) { social.setPresence(house.id, user.id, "ONLINE", { screenSharing: true }); emitHouse(house.id); }
   });
 
   socket.on(eventNames.screenStop, (input) => {
-    if (input.roomId !== joinedRoomId || !store.stopScreenShare(input.roomId, user.id)) return;
+    if (input.roomId !== joinedRoomId || screenOwnerSockets.get(input.roomId) !== socket.id || !store.stopScreenShare(input.roomId, user.id)) return;
+    screenOwnerSockets.delete(input.roomId);
     io.to(input.roomId).emit("screen:state", null);
     const house = social.getByRoom(input.roomId); if (house) { social.setPresence(house.id, user.id, "ONLINE", { screenSharing: false }); emitHouse(house.id); }
   });
 
   socket.on("disconnect", () => {
+    homeStateBySocket.delete(socket.id);
+    const userSockets = activeUserSockets.get(user.id); userSockets?.delete(socket.id);
+    if (!userSockets?.size) { activeUserSockets.delete(user.id); const prior = accountOfflineTimers.get(user.id); if (prior) clearTimeout(prior); accountOfflineTimers.set(user.id, setTimeout(() => { if (activeUserSockets.has(user.id)) return; refreshAccountPresence(user.id, "OFFLINE"); accountOfflineTimers.delete(user.id); }, 5_000)); }
     if (!joinedRoomId) return;
-    const roomId = joinedRoomId; const remaining = unregisterConnection(roomId, user.id, socket.id); if (remaining) return;
-    const wasSharing = store.getRoom(roomId)?.screenShare?.user.id === user.id; const house = social.getByRoom(roomId);
-    const key = `${roomId}:${user.id}`; offlineTimers.set(key, setTimeout(() => { if ((roomConnections.get(roomId)?.get(user.id)?.size ?? 0) > 0) return; store.removeMember(roomId, user.id); if (house) { social.setPresence(house.id, user.id, "OFFLINE", { inParty: false, inCall: false, speaking: false, screenSharing: false }); emitHouse(house.id); } io.to(roomId).emit("voice:peer-left", user.id); if (wasSharing) io.to(roomId).emit("screen:state", null); emitSnapshot(roomId); offlineTimers.delete(key); }, 5_000));
+    const roomId = joinedRoomId; leaveCall(roomId, user, socket.id);
+    const wasSharing = screenOwnerSockets.get(roomId) === socket.id; const house = social.getByRoom(roomId);
+    if (wasSharing) { screenOwnerSockets.delete(roomId); store.stopScreenShare(roomId, user.id); io.to(roomId).emit("screen:state", null); if (house) { social.setPresence(house.id, user.id, "ONLINE", { screenSharing: false }); emitHouse(house.id); } }
+    const remaining = unregisterConnection(roomId, user.id, socket.id); if (remaining) return;
+    const key = `${roomId}:${user.id}`; offlineTimers.set(key, setTimeout(() => { if ((roomConnections.get(roomId)?.get(user.id)?.size ?? 0) > 0) return; store.removeMember(roomId, user.id); if (house) { social.setPresence(house.id, user.id, activeUserSockets.has(user.id) ? "ONLINE" : "OFFLINE", { inParty: false, inCall: false, speaking: false, screenSharing: false }); emitHouse(house.id); } emitSnapshot(roomId); offlineTimers.delete(key); }, 5_000));
   });
 });
 

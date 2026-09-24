@@ -64,9 +64,20 @@ O Home não deve inicializar Socket.IO, WebRTC, busca de mídia ou componentes p
 - Volume e mute são preferências locais. Play, pause, seek e velocidade são estado compartilhado.
 - O callback `ended` pede `queue:advance` uma única vez por `mediaId + revision`; o servidor valida `expectedMediaId` e a configuração `autoplayNext`.
 
+## Call e screen share
+
+- Consulte `docs/CALL_V4.md` antes de editar WebRTC. A call usa P2P mesh na Party existente; o player tem ciclo de vida independente.
+- `voice:join` registra apenas um socket ativo por usuário/Party; ofertas e candidatos são enviados somente ao socket de destino descoberto. Não recrie peers a partir de sinal obsoleto.
+- Use `onnegotiationneeded` para negociar tracks e ICE restart; não abra um segundo caminho manual de offers.
+- Mute não reacquire microfone. PTT deve liberar ao perder foco/ocultar aba. Ducking é volume local e não modifica o volume base salvo.
+- Screen share usa uma track na conexão existente, exige autorização do servidor e libera o slot quando o dono sai/desconecta. Não solicite captura na entrada da Party.
+- Credenciais TURN estáticas são visíveis para clientes autorizados; use credenciais temporárias em produção. A ausência de TURN limita conectividade entre redes.
+
 ## Integrações e ambiente
 
 - Chaves de API ficam no `.env` do servidor e nunca no bundle do Vite.
+- Para Google Drive, consulte `docs/GOOGLE_DRIVE.md`; não exponha tokens, tickets de playback nem URLs diretas de mídia do Google. A conexão Google não autentica no Lumio.
+- Para login, consulte `docs/AUTH_V2.md`: Google Identity e Google Drive são autorizações independentes; o `sub` Google identifica o vínculo externo, mas Casa/Party sempre usam o User Lumio. Não vincule por e-mail sem autenticar a conta Lumio nem permita remover o último método de login.
 - O `.env.example` deve documentar nomes necessários sem conter segredos reais.
 - YouTube, Drive, Spotify e WebRTC devem ter estados claros quando não configurados ou quando o navegador bloquear a permissão.
 - Ao adicionar uma integração, implemente tratamento para timeout, erro de credencial, limite da API e resposta vazia.
@@ -122,3 +133,31 @@ Uma tarefa está pronta quando:
 - os checks relevantes passam ou as falhas ficam documentadas;
 - nenhuma chave ou dado sensível foi exposto;
 - a documentação foi atualizada se o comportamento ou a arquitetura mudou.
+
+## Casa e presença V2
+
+- House é o limite de membership; Party é a sessão efêmera. Home usa só um socket leve para resumos, sem entrar na Party.
+- A matriz de permissões compartilhada está em `packages/shared/src/index.ts`; o servidor é a autoridade em HTTP e WebSocket.
+- O host só sai depois de transferir a Casa a outro membro. A troca mantém exatamente um host no adapter em memória.
+- Remoção de membro ativo deve revogar imediatamente Party, Call, screen share e grants do Drive; não basta ocultar botões na UI.
+- Presença online da conta, presença na Party e presença na Call são eixos distintos. Múltiplas abas e grace period de cinco segundos evitam flapping.
+- Google Identity autentica a conta Lumio e não concede acesso ao Google Drive. Consulte `docs/SOCIAL_ARCHITECTURE.md`.
+
+## Media Experience V3
+
+- Use `QueueItem.id` para distinguir ocorrências repetidas da mesma mídia. `provider + providerMediaId` identifica a mídia canônica, não a posição na fila.
+- `ENDED` deve incluir `expectedQueueItemId`; histórico registra uma vez por ocorrência quando o playback começa.
+- Reorder de playlist exige `expectedUpdatedAt`; lote playlist→fila exige `queueRevision` e deve informar itens indisponíveis ignorados.
+- Descobrir consulta apenas YouTube; Biblioteca é busca local da Casa; Drive só navega pastas pessoais. Não associe `fileId` a autorização.
+- A fonte runtime do Media Hub ainda é o adapter em memória. Não descreva os models Prisma como persistência ativa. Consulte `docs/MEDIA_HUB.md`.
+
+## Mobile e PWA
+
+- Mobile, tablet e desktop usam o mesmo frontend, player, call e Media Hub. Preserve a Party desktop aprovada ao ajustar breakpoints.
+- No mobile, Chat acompanha o player no mesmo canvas; controles da call ficam no microfone da caixa de mensagem. Abrir o chat não deve desmontar o player ou reiniciar a call.
+- Tela cheia usa a Fullscreen API no elemento persistente do Lumio Player (provider + controles), separada do modo cinema. No celular, tenta travar em paisagem por capability detection e libera a orientação ao sair; quando indisponível, orienta a rotação manual. A tela ampliada local deve ser identificada como fallback. Trocar provider não deve recriar esse elemento.
+- O Dock respeita safe areas; drawers viram sheets no celular. Inputs precisam permanecer visíveis com teclado virtual; zoom não deve ser bloqueado.
+- APIs de microfone, seleção de saída e screen share exigem capability detection. Não ofereça push-to-talk por tecla em tela touch.
+- A PWA é progressiva, não offline-first: Party, call, YouTube e Drive exigem rede. O service worker só cacheia assets estáticos, nunca API, OAuth, tickets, tokens ou mídia privada.
+- Atualizações do service worker não devem recarregar uma Party automaticamente; a pessoa decide quando aplicar a versão nova.
+- A marca oficial está em `apps/web/brand/lumio-logo-master.png`; gere favicon, símbolo web e ícones PWA somente a partir desse master com `apps/web/scripts/generate-icons.ps1`. Não restaure o antigo ícone com a letra “L” nem modifique a geometria ou as cores do símbolo.

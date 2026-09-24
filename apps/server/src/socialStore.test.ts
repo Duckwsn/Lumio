@@ -42,3 +42,43 @@ test("membership survives party presence transitions", () => {
   store.setPresence("group-silva", host.id, "ONLINE", { inParty: true }); store.setPresence("group-silva", host.id, "OFFLINE", { inParty: false });
   assert.equal(store.isMember("group-silva", host.id), true); assert.equal(store.details("group-silva", host.id)?.members[0]?.inParty, false);
 });
+
+test("host transfer preserves one host and allows former host to leave", () => {
+  const store = new SocialStore(); const house = store.createHouse(host, "Casa Aurora");
+  const invite = store.createInvite(house.id, host, { expiresInHours: 24, maxUses: 1 })!;
+  assert.equal(store.acceptInvite(invite.token, member).ok, true);
+  assert.equal(store.transferHost(house.id, member.id, member.id), false);
+  assert.equal(store.transferHost(house.id, host.id, "missing"), false);
+  assert.equal(store.transferHost(house.id, host.id, member.id), true);
+  assert.deepEqual([...house.members.values()].filter((entry) => entry.role === "HOST").map((entry) => entry.user.id), [member.id]);
+  assert.equal(store.leave(house.id, host.id), true);
+  assert.equal(store.leave(house.id, member.id), false);
+});
+
+test("an existing member may reopen a consumed invite without using it twice", () => {
+  const store = new SocialStore(); const house = store.createHouse(host, "Casa Aurora");
+  const invite = store.createInvite(house.id, host, { expiresInHours: 24, maxUses: 1 })!;
+  assert.equal(store.acceptInvite(invite.token, member).ok, true);
+  assert.equal(store.acceptInvite(invite.token, member).ok, true);
+  assert.equal(store.getInvite(invite.token)?.uses, 1);
+  assert.equal(store.getInvite(invite.token)?.token, "");
+  assert.equal(store.acceptInvite(invite.token, { id: "third", displayName: "Third", color: "#fff" }).ok, false);
+});
+
+test("competing in-process accepts cannot exceed the invite usage limit", async () => {
+  const store = new SocialStore(); const house = store.createHouse(host, "Casa Aurora");
+  const invite = store.createInvite(house.id, host, { expiresInHours: 24, maxUses: 1 })!;
+  const results = await Promise.all([member, { id: "third", displayName: "Third", color: "#fff" }].map((user) => Promise.resolve(store.acceptInvite(invite.token, user))));
+  assert.equal(results.filter((result) => result.ok).length, 1);
+  assert.equal(store.getInvite(invite.token)?.uses, 1);
+  assert.equal(house.members.size, 2);
+});
+
+test("account presence does not clear Party, Call, or screen share flags", () => {
+  const store = new SocialStore(); const house = store.createHouse(host, "Casa Aurora");
+  store.setPresence(house.id, host.id, "ONLINE", { inParty: true, inCall: true, speaking: true, screenSharing: true });
+  store.setPresenceForUser(host.id, "IDLE");
+  const presence = store.details(house.id, host.id)!.members[0];
+  assert.equal(presence.presence, "IDLE");
+  assert.equal(presence.inParty, true); assert.equal(presence.inCall, true); assert.equal(presence.speaking, true); assert.equal(presence.screenSharing, true);
+});

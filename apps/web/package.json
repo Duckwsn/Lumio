@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "typecheck": "tsc -b --pretty false --noEmit",
-    "lint": "tsc -b --pretty false --noEmit"
+    "lint": "tsc -b --pretty false --noEmit",
+    "test": "tsx --test src/rtc/*.test.ts && node --test scripts/sw.test.cjs"
   },
   "dependencies": {
     "@lumio/shared": "0.1.0",
@@ -20,6 +21,7 @@
   "devDependencies": {
     "@types/react": "^18.3.18",
     "@types/react-dom": "^18.3.5",
+    "tsx": "^4.19.2",
     "typescript": "^5.7.3",
     "vite": "^6.0.7"
   }

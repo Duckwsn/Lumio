@@ -12,6 +12,7 @@ model User {
   displayName String
   email       String?       @unique
   passwordHash String?
+  emailVerifiedAt DateTime?
   avatar      String?
   status      String?
   lastSeenAt  DateTime?
@@ -28,6 +29,46 @@ model User {
   houseFavorites HouseFavorite[]
   createdInvites HouseInvite[]
   activity       HouseActivity[]
+  googleDriveConnection GoogleDriveConnection?
+  externalIdentities ExternalIdentity[]
+  authTokens AuthToken[]
+}
+
+model AuthToken {
+  hash String @id
+  userId String
+  purpose String
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@index([userId, purpose])
+  @@index([expiresAt])
+}
+
+model ExternalIdentity {
+  id String @id @default(cuid())
+  userId String
+  provider String
+  providerSubject String
+  emailSnapshot String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@unique([provider, providerSubject])
+  @@unique([userId, provider])
+}
+
+model GoogleDriveConnection {
+  id String @id @default(cuid())
+  userId String @unique
+  providerAccountId String?
+  email String?
+  scopes String
+  encryptedCredentials String
+  status String @default("CONNECTED")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 model Group {

@@ -7,3 +7,4 @@ dist
 coverage
 *.tsbuildinfo
 apps/server/prisma/dev.db
+.data/
