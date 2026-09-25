@@ -25,8 +25,13 @@ jobs:
         with:
           node-version: '24'
           cache: npm
+      # Mirror Render's production-env install and exact backend build order.
       - run: npm ci
+        env:
+          NODE_ENV: production
+      - run: npm run build --workspace @lumio/shared
       - run: npm run db:generate --workspace @lumio/server
+      - run: npm run build --workspace @lumio/server
       - run: npm run db:migrate:deploy --workspace @lumio/server
         env:
           DATABASE_URL: postgresql://lumio_test:lumio_ci_only@127.0.0.1:5432/lumio_test?schema=public
