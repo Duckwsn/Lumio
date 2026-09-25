@@ -23,6 +23,7 @@ const fileSchema = z.object({
 type UserRecord = z.infer<typeof fileSchema>["users"][number];
 type SessionRecord = z.infer<typeof fileSchema>["sessions"][number];
 type TokenRecord = z.infer<typeof tokenRecordSchema>;
+export type AuthSnapshot = z.infer<typeof fileSchema>;
 export type GoogleIdentity = { sub: string; email: string; name?: string; picture?: string };
 export type AuthConflict = "EMAIL_EXISTS" | "GOOGLE_IN_USE" | "NO_PASSWORD" | "LAST_METHOD" | "NOT_LINKED" | "WRONG_PASSWORD";
 export class AuthError extends Error { constructor(public readonly code: AuthConflict) { super(code); } }
@@ -35,8 +36,8 @@ export class AuthStore {
   private readonly sessions = new Map<string, SessionRecord>();
   private readonly tokens = new Map<string, TokenRecord>();
   private readonly colors = ["#f7c98b", "#b8d7c0", "#d6b3e6", "#95b6d5", "#edaa8b", "#e6d392"];
-  constructor(private readonly file = process.env.AUTH_STORE_FILE ?? path.resolve(process.cwd(), "../../.data/auth-v2.json"), private readonly ttlDays = Number(process.env.SESSION_TTL_DAYS ?? 14)) {
-    if (!fs.existsSync(file)) return;
+  constructor(private readonly file: string | null = process.env.AUTH_STORE_FILE ?? path.resolve(process.cwd(), "../../.data/auth-v2.json"), private readonly ttlDays = Number(process.env.SESSION_TTL_DAYS ?? 14)) {
+    if (!file || !fs.existsSync(file)) return;
     const raw = JSON.parse(fs.readFileSync(file, "utf8")) as { version?: number };
     if (raw.version === 1 && process.env.NODE_ENV === "production") throw new Error("Migração de contas legadas exige revisão explícita em produção.");
     // Explicit local-adapter migration: existing development accounts retain access.
@@ -45,6 +46,12 @@ export class AuthStore {
       const legacy = legacyFileSchema.parse(raw);
       return fileSchema.parse({ version: 2, users: legacy.users.map((record) => ({ ...record, emailVerifiedAt: Date.now() })), sessions: legacy.sessions, tokens: [] });
     })() : fileSchema.parse(raw);
+    this.restore(data);
+    if (raw.version === 1) this.save();
+  }
+  restore(input: AuthSnapshot) {
+    const data = fileSchema.parse(input);
+    this.users.clear(); this.emails.clear(); this.googleSubjects.clear(); this.sessions.clear(); this.tokens.clear();
     for (const record of data.users) {
       this.users.set(record.user.id, record);
       if (record.user.email) this.emails.set(emailKey(record.user.email), record.user.id);
@@ -52,9 +59,10 @@ export class AuthStore {
     }
     for (const session of data.sessions) if (session.expiresAt > Date.now() && this.users.has(session.userId)) this.sessions.set(session.hash, session);
     for (const token of data.tokens) if (token.expiresAt > Date.now() && this.users.has(token.userId)) this.tokens.set(token.hash, token);
-    if (raw.version === 1) this.save();
   }
+  snapshot(): AuthSnapshot { return { version: 2, users: [...this.users.values()], sessions: [...this.sessions.values()], tokens: [...this.tokens.values()] }; }
   private save() {
+    if (!this.file) return;
     fs.mkdirSync(path.dirname(this.file), { recursive: true });
     const temp = `${this.file}.${crypto.randomUUID()}.tmp`;
     fs.writeFileSync(temp, JSON.stringify({ version: 2, users: [...this.users.values()], sessions: [...this.sessions.values()], tokens: [...this.tokens.values()] }), { mode: 0o600 });
@@ -113,6 +121,7 @@ export class AuthStore {
     const salt = crypto.randomBytes(16).toString("hex"); record.password = `${salt}:${passwordHash(nextPassword, salt)}`; this.save();
   }
   saveProfile(userId: string) { if (this.users.has(userId)) this.save(); }
+  tokenOwner(token: string) { return this.tokens.get(tokenHash(token))?.userId; }
   issueToken(userId: string, purpose: TokenRecord["purpose"], ttlMs: number, cooldownMs: number) {
     if (!this.users.has(userId)) return null;
     const now = Date.now();

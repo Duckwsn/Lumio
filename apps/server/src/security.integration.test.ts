@@ -16,13 +16,13 @@ const freePort = () => new Promise<number>((resolve, reject) => {
   });
 });
 
-test("HTTP verification/reset gates real endpoints and rejects token replay", { timeout: 30_000 }, async (context) => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "lumio-security-"));
+test("Google-only preview rejects email signup before creating an account or sending mail", { timeout: 20_000 }, async (context) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "lumio-google-only-"));
   const port = await freePort();
-  const storeFile = path.join(directory, "auth.json"), outbox = path.join(directory, "mail.jsonl");
+  const outbox = path.join(directory, "mail.jsonl");
   const child = spawn(process.execPath, ["--import", "tsx", "src/index.ts"], {
     cwd: process.cwd(),
-    env: { ...process.env, PORT: String(port), NODE_ENV: "development", AUTH_STORE_FILE: storeFile, EMAIL_PROVIDER: "dev-file", EMAIL_DEV_OUTBOX_FILE: outbox, APP_PUBLIC_URL: "http://127.0.0.1:5173", CLIENT_ORIGIN: "http://127.0.0.1:5173", GOOGLE_TOKEN_ENCRYPTION_KEY: "" },
+    env: { ...process.env, PORT: String(port), NODE_ENV: "development", PERSISTENCE_MODE: "", AUTH_SIGNUP_MODE: "google-only", AUTH_STORE_FILE: path.join(directory, "auth.json"), EMAIL_PROVIDER: "dev-file", EMAIL_DEV_OUTBOX_FILE: outbox, APP_PUBLIC_URL: "http://127.0.0.1:5173", CLIENT_ORIGIN: "http://127.0.0.1:5173", GOOGLE_CLIENT_ID: "test-client-id", GOOGLE_CLIENT_SECRET: "", GOOGLE_TOKEN_ENCRYPTION_KEY: "" },
     stdio: "ignore",
   });
   context.after(async () => {
@@ -32,11 +32,49 @@ test("HTTP verification/reset gates real endpoints and rejects token replay", { 
   });
   const base = `http://127.0.0.1:${port}`;
   let ready = false;
-  for (let attempt = 0; attempt < 60; attempt += 1) {
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    try { if ((await fetch(`${base}/api/health`)).ok) { ready = true; break; } } catch { /* Wait for isolated server. */ }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  assert.equal(ready, true);
+  const response = await fetch(`${base}/api/auth/signup`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ displayName: "Friend", email: "friend@example.test", password: "long-password-123" }) });
+  assert.equal(response.status, 403);
+  assert.equal((await response.json() as { code: string }).code, "EMAIL_SIGNUP_DISABLED");
+  assert.equal(fs.existsSync(outbox), false);
+  const login = await fetch(`${base}/api/auth/login`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email: "friend@example.test", password: "long-password-123" }) });
+  assert.equal(login.status, 401);
+});
+
+test("HTTP verification/reset gates real endpoints and rejects token replay", { timeout: 30_000 }, async (context) => {
+  const startupStarted = performance.now();
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "lumio-security-"));
+  const port = await freePort();
+  const storeFile = path.join(directory, "auth.json"), outbox = path.join(directory, "mail.jsonl");
+  const child = spawn(process.execPath, ["--import", "tsx", "src/index.ts"], {
+    cwd: process.cwd(),
+    env: { ...process.env, PORT: String(port), NODE_ENV: "development", AUTH_STORE_FILE: storeFile, EMAIL_PROVIDER: "dev-file", EMAIL_DEV_OUTBOX_FILE: outbox, APP_PUBLIC_URL: "http://127.0.0.1:5173", CLIENT_ORIGIN: "http://127.0.0.1:5173", GOOGLE_TOKEN_ENCRYPTION_KEY: "" },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let serverLogs = "";
+  for (const output of [child.stdout, child.stderr]) output?.on("data", (chunk: Buffer) => { serverLogs += chunk.toString(); });
+  context.after(async () => {
+    child.kill();
+    await Promise.race([new Promise((resolve) => child.once("exit", resolve)), new Promise((resolve) => setTimeout(resolve, 2_000))]);
+    fs.rmSync(directory, { recursive: true, force: true });
+  });
+  const base = `http://127.0.0.1:${port}`;
+  let ready = false;
+  for (let attempt = 0; attempt < 120; attempt += 1) {
     try { const response = await fetch(`${base}/api/health`); if (response.ok) { ready = true; break; } } catch { /* Wait for isolated server. */ }
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
-  assert.equal(ready, true, "isolated server did not start");
+  assert.equal(ready, true, `isolated server did not start: ${serverLogs.slice(-500)}`);
+  context.diagnostic(`isolated local startup: ${Math.round(performance.now() - startupStarted)} ms`);
+  const readiness = await fetch(`${base}/api/ready`);
+  assert.equal(readiness.status, 200);
+  assert.deepEqual(await readiness.json(), { ready: true });
+  const invalidRoute = await fetch(`${base}/api/missing-route`);
+  assert.match(invalidRoute.headers.get("x-request-id") ?? "", /^[0-9a-f-]{36}$/);
   const post = (route: string, body: unknown, bearer?: string) => fetch(`${base}${route}`, { method: "POST", headers: { "Content-Type": "application/json", ...(bearer ? { Authorization: `Bearer ${bearer}` } : {}) }, body: JSON.stringify(body) });
   const signup = await post("/api/auth/signup", { displayName: "Duck", email: "duck@example.test", password: "long-password-123" });
   assert.equal(signup.status, 201);
@@ -66,7 +104,28 @@ test("HTTP verification/reset gates real endpoints and rejects token replay", { 
   assert.equal((await post("/api/auth/login", { email: "duck@example.test", password: "long-password-123" })).status, 401);
   const relogin = await post("/api/auth/login", { email: "duck@example.test", password: "new-long-password" });
   assert.equal(relogin.status, 200);
-  const hostToken = (await relogin.json() as { token: string }).token;
+  const hostSession = await relogin.json() as { token: string; user: { id: string; displayName: string; color: string } };
+  const hostToken = hostSession.token;
+  const bootstrapSamples: number[] = [];
+  for (let index = 0; index < 30; index += 1) {
+    const started = performance.now();
+    const response = await fetch(`${base}/api/bootstrap`, { headers: { Authorization: `Bearer ${hostToken}` } });
+    assert.equal(response.status, 200);
+    await response.arrayBuffer();
+    bootstrapSamples.push(performance.now() - started);
+  }
+  bootstrapSamples.sort((a, b) => a - b);
+  context.diagnostic(`local /api/bootstrap n=30 p50=${bootstrapSamples[14].toFixed(1)} ms p95=${bootstrapSamples[28].toFixed(1)} ms (loopback, not production)`);
+  for (let index = 0; index < 50; index += 1) {
+    const churnSocket = connect(base, { auth: { token: hostToken }, transports: ["websocket"], reconnection: false });
+    try {
+      await new Promise<void>((resolve, reject) => { churnSocket.once("connect", resolve); churnSocket.once("connect_error", reject); });
+      const snapshot = new Promise<void>((resolve) => churnSocket.once("room:snapshot", () => resolve()));
+      churnSocket.emit("room:join", { roomId: house.primaryRoomId, user: hostSession.user });
+      await snapshot;
+    } finally { churnSocket.disconnect(); }
+  }
+  assert.equal((await fetch(`${base}/api/health`)).status, 200);
   assert.equal((await fetch(`${base}/api/groups`)).status, 404);
   assert.equal((await fetch(`${base}/api/health`, { headers: { Origin: "https://attacker.example" } })).headers.get("access-control-allow-origin"), null);
   assert.equal((await post("/api/auth/signup", { displayName: "Maria", email: "maria@example.test", password: "maria-password-123" })).status, 201);
@@ -102,4 +161,7 @@ test("HTTP verification/reset gates real endpoints and rejects token replay", { 
   assert.deepEqual(Object.keys(await oversized.json() as object), ["message"]);
   const invalidJson = await fetch(`${base}/api/auth/login`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{" });
   assert.equal(invalidJson.status, 400);
+  assert.match(serverLogs, /"event":"http_request"/);
+  assert.match(serverLogs, /"event":"party_joined"/);
+  for (const secret of [session, hostToken, maria.token, token, resetToken, mariaToken, invite.token]) assert.equal(serverLogs.includes(secret), false, "server logs must not include credentials or invite tokens");
 });

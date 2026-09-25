@@ -271,33 +271,38 @@ function DriveExplorer({ status, request, onRefresh, onAdd, onPlayNext, onSave, 
   const [error, setError] = useState("");
   const cache = useRef(new Map<string, { page: DrivePage; expiresAt: number }>());
   const requestId = useRef(0);
+  const folderRequest = useRef<AbortController | null>(null);
   const folderId = path[path.length - 1].id;
   const load = useCallback(async (id: string, next?: string, force = false) => {
     const generation = ++requestId.current;
+    folderRequest.current?.abort();
     const cached = !next && !force ? cache.current.get(id) : undefined;
-    if (cached && cached.expiresAt > Date.now()) { setPage(cached.page); setError(""); return; }
+    if (cached && cached.expiresAt > Date.now()) { setPage(cached.page); setError(""); setLoading(false); return; }
+    const controller = new AbortController(); folderRequest.current = controller;
     setLoading(true); setError("");
     try {
       const params = new URLSearchParams({ folderId: id }); if (next) params.set("pageToken", next);
-      const result = await request<DrivePage>(`/api/google-drive/files?${params}`);
+      const result = await request<DrivePage>(`/api/google-drive/files?${params}`, { signal: controller.signal });
       if (generation !== requestId.current) return;
       const combined = { entries: sortDriveEntries(next ? [...page.entries, ...result.entries] : result.entries), nextPageToken: result.nextPageToken };
+      if (cache.current.size >= 50 && !cache.current.has(id)) cache.current.delete(cache.current.keys().next().value!);
       cache.current.set(id, { page: combined, expiresAt: Date.now() + 60_000 });
       setPage(combined);
     } catch (cause) {
-      if (generation === requestId.current) setError(cause instanceof Error ? cause.message : "Não foi possível carregar esta pasta.");
-    } finally { if (generation === requestId.current) setLoading(false); }
+      if (generation === requestId.current && (cause as Error).name !== "AbortError") setError(cause instanceof Error ? cause.message : "Não foi possível carregar esta pasta.");
+    } finally { if (generation === requestId.current) { folderRequest.current = null; setLoading(false); } }
   }, [page.entries, request]);
   useEffect(() => { if (status.connected) void load(folderId); }, [folderId, status.connected]);
-  const navigate = (index: number) => { requestId.current += 1; setPage({ entries: [] }); setPath(path.slice(0, index + 1)); };
-  const openFolder = (entry: DriveEntry) => { requestId.current += 1; setPage({ entries: [] }); setPath((current) => [...current, { id: entry.id, name: entry.name }]); };
+  useEffect(() => () => { requestId.current += 1; folderRequest.current?.abort(); }, []);
+  const navigate = (index: number) => { requestId.current += 1; folderRequest.current?.abort(); setPage({ entries: [] }); setPath(path.slice(0, index + 1)); };
+  const openFolder = (entry: DriveEntry) => { requestId.current += 1; folderRequest.current?.abort(); setPage({ entries: [] }); setPath((current) => [...current, { id: entry.id, name: entry.name }]); };
   const connect = async () => {
     const popup = window.open("", "lumio-google-drive", "popup,width=560,height=720");
     try { const data = await request<{ url: string }>("/api/google-drive/auth/start", { method: "POST" }); if (popup) popup.location.href = data.url; else window.location.assign(data.url); }
     catch (cause) { popup?.close(); onError(cause instanceof Error ? cause.message : "Não foi possível conectar."); }
   };
   const disconnect = async () => {
-    try { await request("/api/google-drive/disconnect", { method: "POST" }); cache.current.clear(); setPath([{ id: "root", name: "Meu Drive" }]); setPage({ entries: [] }); await onRefresh(); }
+    try { await request("/api/google-drive/disconnect", { method: "POST" }); requestId.current += 1; folderRequest.current?.abort(); cache.current.clear(); setPath([{ id: "root", name: "Meu Drive" }]); setPage({ entries: [] }); await onRefresh(); }
     catch (cause) { onError(cause instanceof Error ? cause.message : "Não foi possível desconectar."); }
   };
   if (!status.configured) return <div className="drive-connect"><Cloud /><h3>Google Drive ainda não configurado</h3><p>Configure o OAuth e a chave de criptografia no servidor para conectar sua conta.</p></div>;

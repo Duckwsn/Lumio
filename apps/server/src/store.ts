@@ -26,7 +26,12 @@ export interface GroupSummary {
   rooms: Array<{ id: string; name: string; accent: string; connectedCount: number }>;
 }
 
-interface PlaylistRecord extends Omit<Playlist, "itemCount" | "items"> { items: PlaylistItem[] }
+export interface PlaylistRecord extends Omit<Playlist, "itemCount" | "items"> { items: PlaylistItem[] }
+export interface PersistedMediaHouse {
+  houseId: string; roomId: string; mode: RoomMode; settings: RoomSettings; queueRevision: number;
+  queue: QueueItem[]; history: HouseHistoryEntry[]; library: HouseLibraryItem[];
+  favoriteKeys: string[]; playlists: PlaylistRecord[];
+}
 
 export interface RoomRecord {
   id: string;
@@ -67,7 +72,7 @@ export class RoomStore {
   private readonly progress = new Map<string, Map<string, { item: QueueItem; position: number; updatedAt: string }>>();
 
   constructor() {
-    if (process.env.NODE_ENV === "production") return;
+    if (process.env.NODE_ENV === "production" || process.env.PERSISTENCE_MODE === "postgres") return;
     const group: GroupSummary = { id: "group-silva", name: "Casa Silva", initials: "CS", memberCount: 6, rooms: [] };
     this.groups.set(group.id, group);
     this.createRoom({ id: "cinema", name: "Party", accent: "green", group, mode: "watch" });
@@ -92,6 +97,32 @@ export class RoomStore {
     const group: GroupSummary = { id: input.houseId, name: input.houseName, initials: input.houseName.split(/\s+/).map((p) => p[0]).join("").slice(0, 2).toUpperCase(), memberCount: 1, rooms: [] };
     this.groups.set(group.id, group);
     this.createRoom({ id: input.roomId, name: "Party", accent: "green", group, mode: "watch" });
+  }
+
+  snapshotHouse(roomId: string): PersistedMediaHouse | null {
+    const room = this.rooms.get(roomId); if (!room) return null;
+    return { houseId: room.groupId, roomId, mode: room.mode, settings: { ...room.settings }, queueRevision: room.queueRevision,
+      queue: room.queue.map((item) => ({ ...item })), history: room.history.map((entry) => ({ ...entry })),
+      library: [...(this.libraries.get(room.groupId)?.values() ?? [])].map((item) => ({ ...item })),
+      favoriteKeys: [...(this.favorites.get(room.groupId) ?? [])],
+      playlists: [...(this.playlists.get(room.groupId)?.values() ?? [])].map((playlist) => ({ ...playlist, items: playlist.items.map((item) => ({ ...item })) })) };
+  }
+
+  restoreHouse(input: PersistedMediaHouse) {
+    const room = this.rooms.get(input.roomId); if (!room || room.groupId !== input.houseId) throw new Error("Party ausente ao restaurar mídia.");
+    room.mode = input.mode; room.settings = input.settings; room.queueRevision = input.queueRevision;
+    // Playback clock, votes and presence are intentionally reset at boot.
+    room.queue = input.queue.map((item, position) => ({ ...item, position, status: "queued" }));
+    room.currentItem = null; room.historyItemId = null; room.history = input.history;
+    for (const item of [...input.queue, ...input.history, ...input.library, ...input.playlists.flatMap((playlist) => playlist.items)]) this.rememberMedia(item);
+    this.libraries.set(input.houseId, new Map(input.library.map((item) => [mediaKey(item), item])));
+    this.favorites.set(input.houseId, new Set(input.favoriteKeys));
+    this.playlists.set(input.houseId, new Map(input.playlists.map((playlist) => [playlist.id, playlist])));
+  }
+
+  snapshotProgress(userId: string) { return [...(this.progress.get(userId)?.values() ?? [])].map((entry) => ({ ...entry, item: { ...entry.item } })); }
+  restoreProgress(userId: string, entries: { item: QueueItem; position: number; updatedAt: string }[]) {
+    this.progress.set(userId, new Map(entries.map((entry) => [mediaKey(entry.item), entry])));
   }
 
   listGroups() { return [...this.groups.values()].map((group) => ({ ...group, rooms: group.rooms.map((room) => ({ ...room, connectedCount: this.rooms.get(room.id)?.members.size ?? 0 })) })); }

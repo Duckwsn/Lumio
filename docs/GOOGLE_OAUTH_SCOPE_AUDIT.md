@@ -1,0 +1,30 @@
+# Auditoria de scopes Google — pré-deploy
+
+Auditoria de código e documentação oficial em 25/09/2026. **Nenhum scope, cliente OAuth ou configuração Google Cloud foi alterado.** Este documento distingue a experiência implementada de uma eventual reformulação com Google Picker.
+
+## Scopes efetivamente utilizados
+
+| Fluxo | Scopes | Uso no Lumio | Classificação / verificação |
+| --- | --- | --- | --- |
+| Google Login e vínculo da conta | `openid`, `email`, `profile` são os scopes padrão do Sign in with Google; o Lumio não constrói URL OAuth de login nem solicita scopes extras | `GoogleIdentityButton.tsx` recebe ID token; `googleIdentity.ts` verifica audience, nonce, `sub`, e-mail verificado, nome e foto | Não há scope sensível/restrito adicional nesse fluxo. Pode haver revisão de marca/domínio para um app público; isso é distinto da verificação de scope restrito. |
+| Google Drive | `https://www.googleapis.com/auth/drive.readonly` | `files.list` desde `root`, `files.get` para pasta/arquivo, `files.get?alt=media` com Range para vídeo, inclusive arquivos pré-existentes | **Restrito**. Exige verificação de scope restrito para uso público, com avaliação de segurança aplicável. |
+| Google Drive | `https://www.googleapis.com/auth/userinfo.email` | `/oauth2/v3/userinfo` para identificar/exibir o e-mail da conexão e guardar o `sub` da conta Drive | Scope básico de identidade, não é scope Drive restrito. É necessário para manter a indicação atual de qual conta Drive está conectada, considerando a implementação presente. |
+
+O código solicita os dois scopes do Drive **somente ao clicar para conectar o Drive**. Login normal não concede acesso a arquivos. `access_type=offline` solicita refresh token, mas não é um scope. A chave `YOUTUBE_API_KEY` é de API key, não participa desses scopes OAuth.
+
+## Menor conjunto que preserva a experiência atual
+
+Manter exatamente `drive.readonly` + `userinfo.email` no fluxo Drive; manter somente os scopes padrão de identidade no Login. O `drive.readonly` já permite metadados **e** leitura/download; adicionar `drive.metadata.readonly` seria redundante. `drive.metadata.readonly` sozinho não autoriza `alt=media`. `drive.file` é por arquivo selecionado/aberto para o app, portanto não reproduz a navegação automática pelo `root` e por todas as pastas e vídeos **já existentes** do Meu Drive. A combinação `drive.file` + Google Picker é uma alternativa de produto futura, mas exige outra UX e concessão explícita por arquivo; não é substituição transparente do explorador atual. `drive` completo seria excessivo porque permite alterações; o Lumio só lê.
+
+Essa conclusão decorre das chamadas presentes em `apps/server/src/googleDrive.ts` e da [tabela de scopes do Drive](https://developers.google.com/workspace/drive/api/guides/api-specific-auth), [restrição de download por scope](https://developers.google.com/workspace/drive/api/guides/manage-downloads) e [funcionamento do botão Google](https://developers.google.com/identity/gsi/web/guides/get-google-api-clientid). Não foi feito experimento de trocar scopes em uma conta real: fazê-lo quebraria o contrato funcional atual e exigiria novo consentimento.
+
+## Verificação e ações manuais no Google Cloud
+
+1. Confirmar se o projeto é **External/Testing** ou **External/In production**. Testing serve para usuários de teste aprovados; com scope Drive, o refresh token de um app External em Testing pode expirar em **7 dias**. Não tratar isso como operação pública estável. [OAuth do Google](https://developers.google.com/identity/protocols/oauth2).
+2. Confirmar que a **Google Drive API** está habilitada e que a tela de consentimento declara somente os scopes efetivamente pedidos: `drive.readonly` e `userinfo.email`, além dos scopes básicos de identidade pertinentes ao Login. Conferir a classificação exibida no console antes de submeter. Não adicionar `drive`, `drive.metadata.readonly` ou outros scopes por antecipação. [Scopes do Drive](https://developers.google.com/workspace/drive/api/guides/api-specific-auth).
+3. No cliente OAuth **Web application**, registrar a origem JavaScript exata do frontend HTTPS para Google Login e a URI de redirecionamento exata `https://SUA-API/api/google-drive/oauth/callback`. Manter `http://localhost:5173` e `http://localhost:4000/api/google-drive/oauth/callback` apenas se o mesmo cliente também servir desenvolvimento. Domínio, esquema, porta e caminho devem coincidir exatamente. [Configuração do GIS](https://developers.google.com/identity/gsi/web/guides/get-google-api-clientid).
+4. Para publicação pública, preparar domínio próprio verificável, homepage funcional, política de privacidade que descreva acesso/leitura/stream Drive e eventual compartilhamento durante a Party, links idênticos na homepage e tela OAuth, contato do projeto e vídeo demonstrando consentimento e funcionalidade. Explicar ao revisor por que `drive.file` e `drive.metadata.readonly` não preservam navegação de pastas existentes + reprodução. A elegibilidade do caso de uso e a aprovação **são decisões do Google, não garantias deste documento**. [Requisitos de verificação](https://support.google.com/cloud/answer/13464321?hl=en).
+5. Enviar manualmente a solicitação de verificação do **scope restrito `drive.readonly`** e seguir o processo de avaliação de segurança aplicável. A exigência/custo/prazo exatos devem ser confirmados com o Google para o projeto e arquitetura concretos; o fluxo atual guarda tokens criptografados no servidor e transmite bytes Drive através dele, portanto não presumir isenção de avaliação. [FAQ de verificação](https://support.google.com/cloud/answer/13463817?hl=en).
+6. Não marcar o app como verificado nem prometer acesso Drive público antes da aprovação. Scopes restritos não aprovados podem exibir aviso de app não verificado e ficam sujeitos a limite de novos usuários. Para beta restrito, manter somente testadores autorizados e explicitar a limitação. [Audience/user cap](https://support.google.com/cloud/answer/15549945?hl=en).
+
+Nenhuma dessas ações foi executada no Google Cloud nesta auditoria.

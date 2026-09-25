@@ -4,6 +4,12 @@ import { rolePermissions } from "./authorization.js";
 import { publicUser } from "./privacy.js";
 
 interface HouseRecord { id: string; name: string; avatar?: string; primaryRoomId: string; members: Map<string, HouseMember>; invites: Map<string, HouseInvite>; activity: HouseActivity[] }
+export interface PersistedHouse {
+  id: string; name: string; avatar?: string; primaryRoomId: string;
+  members: { userId: string; role: HouseRole; joinedAt: string; lastSeenAt: string }[];
+  invites: { hash: string; id: string; createdById: string; role: HouseRole; createdAt: string; expiresAt: string; maxUses: number; uses: number; revokedAt: string | null }[];
+  activity: { id: string; actorId?: string; kind: HouseActivity["kind"]; text: string; createdAt: string }[];
+}
 
 const initials = (name: string) => name.split(/\s+/).map((part) => part[0]).join("").slice(0, 2).toUpperCase();
 
@@ -11,8 +17,33 @@ export class SocialStore {
   private houses = new Map<string, HouseRecord>();
   private inviteByToken = new Map<string, HouseInvite>();
 
+  snapshotHouse(houseId: string): PersistedHouse | null {
+    const house = this.houses.get(houseId); if (!house) return null;
+    return {
+      id: house.id, name: house.name, avatar: house.avatar, primaryRoomId: house.primaryRoomId,
+      members: [...house.members.values()].map((entry) => ({ userId: entry.user.id, role: entry.role, joinedAt: entry.joinedAt, lastSeenAt: entry.lastSeenAt })),
+      invites: [...this.inviteByToken].filter(([, invite]) => invite.houseId === houseId).map(([hash, invite]) => ({ hash, id: invite.id, createdById: invite.createdBy.id, role: invite.role, createdAt: invite.createdAt, expiresAt: invite.expiresAt, maxUses: invite.maxUses, uses: invite.uses, revokedAt: invite.revokedAt })),
+      activity: house.activity.map((entry) => ({ id: entry.id, actorId: entry.actor?.id, kind: entry.kind, text: entry.text, createdAt: entry.createdAt })),
+    };
+  }
+
+  restoreHouse(input: PersistedHouse, getUser: (id: string) => User | undefined) {
+    const house: HouseRecord = { id: input.id, name: input.name, avatar: input.avatar, primaryRoomId: input.primaryRoomId, members: new Map(), invites: new Map(), activity: [] };
+    for (const entry of input.members) {
+      const user = getUser(entry.userId); if (!user) throw new Error("Membro de Casa sem usuário.");
+      house.members.set(user.id, { user, role: entry.role, presence: "OFFLINE", joinedAt: entry.joinedAt, lastSeenAt: entry.lastSeenAt, inParty: false, inCall: false, speaking: false, screenSharing: false });
+    }
+    for (const entry of input.invites) {
+      const createdBy = getUser(entry.createdById); if (!createdBy) throw new Error("Convite sem criador.");
+      const invite: HouseInvite = { id: entry.id, houseId: input.id, token: "", role: entry.role, createdBy, createdAt: entry.createdAt, expiresAt: entry.expiresAt, maxUses: entry.maxUses, uses: entry.uses, revokedAt: entry.revokedAt };
+      house.invites.set(invite.id, invite); this.inviteByToken.set(entry.hash, invite);
+    }
+    house.activity = input.activity.map((entry) => ({ id: entry.id, houseId: input.id, kind: entry.kind, text: entry.text, createdAt: entry.createdAt, actor: entry.actorId ? getUser(entry.actorId) : undefined }));
+    this.houses.set(house.id, house);
+  }
+
   ensureDefaultMembership(user: User) {
-    if (process.env.NODE_ENV === "production") throw new Error("Casa de demonstração indisponível em produção.");
+    if (process.env.NODE_ENV === "production" || process.env.PERSISTENCE_MODE === "postgres") throw new Error("Casa de demonstração indisponível com persistência PostgreSQL.");
     let house = this.houses.get("group-silva");
     if (!house) {
       house = { id: "group-silva", name: "Casa Silva", primaryRoomId: "cinema", members: new Map(), invites: new Map(), activity: [] };

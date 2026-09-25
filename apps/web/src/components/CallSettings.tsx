@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { Headphones, Mic, X } from "lucide-react";
 
 export type MicrophoneMode = "voice" | "ptt";
@@ -12,16 +13,21 @@ export interface LocalAudioSettings {
   duckingVolume: number;
 }
 
-export function CallSettings({ settings, devices, micLevel, connected, outputSelectionSupported, onChange, onLeaveCall, onClose }: {
+export function CallSettings({ settings, devices, getMicLevel, connected, outputSelectionSupported, onChange, onLeaveCall, onClose }: {
   settings: LocalAudioSettings;
   devices: MediaDeviceInfo[];
-  micLevel: number;
+  getMicLevel: () => number;
   connected: boolean;
   outputSelectionSupported: boolean;
   onChange: (settings: LocalAudioSettings) => void;
   onLeaveCall: () => void;
   onClose: () => void;
 }) {
+  const [micLevel, setMicLevel] = useState(getMicLevel);
+  useEffect(() => {
+    const timer = window.setInterval(() => setMicLevel(getMicLevel()), 100);
+    return () => window.clearInterval(timer);
+  }, [getMicLevel]);
   const inputs = devices.filter((device) => device.kind === "audioinput");
   const outputs = devices.filter((device) => device.kind === "audiooutput");
   const update = <K extends keyof LocalAudioSettings>(key: K, value: LocalAudioSettings[K]) => onChange({ ...settings, [key]: value });

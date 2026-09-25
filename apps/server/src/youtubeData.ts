@@ -3,6 +3,7 @@ import type { MediaSearchResult } from "@lumio/shared";
 const SEARCH_TTL_MS = 10 * 60_000;
 const VIDEO_TTL_MS = 45 * 60_000;
 const SEARCH_PAGE_SIZE = 8;
+const CACHE_LIMIT = 2_000;
 
 interface CacheEntry<T> { expiresAt: number; value: T }
 interface SearchPage { configured: true; results: MediaSearchResult[]; nextPageToken?: string }
@@ -47,8 +48,19 @@ export class YouTubeDataService {
 
   isConfigured() { return Boolean(this.apiKey); }
 
+  private cache<T>(entries: Map<string, CacheEntry<T>>, key: string, value: T, ttl: number) {
+    if (entries.size >= CACHE_LIMIT) {
+      const now = Date.now();
+      for (const [candidate, entry] of entries) if (entry.expiresAt <= now) entries.delete(candidate);
+      if (entries.size >= CACHE_LIMIT) entries.delete(entries.keys().next().value!);
+    }
+    entries.set(key, { value, expiresAt: Date.now() + ttl });
+  }
+
   checkRateLimit(identity: string) {
     const cutoff = Date.now() - 60_000;
+    if (this.requests.size > 1_000) for (const [key, times] of this.requests) if (!times.length || times[times.length - 1] <= cutoff) this.requests.delete(key);
+    if (this.requests.size >= 5_000 && !this.requests.has(identity)) throw new YouTubeDataError(429, "RATE_LIMIT", "Muitas pesquisas em pouco tempo. Aguarde um minuto e tente novamente.");
     const recent = (this.requests.get(identity) ?? []).filter((time) => time > cutoff);
     if (recent.length >= 20) throw new YouTubeDataError(429, "RATE_LIMIT", "Muitas pesquisas em pouco tempo. Aguarde um minuto e tente novamente.");
     recent.push(Date.now()); this.requests.set(identity, recent);
@@ -73,7 +85,7 @@ export class YouTubeDataService {
     const metadata = await this.getMany(ids);
     const results = ids.flatMap((id) => { const item = metadata.get(id); return item?.available ? [item] : []; });
     const page = { configured: true as const, results, nextPageToken: searchPayload.nextPageToken };
-    this.searchCache.set(cacheKey, { value: page, expiresAt: Date.now() + SEARCH_TTL_MS });
+    this.cache(this.searchCache, cacheKey, page, SEARCH_TTL_MS);
     return page;
   }
 
@@ -98,7 +110,7 @@ export class YouTubeDataService {
     if (!response.ok) throw new YouTubeDataError(404, "NOT_FOUND", "Vídeo removido, privado ou indisponível.");
     const data = await response.json() as { title?: string; author_name?: string; thumbnail_url?: string };
     const item: MediaSearchResult = { id: `youtube:${videoId}`, provider: "youtube", providerMediaId: videoId, type: "video", title: data.title ?? "Vídeo do YouTube", channel: data.author_name ?? "YouTube", thumbnail: data.thumbnail_url, available: true, metadata: { channelTitle: data.author_name ?? "YouTube", metadataSource: "oembed" } };
-    this.videoCache.set(videoId, { value: item, expiresAt: Date.now() + VIDEO_TTL_MS }); return item;
+    this.cache(this.videoCache, videoId, item, VIDEO_TTL_MS); return item;
   }
 
   private async getMany(ids: string[]) {
@@ -124,9 +136,9 @@ export class YouTubeDataService {
           duration: parseYouTubeDuration(video.contentDetails?.duration), available,
           metadata: { channelTitle: decodeHtml(video.snippet.channelTitle ?? "YouTube"), regionRestriction: video.contentDetails?.regionRestriction },
         };
-        result.set(video.id, item); this.videoCache.set(video.id, { value: item, expiresAt: Date.now() + VIDEO_TTL_MS });
+        result.set(video.id, item); this.cache(this.videoCache, video.id, item, VIDEO_TTL_MS);
       }
-      for (const id of missing) if (!found.has(id)) { result.set(id, null); this.videoCache.set(id, { value: null, expiresAt: Date.now() + VIDEO_TTL_MS }); }
+      for (const id of missing) if (!found.has(id)) { result.set(id, null); this.cache(this.videoCache, id, null, VIDEO_TTL_MS); }
     }
     return result;
   }

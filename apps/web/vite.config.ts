@@ -16,8 +16,10 @@ const webHeaders = {
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, projectRoot, "VITE_");
+  if (process.env.VERCEL === "1" && (!env.VITE_API_URL || !env.VITE_SOCKET_URL)) throw new Error("VITE_API_URL e VITE_SOCKET_URL são obrigatórias no build Vercel.");
   const api = new URL(env.VITE_API_URL || "http://localhost:4000");
   const socket = new URL(env.VITE_SOCKET_URL || api.origin);
+  if (process.env.VERCEL === "1" && (api.protocol !== "https:" || socket.protocol !== "https:" || api.origin !== api.href.replace(/\/$/, "") || socket.origin !== socket.href.replace(/\/$/, ""))) throw new Error("VITE_API_URL e VITE_SOCKET_URL devem ser origens HTTPS no Vercel.");
   const websocket = new URL(socket.toString()); websocket.protocol = socket.protocol === "https:" ? "wss:" : "ws:";
   const connect = ["'self'", api.origin, socket.origin, websocket.origin, "https://accounts.google.com", "https://www.youtube.com", ...(mode === "development" ? ["ws:"] : [])];
   const csp = [

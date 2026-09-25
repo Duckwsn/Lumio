@@ -6,6 +6,12 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "db:generate": "prisma generate --schema prisma/schema.prisma",
+    "db:migrate:dev": "prisma migrate dev --schema prisma/schema.prisma",
+    "db:migrate:deploy": "prisma migrate deploy --schema prisma/schema.prisma",
+    "smoke:production": "node scripts/production-smoke.cjs",
+    "smoke:postgres-flow": "node scripts/postgres-flow-smoke.cjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "tsc -p tsconfig.json --noEmit",
     "test": "tsx --test src/*.test.ts"
@@ -16,6 +22,7 @@
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "google-auth-library": "^11.1.0",
+    "@prisma/client": "6.12.0",
     "socket.io": "^4.8.1",
     "zod": "^3.24.1"
   },
@@ -24,6 +31,7 @@
     "@types/express": "^5.0.0",
     "@types/node": "^22.10.5",
     "socket.io-client": "^4.8.3",
+    "prisma": "6.12.0",
     "tsx": "^4.19.2",
     "typescript": "^5.7.3"
   }

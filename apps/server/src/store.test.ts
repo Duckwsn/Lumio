@@ -254,7 +254,7 @@ test("replaying an ended occurrence records one new history event", () => {
   store.advanceQueue("cinema", "a", user.id, "a");
   assert.equal(store.getSnapshot("cinema")?.currentMedia.state, "ended");
   const replay = store.updateMedia("cinema", user.id, "play", 60);
-  assert.equal(replay?.position, 0);
+  assert.ok(replay && replay.position >= 0 && replay.position < 0.1, "replay starts near zero while the clock advances");
   assert.equal(store.getHistoryPage("cinema")?.total, 2);
 });
 

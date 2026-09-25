@@ -42,11 +42,13 @@ const LandingPage = lazy(() => import("./components/LandingPage").then((module) 
 
 const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:4000";
 const SOCKET_URL = import.meta.env.VITE_SOCKET_URL ?? API_URL;
+const GOOGLE_ONLY_PREVIEW = import.meta.env.VITE_AUTH_SIGNUP_MODE === "google-only";
 const SESSION_KEY = "lumio.session.v1";
 const HOUSE_KEY = "lumio.house.v1";
 type TypedSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
 
 interface SessionData { user: User; token: string }
+const storedSessionToken = () => { try { return (JSON.parse(localStorage.getItem(SESSION_KEY) ?? "null") as SessionData | null)?.token; } catch { return undefined; } };
 
 const avatarLetters = (name: string) => name.split(" ").map((part) => part[0]).join("").slice(0, 2).toUpperCase();
 const timeLabel = (iso: string) => new Intl.DateTimeFormat("pt-BR", { hour: "2-digit", minute: "2-digit" }).format(new Date(iso));
@@ -55,6 +57,7 @@ const formatDuration = (value = 0) => value >= 3600
   : `${Math.floor(value / 60)}:${Math.floor(value % 60).toString().padStart(2, "0")}`;
 const providerLabel = (provider: QueueItem["provider"]) => provider === "google-drive" ? "Google Drive" : provider === "youtube" ? "YouTube" : "Lumio";
 const isEditableTarget = (target: EventTarget | null) => { const node = target as HTMLElement | null; return Boolean(node?.isContentEditable || node?.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="textbox"], [role="searchbox"], button, [role="slider"]')); };
+const socketOptions = (token: string) => ({ auth: { token }, transports: ["websocket", "polling"] as Array<"websocket" | "polling">, reconnectionDelay: 1_000, reconnectionDelayMax: 30_000, randomizationFactor: 0.5, timeout: 10_000 });
 
 export function App() {
   const [session, setSession] = useState<SessionData | null>(() => {
@@ -105,7 +108,8 @@ export function App() {
     const defaults: LocalAudioSettings = { inputDeviceId: "", outputDeviceId: "", microphoneMode: "voice", mediaVolume: 100, callVolume: 100, duckingEnabled: true, duckingVolume: 40 };
     try { return { ...defaults, ...JSON.parse(localStorage.getItem("lumio.audio.v1") ?? "{}") }; } catch { return defaults; }
   });
-  const [micLevel, setMicLevel] = useState(0);
+  const micLevelRef = useRef(0);
+  const getMicLevel = useCallback(() => micLevelRef.current, []);
   const [stageView, setStageView] = useState<MainStageView>("media");
   const mainMenuAnchor = useRef<HTMLDivElement>(null);
   const profileMenuAnchor = useRef<HTMLDivElement>(null);
@@ -131,6 +135,7 @@ export function App() {
   const audioSettingsRef = useRef(audioSettings);
   const participantVolumesRef = useRef(participantVolumes);
   const partyNoticeTimer = useRef<number>();
+  const reactionTimer = useRef<number>();
   const offlineTimer = useRef<number>();
   const hadSnapshot = useRef(false);
   const reconnecting = useRef(false);
@@ -140,6 +145,7 @@ export function App() {
   const screenShareActor = useRef<{ id: string; name: string } | null>(null);
   const feedbackRevision = useRef(-1);
   const houseRequestVersion = useRef(0);
+  const authRequestVersion = useRef(0);
   const drawerStateRef = useRef({ open: false, panel: "members" as "chat" | "members" | "queue" });
   const drawerReturnFocus = useRef<HTMLElement | null>(null);
   const shortcutActions = useRef<{ toggleDeafen?: () => void; toggleTheater?: () => void; closeTop?: () => void }>({});
@@ -151,8 +157,10 @@ export function App() {
   useEffect(() => { const onPopState = () => setPath(`${window.location.pathname}${window.location.search}`); window.addEventListener("popstate", onPopState); return () => window.removeEventListener("popstate", onPopState); }, []);
   const bootstrap = useCallback(async () => {
     if (!session) { setAuthStatus("unauthenticated"); return; } setBootstrapError("");
-    try { const response = await fetch(`${API_URL}/api/bootstrap`, { headers: { Authorization: `Bearer ${session.token}` } }); if (response.status === 401) { localStorage.removeItem(SESSION_KEY); setSession(null); setHouses([]); setAuthStatus("unauthenticated"); if (pathname !== "/" && !pathname.startsWith("/invite/") && !["/verify-email", "/forgot-password", "/reset-password"].includes(pathname)) navigate(`/login?next=${encodeURIComponent(path)}`); return; } if (!response.ok) throw new Error(); const data = await response.json() as { user: User; houses: HouseSummary[] }; const nextSession = { ...session, user: data.user }; localStorage.setItem(SESSION_KEY, JSON.stringify(nextSession)); setSession(nextSession); setHouses(data.houses); setAuthStatus("authenticated"); }
-    catch { setBootstrapError("Não foi possível conectar ao Lumio."); }
+    const version = ++authRequestVersion.current;
+    const stillCurrent = () => version === authRequestVersion.current && storedSessionToken() === session.token;
+    try { const response = await fetch(`${API_URL}/api/bootstrap`, { headers: { Authorization: `Bearer ${session.token}` } }); if (!stillCurrent()) return; if (response.status === 401) { authRequestVersion.current += 1; houseRequestVersion.current += 1; localStorage.removeItem(SESSION_KEY); setSession(null); setHouses([]); setAuthStatus("unauthenticated"); if (pathname !== "/" && !pathname.startsWith("/invite/") && !["/verify-email", "/forgot-password", "/reset-password"].includes(pathname)) navigate(`/login?next=${encodeURIComponent(path)}`); return; } if (!response.ok) throw new Error(); const data = await response.json() as { user: User; houses: HouseSummary[] }; if (!stillCurrent()) return; const nextSession = { ...session, user: data.user }; localStorage.setItem(SESSION_KEY, JSON.stringify(nextSession)); setSession(nextSession); setHouses(data.houses); setAuthStatus("authenticated"); }
+    catch { if (stillCurrent()) setBootstrapError("Não foi possível conectar ao Lumio."); }
   }, [session?.token]);
   useEffect(() => { if (authStatus === "unknown") void bootstrap(); }, [authStatus, bootstrap]);
 
@@ -175,7 +183,7 @@ export function App() {
     analyserCleanup.current?.(); analyserCleanup.current = null;
     setMicEnabled(false); setLocalScreenStream(null); setRemoteScreenStream(null); setVoiceError(message); setCallState("error");
   }, []);
-  useEffect(() => () => { window.clearTimeout(partyNoticeTimer.current); window.clearTimeout(offlineTimer.current); }, []);
+  useEffect(() => () => { window.clearTimeout(partyNoticeTimer.current); window.clearTimeout(reactionTimer.current); window.clearTimeout(offlineTimer.current); }, []);
   useEffect(() => { localStorage.setItem("lumio.audio.v1", JSON.stringify(audioSettings)); }, [audioSettings]);
   useEffect(() => { localStorage.setItem("lumio.presentation.v1", presentationMode); }, [presentationMode]);
 
@@ -185,9 +193,9 @@ export function App() {
     const version = ++houseRequestVersion.current;
     setHousesError("");
     let response: Response; try { response = await fetch(`${API_URL}/api/houses`, { headers: authHeaders }); } catch { if (version === houseRequestVersion.current) setHousesError("Não foi possível carregar suas Casas."); return; }
-    if (version !== houseRequestVersion.current) return;
-    if (response.status === 401) { localStorage.removeItem(SESSION_KEY); setSession(null); setSnapshot(null); setAuthStatus("unauthenticated"); return; } if (!response.ok) { setHousesError("Não foi possível carregar suas Casas."); return; }
-    const data = await response.json() as { houses: HouseSummary[] }; if (version === houseRequestVersion.current) setHouses(data.houses);
+    if (version !== houseRequestVersion.current || storedSessionToken() !== session.token) return;
+    if (response.status === 401) { authRequestVersion.current += 1; houseRequestVersion.current += 1; localStorage.removeItem(SESSION_KEY); setSession(null); setSnapshot(null); setAuthStatus("unauthenticated"); return; } if (!response.ok) { setHousesError("Não foi possível carregar suas Casas."); return; }
+    const data = await response.json() as { houses: HouseSummary[] }; if (version === houseRequestVersion.current && storedSessionToken() === session.token) setHouses(data.houses);
   }, [session?.token]);
   useEffect(() => { if (authStatus === "authenticated") void refreshHouses(); }, [authStatus, refreshHouses]);
   useEffect(() => { if (authStatus !== "authenticated" || routeHouseId || inviteToken) return; const timer = window.setInterval(() => void refreshHouses(), 20_000); return () => window.clearInterval(timer); }, [authStatus, routeHouseId, inviteToken, refreshHouses]);
@@ -197,7 +205,7 @@ export function App() {
   const selectedHouse = houses.find((item) => item.id === routeHouseId);
   useEffect(() => {
     if (authStatus !== "authenticated" || routeHouseId || inviteToken || (pathname !== "/app" && pathname !== "/") || !session) return;
-    const homeSocket: TypedSocket = io(SOCKET_URL, { auth: { token: session.token }, transports: ["websocket", "polling"] });
+    const homeSocket: TypedSocket = io(SOCKET_URL, socketOptions(session.token));
     homeSocket.on("home:update", (next) => { houseRequestVersion.current += 1; setHouses(next); });
     homeSocket.on("profile:update", (user) => setSession((current) => { if (!current || current.user.id !== user.id) return current; const updated = { ...current, user }; localStorage.setItem(SESSION_KEY, JSON.stringify(updated)); return updated; }));
     return () => { homeSocket.disconnect(); };
@@ -215,7 +223,7 @@ export function App() {
 
   useEffect(() => {
     if (!session || !routeHouseId || !selectedHouse || selectedHouse.id !== routeHouseId) return;
-    const nextSocket: TypedSocket = io(SOCKET_URL, { auth: { token: session.token }, transports: ["websocket", "polling"] });
+    const nextSocket: TypedSocket = io(SOCKET_URL, socketOptions(session.token));
     setSocket(nextSocket);
     setConnectionState("connecting"); setEntryError("");
     hadSnapshot.current = false; reconnecting.current = false; membersSeen.current.clear(); queueSeen.current.clear(); latestMedia.current = null; screenShareActor.current = null; feedbackRevision.current = -1;
@@ -275,7 +283,7 @@ export function App() {
     });
     nextSocket.on("chat:message", (message) => { setSnapshot((current) => current && !current.messages.some((item) => item.id === message.id) ? { ...current, messages: [...current.messages, message].slice(-80) } : current); if (message.user.id !== session.user.id && !(drawerStateRef.current.open && drawerStateRef.current.panel === "chat")) setUnreadChat((value) => value + 1); });
     nextSocket.on("chat:typing", ({ userId, typing }) => setTypingUserIds((current) => typing ? [...new Set([...current, userId])] : current.filter((id) => id !== userId)));
-    nextSocket.on("reaction:send", (value) => { setReaction(value); window.setTimeout(() => setReaction(null), 2200); });
+    nextSocket.on("reaction:send", (value) => { setReaction(value); window.clearTimeout(reactionTimer.current); reactionTimer.current = window.setTimeout(() => setReaction(null), 2200); });
     nextSocket.on("screen:state", (state) => { const previous = screenShareActor.current; screenShareActor.current = state ? { id: state.user.id, name: state.user.displayName } : null; setSnapshot((current) => current ? { ...current, screenShare: state } : current); if (state) { setStageView("screen"); if (state.user.id !== session.user.id && previous?.id !== state.user.id) { notifyParty(`${state.user.displayName} começou a compartilhar a tela.`); void joinCallRef.current(false); } } else { setStageView("media"); setRemoteScreenStream(null); if (previous && previous.id !== session.user.id) notifyParty(`${previous.name} parou de compartilhar a tela.`); } });
     nextSocket.on("house:update", (nextHouse) => { if (nextHouse.id === routeHouseId) setHouse(nextHouse); });
     nextSocket.on("home:update", (next) => { houseRequestVersion.current += 1; setHouses(next); });
@@ -283,7 +291,7 @@ export function App() {
     nextSocket.on("media-hub:update", ({ houseId }) => { if (houseId === routeHouseId) setMediaHubRevision((value) => value + 1); });
     nextSocket.on("member:removed", ({ houseId, message }) => { if (houseId !== routeHouseId) return; setHousesError(message); setSnapshot(null); setHouse(null); localStorage.removeItem(HOUSE_KEY); navigate("/app"); void refreshHouses(); });
     nextSocket.on("server:error", (message) => { if (!hadSnapshot.current) { setEntryError(message); setConnectionState("error"); } else notifyParty(message, "error"); });
-    return () => { window.clearTimeout(offlineTimer.current); if (nextSocket.connected) nextSocket.emit(eventNames.roomLeave, selectedHouse.primaryRoomId); nextSocket.disconnect(); resetPeers.current(); callGeneration.current += 1; callActiveRef.current = false; micRequestInFlight.current = false; analyserCleanup.current?.(); analyserCleanup.current = null; localStream.current?.getTracks().forEach((track) => track.stop()); localStream.current = null; displayStream.current?.getTracks().forEach((track) => track.stop()); displayStream.current = null; setCallState("idle"); setMicEnabled(false); setLocalScreenStream(null); setRemoteScreenStream(null); setSocket(null); };
+    return () => { window.clearTimeout(offlineTimer.current); window.clearTimeout(reactionTimer.current); if (nextSocket.connected) nextSocket.emit(eventNames.roomLeave, selectedHouse.primaryRoomId); nextSocket.disconnect(); resetPeers.current(); callGeneration.current += 1; callActiveRef.current = false; micRequestInFlight.current = false; analyserCleanup.current?.(); analyserCleanup.current = null; localStream.current?.getTracks().forEach((track) => track.stop()); localStream.current = null; displayStream.current?.getTracks().forEach((track) => track.stop()); displayStream.current = null; setCallState("idle"); setMicEnabled(false); setLocalScreenStream(null); setRemoteScreenStream(null); setSocket(null); };
   }, [session?.token, routeHouseId, selectedHouse?.id, selectedHouse?.primaryRoomId, rejectCall]);
 
   useEffect(() => {
@@ -448,6 +456,7 @@ export function App() {
   }, [routeHouseId]);
 
   const finishAuthentication = (data: SessionData) => {
+    authRequestVersion.current += 1; houseRequestVersion.current += 1;
     localStorage.setItem(SESSION_KEY, JSON.stringify(data)); setSession(data); setHouses([]); setAuthStatus("authenticated");
     const next = new URLSearchParams(path.split("?")[1] ?? "").get("next"); navigate(safeAuthDestination(next, window.location.origin));
   };
@@ -462,6 +471,7 @@ export function App() {
     } catch { setAuthError("Não foi possível alcançar o servidor. Verifique se a API está rodando."); }
   };
   const logout = () => {
+    authRequestVersion.current += 1; houseRequestVersion.current += 1;
     if (session) void fetch(`${API_URL}/api/auth/logout`, { method: "POST", headers: { Authorization: `Bearer ${session.token}` } });
     socket?.disconnect(); callGeneration.current += 1; callActiveRef.current = false; micRequestInFlight.current = false; analyserCleanup.current?.(); analyserCleanup.current = null; localStream.current?.getTracks().forEach((track) => track.stop()); localStream.current = null; displayStream.current?.getTracks().forEach((track) => track.stop()); displayStream.current = null; resetPeers.current();
     localStorage.removeItem(SESSION_KEY); localStorage.removeItem(HOUSE_KEY); setSession(null); setHouses([]); setHouse(null); setSnapshot(null); setSocket(null); setMicEnabled(false); setCallState("idle"); setAudioBlocked(false); setLocalScreenStream(null); setRemoteScreenStream(null); setAuthStatus("unauthenticated"); navigate("/");
@@ -517,7 +527,7 @@ export function App() {
 
   const startMicMeter = useCallback((stream: MediaStream) => {
     analyserCleanup.current?.();
-    if (!window.AudioContext) { setMicLevel(0); analyserCleanup.current = null; return; }
+    if (!window.AudioContext) { micLevelRef.current = 0; analyserCleanup.current = null; return; }
     try {
     const audioContext = new AudioContext(); const analyser = audioContext.createAnalyser(); analyser.fftSize = 256; analyser.smoothingTimeConstant = .75;
     void audioContext.resume().catch(() => undefined);
@@ -525,7 +535,7 @@ export function App() {
     let frame = 0; let lastPaint = 0; let lastEmitted = false; let above = 0; let below = 0;
     const listen = (now: number) => {
       analyser.getByteFrequencyData(data); const average = data.reduce((total, item) => total + item, 0) / data.length; const level = Math.min(100, average * 2.6);
-      if (now - lastPaint > 100) { setMicLevel(level); lastPaint = now; }
+      if (now - lastPaint > 100) { micLevelRef.current = level; lastPaint = now; }
       if (level > 20) { above += 1; below = 0; } else if (level < 12) { below += 1; above = 0; }
       const transmitting = audioSettingsRef.current.microphoneMode === "voice" ? !mutedRef.current : stream.getAudioTracks().some((track) => track.enabled);
       const nextSpeaking = !deafenedRef.current && transmitting && (lastEmitted ? below < 5 : above >= 2);
@@ -534,8 +544,8 @@ export function App() {
       }
       frame = requestAnimationFrame(listen);
     };
-    frame = requestAnimationFrame(listen); analyserCleanup.current = () => { cancelAnimationFrame(frame); setMicLevel(0); void audioContext.close(); };
-    } catch { setMicLevel(0); analyserCleanup.current = null; }
+    frame = requestAnimationFrame(listen); analyserCleanup.current = () => { cancelAnimationFrame(frame); micLevelRef.current = 0; void audioContext.close(); };
+    } catch { micLevelRef.current = 0; analyserCleanup.current = null; }
   }, [socket, snapshot?.id]);
 
   const joinCall = async (withMic: boolean, deviceOverride?: string) => {
@@ -589,7 +599,7 @@ export function App() {
     socket?.emit(eventNames.voiceLeave, { roomId: snapshot.id });
     localStream.current?.getTracks().forEach((track) => track.stop()); localStream.current = null;
     analyserCleanup.current?.(); analyserCleanup.current = null;
-    closeAllPeers(); setMicEnabled(false); setMuted(false); setSpeaking(false); setMicLevel(0); setCallQuality("Calculando"); setVoiceError(""); setAudioBlocked(false); setCallState("idle");
+    closeAllPeers(); setMicEnabled(false); setMuted(false); setSpeaking(false); micLevelRef.current = 0; setCallQuality("Calculando"); setVoiceError(""); setAudioBlocked(false); setCallState("idle");
   };
   const toggleMute = () => {
     if (!micEnabled) return void joinCall(true);
@@ -714,8 +724,8 @@ export function App() {
   if (authStatus === "unknown") return <BootstrapPage error={bootstrapError} onRetry={() => void bootstrap()} />;
   if (!session || authStatus === "unauthenticated") {
     if (inviteToken) return <InvitePage apiUrl={API_URL} token={inviteToken} session={null} navigate={navigate} onAccepted={async () => undefined} />;
-    if (pathname === "/login" || pathname === "/register") return <AuthPage key={pathname} mode={pathname === "/login" ? "login" : "register"} error={authError} apiUrl={API_URL} onSubmit={(data) => authenticate(pathname === "/login" ? "login" : "signup", data)} onGoogleLogin={finishAuthentication} navigate={navigate} />;
-    return <Suspense fallback={<BootstrapPage onRetry={() => undefined} />}><LandingPage navigate={navigate} /></Suspense>;
+    if (pathname === "/login" || pathname === "/register") return <AuthPage key={pathname} mode={pathname === "/login" || GOOGLE_ONLY_PREVIEW ? "login" : "register"} error={authError} apiUrl={API_URL} onSubmit={(data) => authenticate(pathname === "/login" || GOOGLE_ONLY_PREVIEW ? "login" : "signup", data)} onGoogleLogin={finishAuthentication} navigate={navigate} googleOnlyPreview={GOOGLE_ONLY_PREVIEW} />;
+    return <Suspense fallback={<BootstrapPage onRetry={() => undefined} />}><LandingPage navigate={navigate} googleOnlyPreview={GOOGLE_ONLY_PREVIEW} /></Suspense>;
   }
   if (inviteToken) return <InvitePage apiUrl={API_URL} token={inviteToken} session={session} navigate={navigate} onAccepted={acceptedInvite} />;
   if (pathname === "/account") return <Suspense fallback={<BootstrapPage onRetry={() => undefined} />}><AccountPage apiUrl={API_URL} token={session.token} onBack={() => navigate("/app")} /></Suspense>;
@@ -803,7 +813,7 @@ export function App() {
     {showInvite && house ? <InviteDialog apiUrl={API_URL} token={session.token} house={house} onClose={() => setShowInvite(false)} onChanged={(next) => setHouse(next)} /> : null}
     {showHouseSettings && house ? <HouseSettingsDialog apiUrl={API_URL} token={session.token} house={house} currentUserId={session.user.id} roomSettings={snapshot.settings} onRoomSettings={(settings) => socket?.emit(eventNames.roomSettings, { roomId: snapshot.id, settings })} onClose={() => setShowHouseSettings(false)} onLeft={() => { setShowHouseSettings(false); setSnapshot(null); setHouse(null); localStorage.removeItem(HOUSE_KEY); navigate("/app"); void refreshHouses(); }} onChanged={(next) => { setHouse(next); void refreshHouses(); }} /> : null}
     {showProfile ? <ProfileDialog apiUrl={API_URL} token={session.token} user={session.user} onClose={() => setShowProfile(false)} onSaved={(user) => { const nextSession = { ...session, user }; setSession(nextSession); localStorage.setItem(SESSION_KEY, JSON.stringify(nextSession)); }} /> : null}
-    {showCallSettings ? <Suspense fallback={<div className="overlay-loading" role="status">Abrindo configurações...</div>}><CallSettings settings={audioSettings} devices={audioDevices} micLevel={micLevel} connected={callState !== "idle"} outputSelectionSupported={"setSinkId" in HTMLMediaElement.prototype} onChange={setAudioSettings} onLeaveCall={() => { leaveCall(); setShowCallSettings(false); }} onClose={() => setShowCallSettings(false)} /></Suspense> : null}
+    {showCallSettings ? <Suspense fallback={<div className="overlay-loading" role="status">Abrindo configurações...</div>}><CallSettings settings={audioSettings} devices={audioDevices} getMicLevel={getMicLevel} connected={callState !== "idle"} outputSelectionSupported={"setSinkId" in HTMLMediaElement.prototype} onChange={setAudioSettings} onLeaveCall={() => { leaveCall(); setShowCallSettings(false); }} onClose={() => setShowCallSettings(false)} /></Suspense> : null}
   </div></Suspense>;
 }
 

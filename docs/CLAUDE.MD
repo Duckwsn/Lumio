@@ -95,6 +95,7 @@ Só encerre o processo depois de confirmar que ele pertence ao projeto.
 - Reiniciar o servidor pode apagar estado runtime.
 - Verificação e recuperação de e-mail/senha usam tokens de uso único e provedor configurável; em desenvolvimento o outbox é local e não equivale a e-mail real. Transferência de host funciona no adapter em memória, mas exigirá transação ao migrar para Prisma. Google Login usa Google Identity Services e é separado do OAuth do Google Drive; consulte `docs/AUTH_V2.md`.
 - Prisma/schema estão preparados para evolução, mas não devem ser tratados como persistência completa sem uma implementação explícita.
+- A auditoria de lifecycle, streaming, logs, health/readiness e riscos para infraestrutura está em `docs/PERFORMANCE_RESILIENCE_17.md`. Os testes automatizados de churn/provider não substituem soak de horas, RTC real ou Drive real.
 
 ## Media Hub V3
 

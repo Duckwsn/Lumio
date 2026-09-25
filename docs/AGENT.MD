@@ -164,3 +164,11 @@ Uma tarefa está pronta quando:
 - A PWA é progressiva, não offline-first: Party, call, YouTube e Drive exigem rede. O service worker só cacheia assets estáticos, nunca API, OAuth, tickets, tokens ou mídia privada.
 - Atualizações do service worker não devem recarregar uma Party automaticamente; a pessoa decide quando aplicar a versão nova.
 - A marca oficial está em `apps/web/brand/lumio-logo-master.png`; gere favicon, símbolo web e ícones PWA somente a partir desse master com `apps/web/scripts/generate-icons.ps1`. Não restaure o antigo ícone com a letra “L” nem modifique a geometria ou as cores do símbolo.
+
+## Performance e resiliência
+
+- O nível contínuo do microfone não deve atualizar o estado global da Party; apenas a superfície visível do medidor o lê. `currentTime` permanece local ao player e speaking é evento de transição, não stream de alta frequência.
+- Requests de pasta/ticket obsoletos devem ser cancelados, e troca de provider deve destruir listeners, tracks e requests do provider anterior sem desmontar Party/Call.
+- Reconnect conserva backoff com jitter e converge pelo snapshot autoritativo. Não repetir mutations às cegas.
+- Streaming Drive mantém Range, autorização, `no-store`, backpressure e cancelamento do upstream quando o cliente sai; não bufferizar o vídeo inteiro.
+- Logs HTTP/WS usam IDs técnicos e templates de rota, nunca payload privado ou tokens. Consulte `docs/PERFORMANCE_RESILIENCE_17.md` antes de alterar lifecycle, saúde ou infraestrutura.

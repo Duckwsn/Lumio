@@ -2,9 +2,15 @@ node_modules
 dist
 .env
 .env.local
+.env.*
+!.env.example
 *.log
 .DS_Store
 coverage
 *.tsbuildinfo
 apps/server/prisma/dev.db
+*.db-journal
+*.pem
+*.key
+*credentials*.json
 .data/

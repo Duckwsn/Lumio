@@ -9,6 +9,11 @@ const VIDEO = new Set(["video/mp4", "video/webm", "video/ogg"]);
 const FIELDS = "id,name,mimeType,size,modifiedTime,videoMediaMetadata(durationMillis),capabilities(canDownload)";
 const validId = (id: string) => /^[\w-]{10,200}$/.test(id);
 type Connection = { accessToken: string; refreshToken: string; expiresAt: number; email?: string; accountId?: string; scope: string };
+export interface DriveVaultAdapter {
+  load(): Promise<Array<{ userId: string; encryptedCredentials: string }>>;
+  save(userId: string, encryptedCredentials: string, connection: { email?: string; accountId?: string; scope: string }): Promise<void>;
+  delete(userId: string): Promise<void>;
+}
 type TokenResponse = { access_token?: string; refresh_token?: string; expires_in?: number; scope?: string };
 type File = { id: string; name: string; mimeType: string; size?: string; modifiedTime?: string; videoMediaMetadata?: { durationMillis?: string }; capabilities?: { canDownload?: boolean } };
 type Ticket = { roomId: string; fileId: string; ownerId: string; viewerId: string; sessionHash: string; expiresAt: number };
@@ -28,9 +33,31 @@ export class GoogleDriveService {
   private readonly grants = new Map<string, { ownerId: string; expiresAt: number }>();
   private readonly tickets = new Map<string, Ticket>();
   private readonly refreshes = new Map<string, Promise<string>>();
-  constructor(private readonly fetcher: typeof fetch = fetch, vaultPath = path.resolve(process.cwd(), "../../.data/google-drive-connections.json")) { this.vault = vaultPath; this.loadVault(); }
+  constructor(private readonly fetcher: typeof fetch = fetch, vaultPath = path.resolve(process.cwd(), "../../.data/google-drive-connections.json"), private readonly remoteVault?: DriveVaultAdapter) { this.vault = vaultPath; if (!remoteVault) this.loadVault(); }
   isConfigured() { return Boolean(this.clientId && this.clientSecret && this.key && this.redirectUri); }
   getStatus(userId: string) { const connection = this.connections.get(userId); return { configured: this.isConfigured(), connected: Boolean(connection), email: connection?.email }; }
+  async initialize() {
+    if (!this.remoteVault) return;
+    const rows = await this.remoteVault.load();
+    if (!this.key && (rows.length || this.clientSecret)) throw new Error("GOOGLE_TOKEN_ENCRYPTION_KEY ausente ou inválida para o cofre PostgreSQL.");
+    for (const row of rows) this.connections.set(row.userId, this.decrypt(row.encryptedCredentials));
+  }
+  private decrypt(value: string): Connection {
+    if (!this.key) throw new Error("Chave de criptografia do Drive ausente.");
+    try {
+      const box = JSON.parse(value) as { iv: string; tag: string; data: string };
+      const decipher = crypto.createDecipheriv("aes-256-gcm", this.key, Buffer.from(box.iv, "base64"));
+      decipher.setAuthTag(Buffer.from(box.tag, "base64"));
+      const clear = Buffer.concat([decipher.update(Buffer.from(box.data, "base64")), decipher.final()]);
+      return JSON.parse(clear.toString("utf8")) as Connection;
+    } catch { throw new Error("O cofre de tokens do Google Drive não pôde ser aberto. Verifique a chave de criptografia."); }
+  }
+  private encrypt(connection: Connection) {
+    if (!this.key) throw new DriveError("UNAVAILABLE", "Configure a chave de criptografia do Google Drive.");
+    const iv = crypto.randomBytes(12); const cipher = crypto.createCipheriv("aes-256-gcm", this.key, iv);
+    const data = Buffer.concat([cipher.update(JSON.stringify(connection)), cipher.final()]);
+    return JSON.stringify({ iv: iv.toString("base64"), tag: cipher.getAuthTag().toString("base64"), data: data.toString("base64") });
+  }
   private loadVault() {
     if (!this.key || !fs.existsSync(this.vault)) return;
     try {
@@ -41,7 +68,14 @@ export class GoogleDriveService {
       for (const [userId, connection] of JSON.parse(clear.toString("utf8")) as Array<[string, Connection]>) this.connections.set(userId, connection);
     } catch { throw new Error("O cofre de tokens do Google Drive não pôde ser aberto. Verifique a chave de criptografia."); }
   }
-  private saveVault() {
+  private async saveVault(userId?: string) {
+    if (this.remoteVault) {
+      if (!userId) throw new Error("Identidade ausente para persistência do Drive.");
+      const connection = this.connections.get(userId);
+      if (connection) await this.remoteVault.save(userId, this.encrypt(connection), connection);
+      else await this.remoteVault.delete(userId);
+      return;
+    }
     if (!this.key) throw new DriveError("UNAVAILABLE", "Configure a chave de criptografia do Google Drive.");
     fs.mkdirSync(path.dirname(this.vault), { recursive: true });
     const iv = crypto.randomBytes(12); const cipher = crypto.createCipheriv("aes-256-gcm", this.key, iv);
@@ -64,20 +98,23 @@ export class GoogleDriveService {
     const pending = this.states.get(state); this.states.delete(state);
     if (!pending || pending.expiresAt < Date.now() || !this.isConfigured()) throw new DriveError("BAD_REQUEST", "Autorização expirada. Tente conectar novamente.");
     const body = new URLSearchParams({ client_id: this.clientId!, client_secret: this.clientSecret!, redirect_uri: this.redirectUri, grant_type: "authorization_code", code, code_verifier: pending.verifier });
-    const response = await this.fetcher("https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body });
+    const response = await this.fetcher("https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body, signal: AbortSignal.timeout(12_000) });
     const tokens = await response.json() as TokenResponse;
     if (!response.ok || !tokens.access_token || !tokens.refresh_token || !tokens.scope?.split(" ").includes(DRIVE_SCOPE)) throw new DriveError("BAD_REQUEST", "O Google não concedeu acesso offline de leitura ao Drive.");
-    const profileResponse = await this.fetcher("https://www.googleapis.com/oauth2/v3/userinfo", { headers: { Authorization: `Bearer ${tokens.access_token}` } });
+    const profileResponse = await this.fetcher("https://www.googleapis.com/oauth2/v3/userinfo", { headers: { Authorization: `Bearer ${tokens.access_token}` }, signal: AbortSignal.timeout(12_000) });
     const profile = profileResponse.ok ? await profileResponse.json() as { sub?: string; email?: string } : {};
+    const prior = this.connections.get(pending.userId);
     this.connections.set(pending.userId, { accessToken: tokens.access_token, refreshToken: tokens.refresh_token, expiresAt: Date.now() + (tokens.expires_in ?? 3600) * 1000, email: profile.email, accountId: profile.sub, scope: tokens.scope });
-    this.saveVault(); return pending.userId;
+    try { await this.saveVault(pending.userId); }
+    catch (error) { if (prior) this.connections.set(pending.userId, prior); else this.connections.delete(pending.userId); throw error; }
+    return pending.userId;
   }
   async disconnect(userId: string) {
     const connection = this.connections.get(userId); this.connections.delete(userId);
-    try { this.saveVault(); } catch (error) { if (connection) this.connections.set(userId, connection); throw error; }
+    try { await this.saveVault(userId); } catch (error) { if (connection) this.connections.set(userId, connection); throw error; }
     for (const [key, grant] of this.grants) if (grant.ownerId === userId) this.grants.delete(key);
     for (const [key, ticket] of this.tickets) if (ticket.ownerId === userId) this.tickets.delete(key);
-    if (connection) await this.fetcher("https://oauth2.googleapis.com/revoke", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ token: connection.refreshToken }) }).catch(() => undefined);
+    if (connection) await this.fetcher("https://oauth2.googleapis.com/revoke", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ token: connection.refreshToken }), signal: AbortSignal.timeout(12_000) }).catch(() => undefined);
   }
   private async accessToken(userId: string): Promise<string> {
     const connection = this.connections.get(userId);
@@ -86,17 +123,21 @@ export class GoogleDriveService {
     const inFlight = this.refreshes.get(userId); if (inFlight) return inFlight;
     const refresh = (async () => {
       const body = new URLSearchParams({ client_id: this.clientId!, client_secret: this.clientSecret!, refresh_token: connection.refreshToken, grant_type: "refresh_token" });
-      const response = await this.fetcher("https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body });
+      const response = await this.fetcher("https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body, signal: AbortSignal.timeout(12_000) });
       const tokens = await response.json() as TokenResponse;
-      if (!response.ok || !tokens.access_token) { this.connections.delete(userId); this.saveVault(); throw new DriveError("RECONNECT", "Conecte seu Google Drive novamente."); }
-      connection.accessToken = tokens.access_token; connection.expiresAt = Date.now() + (tokens.expires_in ?? 3600) * 1000; this.saveVault(); return connection.accessToken;
+      if (!response.ok || !tokens.access_token) { this.connections.delete(userId); await this.saveVault(userId); throw new DriveError("RECONNECT", "Conecte seu Google Drive novamente."); }
+      connection.accessToken = tokens.access_token; connection.expiresAt = Date.now() + (tokens.expires_in ?? 3600) * 1000; await this.saveVault(userId); return connection.accessToken;
     })();
     this.refreshes.set(userId, refresh);
     try { return await refresh; } finally { this.refreshes.delete(userId); }
   }
   private async request(userId: string, url: URL, init: RequestInit = {}) {
     const token = await this.accessToken(userId);
-    const response = await this.fetcher(url, { ...init, headers: { ...init.headers, Authorization: `Bearer ${token}` }, redirect: "error" });
+    const timeout = new AbortController();
+    const timer = setTimeout(() => timeout.abort(), 12_000);
+    let response: Response;
+    try { response = await this.fetcher(url, { ...init, headers: { ...init.headers, Authorization: `Bearer ${token}` }, redirect: "error", signal: init.signal ? AbortSignal.any([init.signal, timeout.signal]) : timeout.signal }); }
+    finally { clearTimeout(timer); }
     if (response.status === 401) throw new DriveError("RECONNECT", "Conecte seu Google Drive novamente.");
     if (response.status === 403) throw new DriveError("FORBIDDEN", "Arquivo sem acesso ou cota do Drive atingida.");
     if (response.status === 404) throw new DriveError("NOT_FOUND", "Arquivo ou pasta indisponível.");

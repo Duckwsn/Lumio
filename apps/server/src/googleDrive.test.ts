@@ -57,10 +57,14 @@ test("OAuth PKCE, encrypted connection, paginated folder navigation, grants and 
     assert.equal(drive.verifyTicket(ticket, "secret-nonce").ownerId, "owner");
     assert.throws(() => drive.verifyTicket(ticket, "wrong"), DriveError);
     assert.throws(() => drive.createPlaybackTicket({ roomId: "party-1", fileId: "another-file", viewerId: "viewer", sessionToken: "nonce", ownerIsMember: true, mediaIsListed: true }), DriveError);
-    const stream = await drive.getPlaybackResponse("owner", "video000001", "bytes=0-2");
+    const streamController = new AbortController();
+    const stream = await drive.getPlaybackResponse("owner", "video000001", "bytes=0-2", streamController.signal);
     assert.equal(stream.status, 206);
     assert.equal(stream.headers.get("content-range"), "bytes 0-2/100");
     assert.equal((calls.at(-1)?.init.headers as Record<string, string>).Range, "bytes=0-2");
+    assert.equal((calls.at(-1)?.init.signal as AbortSignal).aborted, false);
+    streamController.abort();
+    assert.equal((calls.at(-1)?.init.signal as AbortSignal).aborted, true);
     await assert.rejects(() => drive.getPlaybackResponse("owner", "video000001", "bytes=abc"), DriveError);
     await drive.disconnect("owner");
     assert.equal(drive.getStatus("owner").connected, false);

@@ -1,0 +1,19 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: lumio_dev
+      POSTGRES_PASSWORD: lumio_local_only
+      POSTGRES_DB: lumio_dev
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - lumio_postgres_dev:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U lumio_dev -d lumio_dev"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+volumes:
+  lumio_postgres_dev:
