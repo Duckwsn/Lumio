@@ -1,5 +1,7 @@
 # Google Drive no Lumio — Etapa 9
 
+> Registro histórico da Etapa 9. No runtime PostgreSQL da Etapa 18, conexões Drive são guardadas cifradas no banco, e os cookies de playback usam `SameSite=None; Secure` em produção; grants/tickets continuam efêmeros. Não copiar um `.env` novo sobre um existente. Leia [GOOGLE_OAUTH_SCOPE_AUDIT.md](GOOGLE_OAUTH_SCOPE_AUDIT.md) e [DEPLOYMENT_18.md](DEPLOYMENT_18.md) antes de configurar produção.
+
 ## O que foi implementado
 
 O usuário Lumio conecta separadamente a conta Google. No Media Hub, a guia Google Drive abre **Meu Drive**, permite entrar em pastas e subpastas, voltar pelas migalhas de navegação, carregar páginas adicionais, atualizar a pasta e selecionar vídeos para reproduzir, enfileirar ou guardar na biblioteca da Casa. A listagem ocorre apenas quando a guia é aberta. Não há busca global no Drive.

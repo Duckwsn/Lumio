@@ -1,5 +1,7 @@
 # Lumio Media Hub V3
 
+> Registro histórico das etapas 7/8/14. As afirmações abaixo de que fila, biblioteca e playlists ainda vivem só em memória foram superadas pela Etapa 18: o runtime atual usa PostgreSQL quando `PERSISTENCE_MODE=postgres`. Consulte [DEPLOYMENT_18.md](DEPLOYMENT_18.md) e [DEPLOY_HANDOFF_REPORTS.md](DEPLOY_HANDOFF_REPORTS.md) para o estado presente.
+
 ## Escopo
 
 O Media Hub é o centro de mídia da Casa. Ele reúne descoberta, biblioteca compartilhada, favoritos compartilhados, histórico e playlists sem criar outra sala ou desmontar o player atual.

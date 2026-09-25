@@ -1,5 +1,7 @@
 # Auth V2 — identidade Lumio e Google
 
+> Registro histórico das etapas 10/16. As seções que dizem que o runtime ainda usa arquivo local descrevem a versão anterior; a Etapa 18 adicionou persistência PostgreSQL e cookies `SameSite=None; Secure` em produção. O bearer de sessão no `localStorage` **continua** como limitação atual. Consulte [DEPLOYMENT_18.md](DEPLOYMENT_18.md) e [DEPLOY_HANDOFF_REPORTS.md](DEPLOY_HANDOFF_REPORTS.md).
+
 ## Modelo
 
 O `User` Lumio é a identidade usada por Casa, Party, permissões, chat, biblioteca e Drive. Ele pode ter senha local, identidade Google vinculada ou ambos. A identidade Google é indexada pelo `sub` estável e **não** pelo e-mail. Um login Google novo cria um User; se já existir uma conta Lumio com o mesmo e-mail, o login não cria uma duplicata nem vincula automaticamente: a pessoa deve entrar com a senha e vincular Google em **Conta**. Conflitos entre identidades são rejeitados sem merge.

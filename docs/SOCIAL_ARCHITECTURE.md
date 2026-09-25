@@ -1,5 +1,7 @@
 # Lumio social layer
 
+> Registro histórico da Etapa 13. O parágrafo de persistência em memória foi superado pela Etapa 18: Casas, membros, convites e atividades agora usam PostgreSQL em `PERSISTENCE_MODE=postgres`. Presença/call continuam efêmeras; execução multi-instância continua não suportada. Consulte [DEPLOYMENT_18.md](DEPLOYMENT_18.md).
+
 ## Domain
 
 - A **House** is the durable family/community boundary. Membership, role, profile, library and activity belong to it.

@@ -52,7 +52,7 @@ test("HTTP verification/reset gates real endpoints and rejects token replay", { 
   const storeFile = path.join(directory, "auth.json"), outbox = path.join(directory, "mail.jsonl");
   const child = spawn(process.execPath, ["--import", "tsx", "src/index.ts"], {
     cwd: process.cwd(),
-    env: { ...process.env, PORT: String(port), NODE_ENV: "development", AUTH_STORE_FILE: storeFile, EMAIL_PROVIDER: "dev-file", EMAIL_DEV_OUTBOX_FILE: outbox, APP_PUBLIC_URL: "http://127.0.0.1:5173", CLIENT_ORIGIN: "http://127.0.0.1:5173", GOOGLE_TOKEN_ENCRYPTION_KEY: "" },
+    env: { ...process.env, PORT: String(port), NODE_ENV: "development", PERSISTENCE_MODE: "file", AUTH_STORE_FILE: storeFile, EMAIL_PROVIDER: "dev-file", EMAIL_DEV_OUTBOX_FILE: outbox, APP_PUBLIC_URL: "http://127.0.0.1:5173", CLIENT_ORIGIN: "http://127.0.0.1:5173", GOOGLE_TOKEN_ENCRYPTION_KEY: "" },
     stdio: ["ignore", "pipe", "pipe"],
   });
   let serverLogs = "";
