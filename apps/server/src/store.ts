@@ -99,6 +99,20 @@ export class RoomStore {
     this.createRoom({ id: input.roomId, name: "Party", accent: "green", group, mode: "watch" });
   }
 
+  deleteHouse(houseId: string) {
+    const group = this.groups.get(houseId); if (!group) return false;
+    for (const room of group.rooms) this.rooms.delete(room.id);
+    this.libraries.delete(houseId); this.favorites.delete(houseId); this.playlists.delete(houseId);
+    this.groups.delete(houseId);
+    const referenced = new Set<string>();
+    for (const room of this.rooms.values()) for (const item of [...room.queue, ...room.history]) referenced.add(mediaKey(item));
+    for (const library of this.libraries.values()) for (const item of library.values()) referenced.add(mediaKey(item));
+    for (const playlists of this.playlists.values()) for (const playlist of playlists.values()) for (const item of playlist.items) referenced.add(mediaKey(item));
+    for (const progress of this.progress.values()) for (const entry of progress.values()) referenced.add(mediaKey(entry.item));
+    for (const key of this.mediaCatalog.keys()) if (!referenced.has(key)) this.mediaCatalog.delete(key);
+    return true;
+  }
+
   snapshotHouse(roomId: string): PersistedMediaHouse | null {
     const room = this.rooms.get(roomId); if (!room) return null;
     return { houseId: room.groupId, roomId, mode: room.mode, settings: { ...room.settings }, queueRevision: room.queueRevision,

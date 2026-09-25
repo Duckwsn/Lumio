@@ -26,6 +26,7 @@ import type { LocalAudioSettings } from "./components/CallSettings";
 import { expectedPosition } from "./media/MediaProvider";
 import { toQueueItem } from "./media/MediaResolver";
 import { shouldIgnoreOffer } from "./rtc/negotiation";
+import { summarizeRtcStats } from "./rtc/diagnostics";
 import { HouseSettingsDialog, InviteDialog, ProfileDialog } from "./components/SocialDialogs";
 import { Avatar } from "./components/Avatar";
 import { ConfirmDialog } from "./components/ConfirmDialog";
@@ -67,6 +68,8 @@ export function App() {
   const [path, setPath] = useState(() => `${window.location.pathname}${window.location.search}`);
   const [bootstrapError, setBootstrapError] = useState("");
   const [housesError, setHousesError] = useState("");
+  const [homeNotice, setHomeNotice] = useState("");
+  useEffect(() => { if (!homeNotice) return; const timer = window.setTimeout(() => setHomeNotice(""), 4_000); return () => window.clearTimeout(timer); }, [homeNotice]);
   const [houses, setHouses] = useState<HouseSummary[]>([]);
   const [house, setHouse] = useState<HouseDetails | null>(null);
   const [snapshot, setSnapshot] = useState<RoomSnapshot | null>(null);
@@ -290,6 +293,7 @@ export function App() {
     nextSocket.on("profile:update", (user) => setSession((current) => { if (!current || current.user.id !== user.id) return current; const updated = { ...current, user }; localStorage.setItem(SESSION_KEY, JSON.stringify(updated)); return updated; }));
     nextSocket.on("media-hub:update", ({ houseId }) => { if (houseId === routeHouseId) setMediaHubRevision((value) => value + 1); });
     nextSocket.on("member:removed", ({ houseId, message }) => { if (houseId !== routeHouseId) return; setHousesError(message); setSnapshot(null); setHouse(null); localStorage.removeItem(HOUSE_KEY); navigate("/app"); void refreshHouses(); });
+    nextSocket.on("house:deleted", ({ houseId }) => { if (houseId !== routeHouseId) return; setShowHouseSettings(false); setSnapshot(null); setHouse(null); setHomeNotice("Casa excluída."); localStorage.removeItem(HOUSE_KEY); navigate("/app"); void refreshHouses(); });
     nextSocket.on("server:error", (message) => { if (!hadSnapshot.current) { setEntryError(message); setConnectionState("error"); } else notifyParty(message, "error"); });
     return () => { window.clearTimeout(offlineTimer.current); window.clearTimeout(reactionTimer.current); if (nextSocket.connected) nextSocket.emit(eventNames.roomLeave, selectedHouse.primaryRoomId); nextSocket.disconnect(); resetPeers.current(); callGeneration.current += 1; callActiveRef.current = false; micRequestInFlight.current = false; analyserCleanup.current?.(); analyserCleanup.current = null; localStream.current?.getTracks().forEach((track) => track.stop()); localStream.current = null; displayStream.current?.getTracks().forEach((track) => track.stop()); displayStream.current = null; setCallState("idle"); setMicEnabled(false); setLocalScreenStream(null); setRemoteScreenStream(null); setSocket(null); };
   }, [session?.token, routeHouseId, selectedHouse?.id, selectedHouse?.primaryRoomId, rejectCall]);
@@ -680,7 +684,7 @@ export function App() {
     const inspect = async () => {
       let worstRtt = 0; let received = 0; let lost = 0;
       await Promise.all([...peerConnections.current.values()].map(async (connection) => {
-        try { const reports = await connection.getStats(); reports.forEach((report) => {
+        try { const reports = await connection.getStats(); if (sessionStorage.getItem("lumio:qa:rtc") === "1") console.info("lumio:rtc:qa", summarizeRtcStats(reports)); reports.forEach((report) => {
           if (report.type === "candidate-pair" && report.state === "succeeded" && typeof report.currentRoundTripTime === "number") worstRtt = Math.max(worstRtt, report.currentRoundTripTime);
           if (report.type === "inbound-rtp" && report.kind === "audio") { received += Number(report.packetsReceived ?? 0); lost += Number(report.packetsLost ?? 0); }
         }); } catch { /* A peer may close while stats are being collected. */ }
@@ -729,7 +733,7 @@ export function App() {
   }
   if (inviteToken) return <InvitePage apiUrl={API_URL} token={inviteToken} session={session} navigate={navigate} onAccepted={acceptedInvite} />;
   if (pathname === "/account") return <Suspense fallback={<BootstrapPage onRetry={() => undefined} />}><AccountPage apiUrl={API_URL} token={session.token} onBack={() => navigate("/app")} /></Suspense>;
-  if (!routeHouseId) return <HomePage user={session.user} houses={houses} error={housesError} onRetry={() => void refreshHouses()} onOpenHouse={openHouse} onCreate={createHomeHouse} onInvite={openInviteInput} onAccount={() => navigate("/account")} onLogout={logout} />;
+  if (!routeHouseId) return <><HomePage user={session.user} houses={houses} error={housesError} onRetry={() => void refreshHouses()} onOpenHouse={openHouse} onCreate={createHomeHouse} onInvite={openInviteInput} onAccount={() => navigate("/account")} onLogout={logout} />{homeNotice ? <div className="home-notice" role="status">{homeNotice}</div> : null}</>;
   if (!houses.some((item) => item.id === routeHouseId)) return <main className="loading-screen"><LumioLogo /><h1>Casa indisponível</h1><p>Você não faz parte desta Casa.</p><button onClick={() => navigate("/app")}>Voltar para suas Casas</button></main>;
   if (!snapshot || snapshot.id !== selectedHouse?.primaryRoomId) return <LoadingScreen user={session.user} connectionState={connectionState} error={entryError} onBack={() => navigate("/app")} />;
 

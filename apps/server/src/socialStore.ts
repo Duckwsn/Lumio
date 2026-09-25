@@ -75,6 +75,12 @@ export class SocialStore {
     return { ...this.summary(house, userId), members: [...house.members.values()].map((member) => ({ ...member, user: publicUser(member.user) })), permissions: [...rolePermissions[membership.role]], invites: rolePermissions[membership.role].includes("INVITE_REVOKE") ? [...house.invites.values()].filter((i) => !i.revokedAt).map((invite) => ({ ...invite, token: "", createdBy: publicUser(invite.createdBy) })) : [], activity: house.activity.slice(-40).reverse().map((entry) => ({ ...entry, actor: entry.actor && publicUser(entry.actor) })) };
   }
   getHouse(houseId: string) { return this.houses.get(houseId); }
+  deleteHouse(houseId: string) {
+    const house = this.houses.get(houseId); if (!house) return false;
+    for (const [hash, invite] of this.inviteByToken) if (invite.houseId === houseId) this.inviteByToken.delete(hash);
+    this.houses.delete(houseId);
+    return true;
+  }
   getByRoom(roomId: string) { return [...this.houses.values()].find((house) => house.primaryRoomId === roomId); }
   role(houseId: string, userId: string) { return this.houses.get(houseId)?.members.get(userId)?.role; }
   isMember(houseId: string, userId: string) { return this.houses.get(houseId)?.members.has(userId) ?? false; }

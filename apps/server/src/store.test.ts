@@ -2,6 +2,22 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { RoomStore } from "./store.js";
 
+test("deleting a House clears its Party media state without clearing another House", () => {
+  const store = new RoomStore();
+  const user = { id: "host", displayName: "Host", color: "#fff" };
+  const media = { id: "q-delete", provider: "youtube" as const, type: "video" as const, providerMediaId: "abcdefghijk", title: "Test", duration: 100, addedBy: user, addedAt: new Date().toISOString() };
+  store.addHouseRoom({ houseId: "delete", houseName: "Delete", roomId: "room-delete" });
+  store.addHouseRoom({ houseId: "keep", houseName: "Keep", roomId: "room-keep" });
+  store.addQueueItem("room-delete", media);
+  store.addMessage("room-delete", user, "Mensagem");
+  store.addQueueItem("room-keep", { ...media, id: "q-keep" });
+  assert.equal(store.deleteHouse("delete"), true);
+  assert.equal(store.getSnapshot("room-delete"), null);
+  assert.equal(store.snapshotHouse("room-delete"), null);
+  assert.equal(store.getSnapshot("room-keep")?.queue.length, 1);
+  assert.equal(store.deleteHouse("delete"), false);
+});
+
 test("removing the current queue item stops playback without clearing the remaining queue", () => {
   const store = new RoomStore();
   const user = { id: "u1", displayName: "Duck", color: "#fff" };

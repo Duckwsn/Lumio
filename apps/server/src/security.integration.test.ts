@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
@@ -45,14 +46,14 @@ test("Google-only preview rejects email signup before creating an account or sen
   assert.equal(login.status, 401);
 });
 
-test("HTTP verification/reset gates real endpoints and rejects token replay", { timeout: 30_000 }, async (context) => {
+test("HTTP verification/reset gates real endpoints and rejects token replay", { timeout: 60_000 }, async (context) => {
   const startupStarted = performance.now();
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "lumio-security-"));
   const port = await freePort();
   const storeFile = path.join(directory, "auth.json"), outbox = path.join(directory, "mail.jsonl");
   const child = spawn(process.execPath, ["--import", "tsx", "src/index.ts"], {
     cwd: process.cwd(),
-    env: { ...process.env, PORT: String(port), NODE_ENV: "development", PERSISTENCE_MODE: "file", AUTH_STORE_FILE: storeFile, EMAIL_PROVIDER: "dev-file", EMAIL_DEV_OUTBOX_FILE: outbox, APP_PUBLIC_URL: "http://127.0.0.1:5173", CLIENT_ORIGIN: "http://127.0.0.1:5173", GOOGLE_TOKEN_ENCRYPTION_KEY: "" },
+    env: { ...process.env, PORT: String(port), NODE_ENV: "development", PERSISTENCE_MODE: "file", AUTH_STORE_FILE: storeFile, EMAIL_PROVIDER: "dev-file", EMAIL_DEV_OUTBOX_FILE: outbox, APP_PUBLIC_URL: "http://127.0.0.1:5173", CLIENT_ORIGIN: "http://127.0.0.1:5173", GOOGLE_TOKEN_ENCRYPTION_KEY: "", YOUTUBE_API_KEY: "" },
     stdio: ["ignore", "pipe", "pipe"],
   });
   let serverLogs = "";
@@ -151,6 +152,75 @@ test("HTTP verification/reset gates real endpoints and rejects token replay", { 
   const joined = new Promise<void>((resolve) => socket.once("room:snapshot", () => resolve()));
   socket.emit("room:join", { roomId: house.primaryRoomId, user: maria.user });
   await joined;
+  const hostSocket = connect(base, { auth: { token: hostToken }, transports: ["websocket"], reconnection: false });
+  context.after(() => hostSocket.disconnect());
+  await new Promise<void>((resolve, reject) => { hostSocket.once("connect", resolve); hostSocket.once("connect_error", reject); });
+  const hostJoined = new Promise<void>((resolve) => hostSocket.once("room:snapshot", () => resolve()));
+  hostSocket.emit("room:join", { roomId: house.primaryRoomId, user: hostSession.user });
+  await hostJoined;
+  assert.equal((await post("/api/auth/signup", { displayName: "Jo", email: "jo@example.test", password: "jo-password-123" })).status, 201);
+  const joToken = new URL(mail()[3].text.match(/https?:\/\/\S+/)![0]).hash.slice("#token=".length);
+  assert.equal((await post("/api/auth/verification/confirm", { token: joToken })).status, 204);
+  const joLogin = await post("/api/auth/login", { email: "jo@example.test", password: "jo-password-123" });
+  assert.equal(joLogin.status, 200);
+  const jo = await joLogin.json() as { token: string; user: { id: string; displayName: string; color: string } };
+  const joInviteResponse = await post(`/api/houses/${house.id}/invites`, { expiresInHours: 1, maxUses: 1 }, hostToken);
+  assert.equal(joInviteResponse.status, 201);
+  const joInvite = (await joInviteResponse.json() as { invite: { token: string } }).invite;
+  assert.equal((await post(`/api/invites/${joInvite.token}/accept`, {}, jo.token)).status, 200);
+  const joSocket = connect(base, { auth: { token: jo.token }, transports: ["websocket"], reconnection: false });
+  context.after(() => joSocket.disconnect());
+  await new Promise<void>((resolve, reject) => { joSocket.once("connect", resolve); joSocket.once("connect_error", reject); });
+  const threeJoined = new Promise<{ members: Array<{ user: { id: string } }> }>((resolve) => joSocket.once("room:snapshot", resolve));
+  joSocket.emit("room:join", { roomId: house.primaryRoomId, user: jo.user });
+  const threeSnapshot = await threeJoined;
+  assert.deepEqual(new Set(threeSnapshot.members.map((member) => member.user.id)), new Set([hostSession.user.id, maria.user.id, jo.user.id]));
+  const remoteChat = new Promise<{ body: string }>((resolve) => joSocket.once("chat:message", resolve));
+  socket.emit("chat:message", { roomId: house.primaryRoomId, body: "QA: três participantes" });
+  assert.equal((await remoteChat).body, "QA: três participantes");
+  const qaMedia = { id: crypto.randomUUID(), provider: "youtube", providerMediaId: "dQw4w9WgXcQ", type: "video", title: "QA sync", duration: 120, addedBy: hostSession.user, addedAt: new Date().toISOString() };
+  const remoteQueue = new Promise<Array<{ id: string }>>((resolve) => joSocket.once("queue:update", resolve));
+  const queued = await new Promise<{ ok: boolean; item?: typeof qaMedia }>((resolve) => hostSocket.emit("queue:add", { roomId: house.primaryRoomId, item: qaMedia }, resolve));
+  assert.equal(queued.ok, true);
+  assert.equal((await remoteQueue).length, 1);
+  assert.ok(queued.item);
+  const concurrentQueue = new Promise<Array<{ id: string }>>((resolve) => {
+    const onUpdate = (items: Array<{ id: string }>) => { if (items.length === 3) { joSocket.off("queue:update", onUpdate); resolve(items); } };
+    joSocket.on("queue:update", onUpdate);
+  });
+  const second = { ...qaMedia, id: crypto.randomUUID(), providerMediaId: "kXYiU_JCYtU", title: "QA concurrent B", addedBy: maria.user };
+  const third = { ...qaMedia, id: crypto.randomUUID(), providerMediaId: "3tmd-ClpJxA", title: "QA concurrent C", addedBy: jo.user };
+  const [secondAck, thirdAck] = await Promise.all([
+    new Promise<{ ok: boolean }>((resolve) => socket.emit("queue:add", { roomId: house.primaryRoomId, item: second }, resolve)),
+    new Promise<{ ok: boolean }>((resolve) => joSocket.emit("queue:add", { roomId: house.primaryRoomId, item: third }, resolve)),
+  ]);
+  assert.equal(secondAck.ok, true);
+  assert.equal(thirdAck.ok, true);
+  assert.deepEqual(new Set((await concurrentQueue).map((item) => item.id)), new Set([queued.item!.id, second.id, third.id]));
+  const remoteMedia = new Promise<{ state: string; revision: number; mediaId: string }>((resolve) => joSocket.once("media:sync", resolve));
+  const changed = await new Promise<{ ok: boolean }>((resolve) => hostSocket.emit("media:change", { roomId: house.primaryRoomId, item: queued.item! }, resolve));
+  assert.equal(changed.ok, true);
+  let authoritative = await remoteMedia;
+  assert.equal(authoritative.mediaId, qaMedia.providerMediaId);
+  const propagationSamples: number[] = [];
+  for (const action of ["pause", "seek", "play"] as const) {
+    const next = new Promise<typeof authoritative>((resolve) => joSocket.once("media:sync", resolve));
+    const started = performance.now();
+    hostSocket.emit(`media:${action}`, { roomId: house.primaryRoomId, mediaId: qaMedia.providerMediaId, revision: authoritative.revision, operationId: crypto.randomUUID(), position: action === "seek" ? 40 : 0 });
+    authoritative = await next;
+    propagationSamples.push(performance.now() - started);
+    assert.equal(authoritative.state, action === "seek" ? "paused" : action === "pause" ? "paused" : "playing");
+  }
+  context.diagnostic(`local Socket.IO action→remote snapshot n=3: ${propagationSamples.map((sample) => sample.toFixed(1)).join("/")} ms; excludes provider and WAN`);
+  joSocket.disconnect();
+  const joReconnected = connect(base, { auth: { token: jo.token }, transports: ["websocket"], reconnection: false });
+  context.after(() => joReconnected.disconnect());
+  await new Promise<void>((resolve, reject) => { joReconnected.once("connect", resolve); joReconnected.once("connect_error", reject); });
+  const recovered = new Promise<{ queue: Array<{ id: string }>; currentMedia: { revision: number } }>((resolve) => joReconnected.once("room:snapshot", resolve));
+  joReconnected.emit("room:join", { roomId: house.primaryRoomId, user: jo.user });
+  const recoveredSnapshot = await recovered;
+  assert.equal(recoveredSnapshot.queue.length, 3);
+  assert.equal(recoveredSnapshot.currentMedia.revision, authoritative.revision);
   const removed = new Promise<void>((resolve) => socket.once("member:removed", () => resolve()));
   const removal = await fetch(`${base}/api/houses/${house.id}/members/${maria.user.id}`, { method: "DELETE", headers: { Authorization: `Bearer ${hostToken}` } });
   assert.equal(removal.status, 204);
@@ -163,5 +233,5 @@ test("HTTP verification/reset gates real endpoints and rejects token replay", { 
   assert.equal(invalidJson.status, 400);
   assert.match(serverLogs, /"event":"http_request"/);
   assert.match(serverLogs, /"event":"party_joined"/);
-  for (const secret of [session, hostToken, maria.token, token, resetToken, mariaToken, invite.token]) assert.equal(serverLogs.includes(secret), false, "server logs must not include credentials or invite tokens");
+  for (const secret of [session, hostToken, maria.token, jo.token, token, resetToken, mariaToken, joToken, invite.token, joInvite.token]) assert.equal(serverLogs.includes(secret), false, "server logs must not include credentials or invite tokens");
 });

@@ -86,6 +86,8 @@ const io = new Server<ClientToServerEvents, ServerToClientEvents>(httpServer, {
 });
 const store = new RoomStore();
 const social = new SocialStore();
+const deletingHouses = new Set<string>();
+const deletingRooms = new Set<string>();
 const postgresMode = process.env.PERSISTENCE_MODE === "postgres";
 const db = postgresMode ? new PrismaClient() : null;
 const googleDrive = new GoogleDriveService(fetch, undefined, db ? new PrismaDriveVault(db) : undefined);
@@ -93,9 +95,9 @@ const auth = new AuthStore(postgresMode ? null : undefined);
 const authRepository = db ? new PrismaAuthRepository(db, auth) : null;
 const saveAuth = (userId: string) => authRepository?.saveUser(userId) ?? Promise.resolve();
 const socialRepository = db ? new PrismaSocialRepository(db, social, (id) => auth.getUser(id)) : null;
-const saveHouse = (houseId: string) => socialRepository?.saveHouse(houseId) ?? Promise.resolve();
+const saveHouse = (houseId: string) => deletingHouses.has(houseId) ? Promise.reject(new Error("Casa em exclusão.")) : socialRepository?.saveHouse(houseId) ?? Promise.resolve();
 const mediaRepository = db ? new PrismaMediaRepository(db, store, (id) => auth.getUser(id)) : null;
-const saveMedia = (roomId: string) => mediaRepository?.saveHouse(roomId) ?? Promise.resolve();
+const saveMedia = (roomId: string) => deletingRooms.has(roomId) ? Promise.reject(new Error("Party em exclusão.")) : mediaRepository?.saveHouse(roomId) ?? Promise.resolve();
 const persistMediaForResponse = async (roomId: string, response: express.Response) => {
   try { await saveMedia(roomId); return true; }
   catch { response.status(503).json({ message: "Mídia indisponível no momento." }); return false; }
@@ -197,11 +199,13 @@ const requireUser = (request: express.Request, response: express.Response) => {
 };
 const requireHousePermission = (request: express.Request, response: express.Response, permission: Permission) => {
   const user = requireUser(request, response); if (!user) return null;
+  if (deletingHouses.has(String(request.params.houseId))) { response.status(409).json({ message: "Casa em exclusão." }); return null; }
   if (!can(social.role(String(request.params.houseId), user.id), permission)) { response.status(403).json({ message: "Você não tem permissão para esta ação." }); return null; }
   return user;
 };
 const requireRoomMember = (request: express.Request, response: express.Response, roomId: string) => {
   const user = requireUser(request, response); if (!user) return null; const house = social.getByRoom(roomId);
+  if (deletingRooms.has(roomId)) { response.status(409).json({ message: "Casa em exclusão." }); return null; }
   if (!house || !social.isMember(house.id, user.id)) { response.status(403).json({ message: "Você não faz parte desta Casa." }); return null; }
   return user;
 };
@@ -442,19 +446,59 @@ app.post("/api/houses", async (request, response) => {
   const house = social.createHouse(user, parsed.data.name); try { await saveHouse(house.id); } catch { return response.status(503).json({ message: "Casa indisponível no momento." }); } store.addHouseRoom({ houseId: house.id, houseName: house.name, roomId: house.primaryRoomId }); emitHouse(house.id);
   return response.status(201).json({ house: social.details(house.id, user.id) });
 });
-app.get("/api/houses/:houseId", (request, response) => { const user = requireUser(request, response); if (!user) return; const house = social.details(request.params.houseId, user.id); return house ? response.json({ house }) : response.status(404).json({ message: "Casa não encontrada." }); });
+app.get("/api/houses/:houseId", (request, response) => { const user = requireUser(request, response); if (!user) return; if (deletingHouses.has(request.params.houseId)) return response.status(404).json({ message: "Casa não encontrada." }); const house = social.details(request.params.houseId, user.id); return house ? response.json({ house }) : response.status(404).json({ message: "Casa não encontrada." }); });
 app.patch("/api/houses/:houseId", async (request, response) => {
   const user = requireHousePermission(request, response, "HOUSE_MANAGE"); if (!user) return;
   const parsed = z.object({ name: z.string().trim().min(2).max(48), avatar: safeImageUrl.optional().or(z.literal("")) }).safeParse(request.body); if (!parsed.success) return response.status(400).json({ message: "Dados inválidos." });
   social.updateHouse(request.params.houseId, parsed.data.name, parsed.data.avatar || undefined); try { await saveHouse(request.params.houseId); } catch { return response.status(503).json({ message: "Casa indisponível no momento." }); } emitHouse(request.params.houseId); return response.json({ house: social.details(request.params.houseId, user.id) });
+});
+app.delete("/api/houses/:houseId", async (request, response) => {
+  const user = requireUser(request, response); if (!user) return;
+  const houseId = String(request.params.houseId);
+  const house = social.getHouse(houseId);
+  if (!house || !social.isMember(houseId, user.id)) return response.status(404).json({ message: "Casa não encontrada." });
+  if (social.role(houseId, user.id) !== "HOST") return response.status(403).json({ message: "Somente o host pode excluir esta Casa." });
+  if (deletingHouses.has(houseId)) return response.status(409).json({ message: "A exclusão já está em andamento." });
+  const roomId = house.primaryRoomId;
+  const memberIds = [...house.members.keys()];
+  deletingHouses.add(houseId); deletingRooms.add(roomId);
+  try {
+    await Promise.all([socialRepository?.drain(), mediaRepository?.drain()]);
+    const result = await socialRepository?.deleteHouse(houseId, user.id);
+    if (result === "NOT_FOUND") return response.status(404).json({ message: "Casa não encontrada." });
+    if (result === "FORBIDDEN") return response.status(403).json({ message: "Somente o host pode excluir esta Casa." });
+    social.deleteHouse(houseId);
+    store.deleteHouse(houseId);
+    googleDrive.revokeRoom(roomId);
+    for (const entry of activeDriveStreams.get(roomId) ?? []) entry.controller.abort();
+    activeDriveStreams.delete(roomId);
+    callSockets.clearRoom(roomId); screenOwnerSockets.delete(roomId); roomConnections.delete(roomId);
+    for (const [key, timer] of offlineTimers) if (key.startsWith(`${roomId}:`)) { clearTimeout(timer); offlineTimers.delete(key); }
+    for (const socket of io.sockets.sockets.values()) {
+      const socketUser = socket.data.user as User | undefined;
+      if (socket.data.joinedRoomId === roomId) {
+        socket.data.revoked = true; socket.data.deletedHouseRoomId = roomId;
+        socket.emit("house:deleted", { houseId });
+        socket.leave(roomId);
+        setTimeout(() => socket.disconnect(true), 75);
+      }
+      if (socketUser && memberIds.includes(socketUser.id)) emitHomeToSocket(socket, socketUser.id);
+    }
+    log("info", "house_deleted", { houseId, roomId, actorId: user.id });
+    return response.status(204).end();
+  } catch {
+    return response.status(503).json({ message: "Não foi possível excluir a Casa agora. Tente novamente." });
+  } finally {
+    deletingHouses.delete(houseId); deletingRooms.delete(roomId);
+  }
 });
 app.patch("/api/profile", async (request, response) => {
   const user = requireUser(request, response); if (!user) return;
   const parsed = z.object({ displayName: z.string().trim().min(2).max(32), avatar: safeImageUrl.optional().or(z.literal("")), status: z.string().trim().max(80).optional() }).safeParse(request.body); if (!parsed.success) return response.status(400).json({ message: "Perfil inválido." });
   social.updateProfile(user, { ...parsed.data, avatar: parsed.data.avatar || undefined }); auth.saveProfile(user.id); try { await saveAuth(user.id); } catch { return response.status(503).json({ message: "Perfil indisponível no momento." }); } for (const house of social.listForUser(user.id)) { emitHouse(house.id); emitSnapshot(house.primaryRoomId); } for (const peer of io.sockets.sockets.values()) if ((peer.data.user as User | undefined)?.id === user.id) peer.emit("profile:update", user); return response.json({ user });
 });
-app.get("/api/invites/:token", (request, response) => { if (!authRateLimit(request, response)) return; const state = social.inspectInvite(request.params.token); const user = getUser(request); const invite = social.getInvite(request.params.token); const isMember = Boolean(user && invite && social.isMember(invite.houseId, user.id)); return response.json({ ...state, houseId: isMember ? invite?.houseId : state.status === "VALID" ? state.houseId : undefined, isMember }); });
-app.post("/api/invites/:token/accept", async (request, response) => { if (!authRateLimit(request, response)) return; const user = requireUser(request, response); if (!user) return; const result = social.acceptInvite(request.params.token, user); if (!result.ok) return response.status(410).json(result); try { await saveHouse(result.houseId); } catch { return response.status(503).json({ message: "Convite indisponível no momento." }); } emitHouse(result.houseId); return response.json(result); });
+app.get("/api/invites/:token", (request, response) => { if (!authRateLimit(request, response)) return; const invite = social.getInvite(request.params.token); if (invite && deletingHouses.has(invite.houseId)) return response.json({ status: "INVALID", isMember: false }); const state = social.inspectInvite(request.params.token); const user = getUser(request); const isMember = Boolean(user && invite && social.isMember(invite.houseId, user.id)); return response.json({ ...state, houseId: isMember ? invite?.houseId : state.status === "VALID" ? state.houseId : undefined, isMember }); });
+app.post("/api/invites/:token/accept", async (request, response) => { if (!authRateLimit(request, response)) return; const user = requireUser(request, response); if (!user) return; const invite = social.getInvite(request.params.token); if (invite && deletingHouses.has(invite.houseId)) return response.status(410).json({ status: "INVALID" }); const result = social.acceptInvite(request.params.token, user); if (!result.ok) return response.status(410).json(result); try { await saveHouse(result.houseId); } catch { return response.status(503).json({ message: "Convite indisponível no momento." }); } emitHouse(result.houseId); return response.json(result); });
 app.post("/api/houses/:houseId/invites", async (request, response) => {
   const user = requireHousePermission(request, response, "INVITE_CREATE"); if (!user) return;
   const parsed = z.object({ expiresInHours: z.union([z.literal(1), z.literal(24), z.literal(168)]), maxUses: z.number().int().min(1).max(100).default(1), role: houseRoleSchema.optional() }).safeParse(request.body); if (!parsed.success) return response.status(400).json({ message: "Configuração de convite inválida." });
@@ -598,6 +642,7 @@ app.post("/api/google-drive/files/:fileId/playback", async (request, response) =
   if (!apiRateLimit(request, response, user.id, 120)) return;
   const roomId = typeof request.body?.roomId === "string" ? request.body.roomId : "";
   const house = social.getByRoom(roomId);
+  if (deletingRooms.has(roomId)) return response.status(409).json({ message: "Casa em exclusão." });
   if (!house || !social.isMember(house.id, user.id)) return response.status(403).json({ message: "Você não faz parte desta Casa." });
   try {
     const grant = googleDrive.getGrant(roomId, request.params.fileId);
@@ -616,6 +661,7 @@ const streamDrive = async (request: express.Request, response: express.Response)
   let cleanup = () => undefined;
   try {
     const ticket = googleDrive.verifyTicket(String(request.params.ticket), nonce);
+    if (deletingRooms.has(ticket.roomId)) return response.status(403).end();
     const house = social.getByRoom(ticket.roomId);
     if (!house || !social.isMember(house.id, ticket.viewerId) || !social.isMember(house.id, ticket.ownerId) || !driveMediaListed(ticket.roomId, ticket.fileId)) return response.status(403).end();
     const activeForViewer = [...(activeDriveStreams.get(ticket.roomId) ?? [])].filter((entry) => entry.viewerId === ticket.viewerId).length;
@@ -733,7 +779,7 @@ io.on("connection", (socket) => {
     if (!auth.resolveSession(socket.handshake.auth?.token ?? "")) return next(new Error("Sessão revogada."));
     if (socket.data.revoked) return next(new Error("Acesso à Casa revogado."));
     if (event !== eventNames.roomLeave && (!payload || typeof payload !== "object" || Array.isArray(payload))) return next(new Error("Payload inválido."));
-    if (event !== eventNames.roomJoin && joinedRoomId) { const house = social.getByRoom(joinedRoomId); if (!house || !social.isMember(house.id, user.id)) return next(new Error("Acesso à Casa revogado.")); }
+    if (event !== eventNames.roomJoin && joinedRoomId) { const house = social.getByRoom(joinedRoomId); if (deletingRooms.has(joinedRoomId) || !house || !social.isMember(house.id, user.id)) return next(new Error("Acesso à Casa revogado.")); }
     const ceiling = event === eventNames.chatMessage ? 20 : event === eventNames.reactionSend ? 40 : event === eventNames.chatTyping ? 60 : event === eventNames.voiceSignal ? 600 : 120;
     const now = Date.now(), key = `${user.id}:${event}`, bucket = socketEventAttempts.get(key);
     if (socketEventAttempts.size > 20_000) for (const [id, entry] of socketEventAttempts) if (entry.resetAt <= now) socketEventAttempts.delete(id);
@@ -747,6 +793,7 @@ io.on("connection", (socket) => {
     const parsed = joinRoomInputSchema.safeParse(rawInput);
     if (!parsed.success || parsed.data.user.id !== user.id) return socket.emit("server:error", "Não foi possível entrar na sala.");
     const { roomId } = parsed.data;
+    if (deletingRooms.has(roomId)) return socket.emit("server:error", "Casa em exclusão.");
     const house = social.getByRoom(roomId);
     if (!house || !social.isMember(house.id, user.id)) return socket.emit("server:error", "Você não faz parte desta Casa.");
     if (joinedRoomId && joinedRoomId !== roomId) {
@@ -823,6 +870,7 @@ io.on("connection", (socket) => {
         return socket.emit("server:error", message);
       }
     }
+    if (deletingRooms.has(parsed.data.roomId) || !social.getByRoom(parsed.data.roomId)) { googleDrive.revokeRoom(parsed.data.roomId); return respond?.({ ok: false, message: "Acesso à Casa revogado." }); }
     if (!social.isMember(social.getByRoom(parsed.data.roomId)?.id ?? "", user.id) || joinedRoomId !== parsed.data.roomId || !store.canAddToQueue(parsed.data.roomId, user.id)) return respond?.({ ok: false, message: "Acesso à Casa revogado." });
     const queue = store.addQueueItem(parsed.data.roomId, item);
     if (queue) {
@@ -893,6 +941,7 @@ io.on("connection", (socket) => {
       try { const verified = await youtube.getVideo(item.providerMediaId); item = { ...verified, id: item.id, addedBy: publicUser(user), addedAt: item.addedAt }; }
       catch (error) { return respond?.({ ok: false, message: error instanceof Error ? error.message : "Vídeo do YouTube indisponível." }); }
     }
+    if (deletingRooms.has(parsed.data.roomId) || !social.getByRoom(parsed.data.roomId)) { googleDrive.revokeRoom(parsed.data.roomId); return respond?.({ ok: false, message: "Acesso à Casa revogado." }); }
     if (!social.isMember(social.getByRoom(parsed.data.roomId)?.id ?? "", user.id) || joinedRoomId !== parsed.data.roomId || !store.canAddToQueue(parsed.data.roomId, user.id)) return respond?.({ ok: false, message: "Acesso à Casa revogado." });
     const result = store.playNext(parsed.data.roomId, item, parsed.data.revision);
     if (!result) return respond?.({ ok: false, message: "Party não encontrada." });
@@ -1072,6 +1121,7 @@ io.on("connection", (socket) => {
     homeStateBySocket.delete(socket.id);
     const userSockets = activeUserSockets.get(user.id); userSockets?.delete(socket.id);
     if (!userSockets?.size) { activeUserSockets.delete(user.id); const prior = accountOfflineTimers.get(user.id); if (prior) clearTimeout(prior); accountOfflineTimers.set(user.id, setTimeout(() => { if (activeUserSockets.has(user.id)) return; refreshAccountPresence(user.id, "OFFLINE"); void persistLastSeen(user.id).catch(() => log("warn", "last_seen_write_failed", { userId: user.id })); accountOfflineTimers.delete(user.id); }, 5_000)); }
+    if (socket.data.deletedHouseRoomId === joinedRoomId) return;
     if (!joinedRoomId) return;
     const roomId = joinedRoomId; leaveCall(roomId, user, socket.id);
     const wasSharing = screenOwnerSockets.get(roomId) === socket.id; const house = social.getByRoom(roomId);

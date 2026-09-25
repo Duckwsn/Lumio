@@ -33,4 +33,6 @@ export class CallRegistry {
   socketFor(roomId: string, userId: string) {
     return this.rooms.get(roomId)?.get(userId);
   }
+
+  clearRoom(roomId: string) { this.rooms.delete(roomId); }
 }

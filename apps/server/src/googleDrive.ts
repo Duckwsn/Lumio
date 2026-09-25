@@ -188,6 +188,10 @@ export class GoogleDriveService {
   }
   getGrant(roomId: string, fileId: string) { const key = this.grantKey(roomId, fileId), grant = this.grants.get(key); if (grant && grant.expiresAt <= Date.now()) this.grants.delete(key); return grant && grant.expiresAt > Date.now() && this.connections.has(grant.ownerId) ? grant : undefined; }
   revokeOwnerFromHouse(roomId: string, ownerId: string) { for (const [key, grant] of this.grants) if (key.startsWith(`${roomId}:`) && grant.ownerId === ownerId) this.grants.delete(key); }
+  revokeRoom(roomId: string) {
+    for (const [key] of this.grants) if (key.startsWith(`${roomId}:`)) this.grants.delete(key);
+    for (const [key, ticket] of this.tickets) if (ticket.roomId === roomId) this.tickets.delete(key);
+  }
   revokeViewer(viewerId: string) { for (const [key, ticket] of this.tickets) if (ticket.viewerId === viewerId) this.tickets.delete(key); }
   createPlaybackTicket(input: { roomId: string; fileId: string; viewerId: string; sessionToken: string; ownerIsMember: boolean; mediaIsListed: boolean }) {
     const grant = this.getGrant(input.roomId, input.fileId);

@@ -12,6 +12,21 @@ test("new users start without an automatic house", () => {
   const house = store.createHouse(host, "Casa Aurora"); assert.equal(store.role(house.id, host.id), "HOST");
 });
 
+test("deleting one House removes its membership and invitations without touching another", () => {
+  const store = new SocialStore();
+  const deleted = store.createHouse(host, "Descartável");
+  const kept = store.createHouse(host, "Preservada");
+  const invite = store.createInvite(deleted.id, host, { expiresInHours: 24, maxUses: 2 })!;
+  assert.equal(store.acceptInvite(invite.token, member).ok, true);
+  assert.equal(store.deleteHouse(deleted.id), true);
+  assert.equal(store.getHouse(deleted.id), undefined);
+  assert.equal(store.role(deleted.id, member.id), undefined);
+  assert.equal(store.inspectInvite(invite.token).status, "INVALID");
+  assert.equal(store.acceptInvite(invite.token, member).ok, false);
+  assert.equal(store.details(kept.id, host.id)?.name, "Preservada");
+  assert.equal(store.deleteHouse(deleted.id), false);
+});
+
 test("House details expose public profiles, not member account emails", () => {
   const store = new SocialStore();
   const user: User = { ...host, email: "private@example.test" };

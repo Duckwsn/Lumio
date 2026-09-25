@@ -1,6 +1,6 @@
 {
   "name": "@lumio/web",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -11,7 +11,7 @@
     "test": "tsx --test src/rtc/*.test.ts src/media/*.test.ts src/security.test.tsx src/pwaInstallState.test.ts && node --test scripts/sw.test.cjs"
   },
   "dependencies": {
-    "@lumio/shared": "0.1.0",
+    "@lumio/shared": "1.0.0",
     "@vitejs/plugin-react": "^4.3.4",
     "lucide-react": "^0.468.0",
     "react": "^18.3.1",

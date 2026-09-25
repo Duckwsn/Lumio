@@ -310,6 +310,7 @@ export interface ServerToClientEvents {
   "media-hub:update": (payload: { houseId: string; kind: "library" | "favorite" | "playlist" | "history" }) => void;
   "chat:typing": (payload: { roomId: string; userId: string; typing: boolean }) => void;
   "member:removed": (payload: { houseId: string; message: string }) => void;
+  "house:deleted": (payload: { houseId: string }) => void;
   "server:error": (message: string) => void;
 }
 

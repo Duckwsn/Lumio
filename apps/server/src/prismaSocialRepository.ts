@@ -45,6 +45,19 @@ export class PrismaSocialRepository {
     this.pending = operation.catch(() => { this.failed = true; });
     return operation;
   }
+
+  deleteHouse(houseId: string, actorId: string) {
+    if (this.failed) return Promise.reject(new Error("Persistência de Casas indisponível."));
+    const operation = this.pending.then(() => this.db.$transaction(async (tx) => {
+      const house = await tx.group.findUnique({ where: { id: houseId }, select: { ownerId: true, members: { where: { userId: actorId }, select: { role: true } } } });
+      if (!house) return "NOT_FOUND" as const;
+      if (house.ownerId !== actorId || house.members[0]?.role !== "HOST") return "FORBIDDEN" as const;
+      await tx.group.delete({ where: { id: houseId } });
+      return "DELETED" as const;
+    }));
+    this.pending = operation.then(() => undefined, () => undefined);
+    return operation;
+  }
   isHealthy() { return !this.failed; }
   async drain() { await this.pending; }
 }

@@ -1,4 +1,5 @@
-import { Fragment, useState, type FormEvent } from "react";
+import { Fragment, useRef, useState, type FormEvent } from "react";
+import { createPortal } from "react-dom";
 import { Check, Copy, Link2, Shield, Trash2, UserMinus, X } from "lucide-react";
 import { houseRolePermissions, type HouseDetails, type HouseInvite, type HouseRole, type Permission, type RoomSettings, type User } from "@lumio/shared";
 import { Avatar } from "./Avatar";
@@ -32,6 +33,21 @@ function MembershipActions({ apiUrl, token, house, onChanged, onLeft }: { apiUrl
   const [confirm, setConfirm] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [typedName, setTypedName] = useState("");
+  const deleting = useRef(false);
+  const closeDelete = () => { if (!deleting.current) { setConfirmDelete(false); setTypedName(""); setError(""); } };
+  const deleteHouse = async (event: FormEvent) => {
+    event.preventDefault();
+    if (deleting.current || typedName !== house.name || house.role !== "HOST") return;
+    deleting.current = true; setBusy(true); setError("");
+    try {
+      const response = await fetch(`${apiUrl}/api/houses/${house.id}`, { method: "DELETE", headers: { Authorization: `Bearer ${token}` } });
+      if (!response.ok) { const data = await response.json().catch(() => ({})) as { message?: string }; setError(data.message ?? "Não foi possível excluir a Casa."); return; }
+      onLeft();
+    } catch { setError("Sem conexão. A Casa pode não ter sido excluída; atualize antes de tentar novamente."); }
+    finally { deleting.current = false; setBusy(false); }
+  };
   const act = async () => {
     setBusy(true); setError("");
     try {
@@ -42,9 +58,17 @@ function MembershipActions({ apiUrl, token, house, onChanged, onLeft }: { apiUrl
     } catch { setError("Sem conexão. Tente novamente."); }
     finally { setBusy(false); }
   };
+  if (confirmDelete) return createPortal(<div className="dialog-backdrop house-delete-backdrop" onMouseDown={(event) => { if (event.currentTarget === event.target) closeDelete(); }}><section className="dialog social-dialog house-delete-confirm" role="dialog" aria-modal="true" aria-label="Confirmação de exclusão da Casa" onKeyDown={(event) => { if (event.key === "Escape") { event.stopPropagation(); closeDelete(); } }}>
+    <h3>Excluir Casa permanentemente?</h3>
+    <p>Isso apaga a Party, mensagens, fila, biblioteca, playlists e convites desta Casa para todos os membros. Esta ação não pode ser desfeita. As contas dos membros e seus arquivos no Google Drive não serão excluídos.</p>
+    <form onSubmit={(event) => void deleteHouse(event)}><label>Digite <strong>{house.name}</strong> para confirmar<input autoFocus autoComplete="off" value={typedName} onChange={(event) => setTypedName(event.target.value)} disabled={busy} /></label>
+    {error ? <p className="form-error" role="alert">{error}</p> : null}
+    <div className="house-delete-actions"><button type="button" disabled={busy} onClick={closeDelete}>Cancelar</button><button type="submit" className="house-delete-button" disabled={busy || typedName !== house.name}>{busy ? "Excluindo…" : "Excluir Casa permanentemente"}</button></div></form>
+  </section></div>, document.body);
   return <div className="membership-actions">
     {house.role === "HOST" ? <><strong>Transferir a Casa</strong><p>Você passará a ser admin. Só o novo host poderá transferir a Casa novamente.</p><label>Próximo host<select value={targetId} onChange={(event) => { setTargetId(event.target.value); setConfirm(false); }}><option value="">Escolha um membro</option>{house.members.filter((member) => member.role !== "HOST").map((member) => <option key={member.user.id} value={member.user.id}>{member.user.displayName}</option>)}</select></label><button disabled={!targetId || busy} onClick={() => setConfirm(true)}>Transferir host</button>{confirm ? <div className="inline-confirm" role="group" aria-label="Confirmar transferência"><span>Confirmar transferência para {house.members.find((member) => member.user.id === targetId)?.user.displayName}?</span><button disabled={busy} onClick={() => void act()}>{busy ? "Transferindo…" : "Confirmar"}</button><button onClick={() => setConfirm(false)}>Cancelar</button></div> : null}</> : <><strong>Sair da Casa</strong><p>Você perderá acesso à Party, à biblioteca e aos convites desta Casa.</p>{confirm ? <div className="inline-confirm" role="group" aria-label="Confirmar saída"><button disabled={busy} onClick={() => void act()}>{busy ? "Saindo…" : "Confirmar saída"}</button><button onClick={() => setConfirm(false)}>Cancelar</button></div> : <button onClick={() => setConfirm(true)}>Sair da Casa</button>}</>}
     {error ? <p className="form-error" role="alert">{error}</p> : null}
+    {house.role === "HOST" ? <div className="house-danger-zone"><strong>Zona de perigo</strong><p>Exclui esta Casa e todo o conteúdo compartilhado dela para todos os membros.</p><button className="house-delete-button" onClick={() => { setError(""); setConfirmDelete(true); }}>Excluir Casa…</button></div> : null}
   </div>;
 }
 
