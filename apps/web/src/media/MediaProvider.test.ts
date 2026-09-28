@@ -2,15 +2,16 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { MediaState } from "@lumio/shared";
 import { DriveProvider, YouTubeProvider, MediaController, type MediaProviderAdapter } from "./MediaProvider";
-import { chatSnapExpanded } from "../components/MobilePartyChat";
+import { shouldDismissSheet } from "../components/MobileBottomSheet";
 
 const media = (provider: "youtube" | "google-drive", revision: number): MediaState => ({ mediaId: `${provider}-${revision}`, provider, type: "video", title: "Teste", state: "paused", position: 0, duration: 60, playbackRate: 1, startedAt: null, updatedAt: 0, controlledBy: "test", revision });
 
-test("chat snap combines position and directional velocity", () => {
-  assert.equal(chatSnapExpanded(200, 300, 86, 0), true);
-  assert.equal(chatSnapExpanded(100, 300, 86, 0), false);
-  assert.equal(chatSnapExpanded(290, 300, 86, 0.5), false);
-  assert.equal(chatSnapExpanded(90, 300, 86, -0.5), true);
+test("secondary sheet dismissal combines distance and downward velocity", () => {
+  assert.equal(shouldDismissSheet(200, 400, 0), true);
+  assert.equal(shouldDismissSheet(20, 400, 0), false);
+  assert.equal(shouldDismissSheet(20, 400, 0.5), true);
+  assert.equal(shouldDismissSheet(0, 400, 0.5), false);
+  assert.equal(shouldDismissSheet(20, 400, -0.5), false);
 });
 
 test("YouTube reconciles either readiness order, latest media and autoplay gesture locally", async () => {

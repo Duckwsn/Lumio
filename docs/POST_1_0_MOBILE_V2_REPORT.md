@@ -1,108 +1,152 @@
-# PÓS-1.0 — MOBILE EXPERIENCE V2
+# PÓS-1.0 — MOBILE EXPERIENCE V2 — adendo aplicado
 
-Data: 28/09/2026. Base: `master`, commit `ced5dd4fb7745d43fc9557ff3e333703b4d6bd99`.
-Sem alterações pré-existentes no início. Sem commit, push ou deploy automático.
+Data: 28/09/2026. Base deste adendo: `336edcc` (Lumio 1.1).
+O Git estava limpo antes das alterações. Não houve commit, push, deploy, alteração de OAuth/scopes, banco, APIs/chaves ou protocolo de sincronização.
 
-## Auditoria e problemas iniciais
+**Este relatório substitui a versão anterior deste ciclo.** Foram descartados o chat arrastável/recolhível e sua ocultação pelo modo cinema. A imagem de referência agora orienta exclusivamente os sheets de Pessoas e Fila.
 
-Foram lidos os guias do repositório e os relatórios finais disponíveis. O código, não os relatórios históricos, orientou as mudanças.
+## 1. MOBILE PARTY — composição final
 
-O chat era montado no drawer apenas após escolher Chat. O mobile reutilizava a navegação Chat/Pessoas/Fila e regras `:has(.party-drawer.is-chat)` para reorganizar a Party. A composição não oferecia chat permanente nem gesto de recolhimento.
+Até 900px, Player/Ambiente e Chat são regiões estruturais do mesmo workspace. O Chat fica abaixo do palco também em paisagem; mensagens têm scroll interno, composer fixo na região e ferramentas Pessoas/Fila/Adicionar. Não há handle, altura manipulada por gesto, toggle, botão de fechar, estado collapsed/expanded ou armazenamento desse estado.
 
-O problema dos controles ficou mapeado concretamente: `@media (hover:none)` forçava `opacity:1` e `pointer-events:auto` nos controles. Além disso, o timer não era iniciado consistentemente na reprodução normal, e interações podiam cancelá-lo sem reiniciá-lo. Isso contradizia o estado de visibilidade do React. A regressão E2E verifica a opacidade efetiva, não só a classe.
+A altura usa distribuição flexível do espaço disponível, com mínimo para cabeçalho/composer. A integração existente com VisualViewport/--visual-height, viewport-fit=cover, fonte de 16px e safe areas permanece. Viewport reduzida é cobertura automatizada, não prova de teclado real iOS.
 
-A execução em paisagem também revelou que o aviso de autoplay ficava abaixo dos controles, que interceptavam seu botão de retomada. O aviso agora tem prioridade na camada visual. A inspeção das capturas mostrou corte do composer por espaços fixos; a área de mensagens foi compactada e o cabeçalho/alça compartilham uma linha em paisagem. Há uma asserção específica de composer totalmente dentro da viewport.
+O microfone junto ao composer conserva entrada/mute/deafen, áudio bloqueado, screen share por capacidade e configurações. Não foram alterados tracks, peers, signaling ou captura.
 
-O adapter Drive aguardava o ticket HTTP, mas não `loadedmetadata`, antes de seek/play. Um teste novo, executado antes da correção, falhou porque playback era solicitado com `readyState=0`. Também havia risco de aplicar um snapshot antigo após uma operação assíncrona mais nova. No YouTube, o ready já era aguardado; a auditoria identificou necessidade de invalidar sincronizações pendentes antigas e tratar CUED/autoplay explicitamente. Não se afirma ter reproduzido a causa única do relato em YouTube real/iOS.
+### Pessoas e Fila
 
-## Nova composição mobile
+Reutilizam o mesmo drawer e seus conteúdos/permissões existentes. No mobile, são sheets sobre o workspace, sem aba Chat. O handle compartilhado `MobileSheetHandle`:
 
-Até 900px, `MobilePartyChat` é parte estrutural do workspace, abaixo do palco. Acima disso, o drawer e dock desktop continuam como antes. O breakpoint já era utilizado pelo projeto para layout mobile/tablet e inclui celulares em paisagem.
+- captura Pointer Events somente na alça; mensagens/listas mantêm scroll;
+- acompanha o gesto com translateY, armazenando coordenadas/velocidade em refs, sem renderizar o App a cada pixel;
+- fecha com deslocamento superior a 30% da altura ou gesto descendente acima de 0,35px/ms, desde que exceda 8px;
+- retorna à posição inicial em gesto insuficiente ou cancelado;
+- permite toque, Enter/Espaço, botão Fechar e Escape do drawer existente;
+- usa transição de 180ms para fechamento/retorno; reduced motion elimina a transição;
+- limpa o timer ao desmontar, respeita safe area e restaura o foco pelo fluxo existente de closeDrawer.
 
-- Ao entrar, o chat começa expandido; seu estado não é persistido. A chave da Party reinicia o painel para outra sala.
-- A alça é um botão com área de 44px, `aria-expanded`, `aria-controls` e rótulo Recolher/Expandir. Toque, Enter e Espaço oferecem alternativa ao arraste.
-- Somente a alça captura Pointer Events. Mensagens conservam seu scroll independente e overscroll contido.
-- Durante o gesto, refs atualizam diretamente a altura; React recebe apenas o snap final. Nenhum estado visual é enviado pelo Socket.IO. Esta aplicação das orientações React evita renderizar toda a Party a cada pixel.
-- Há dois snaps, expanded/collapsed. Velocidade direcional acima de 0,35px/ms decide o sentido; gestos lentos usam o ponto médio. Cancelamento restaura o estado anterior.
-- Recolhido, ficam a alça, o título e ferramentas. O corpo fica inacessível por `inert`/`aria-hidden` e não recebe foco. A transição é curta e desabilitada em reduced motion.
-- Pessoas/Fila usam o drawer secundário existente, sem aba Chat no mobile. Adicionar mídia continua disponível no cabeçalho do chat e no menu da Party.
-- O botão de microfone abre controles de call junto ao composer: microfone, áudio, compartilhamento quando suportado e configurações. Foi preservado o fallback para liberar áudio bloqueado da call.
-- Cinema esconde o chat sem desmontá-lo, preservando rascunho/estado. Fullscreen mantém a superfície Lumio existente, inclusive tentativa de landscape e fallback/aviso quando o navegador não permite orientação nativa.
+Abrir/fechar sheets altera só a UI local. Player, chat, socket e call continuam na árvore da Party. O teste monitora construções/destruições do player ao repetir esses ciclos.
 
-## Viewport, teclado e scroll
+### Cinema não é fullscreen
 
-O workspace mobile ocupa o espaço restante, sem scroll externo concorrente. Player e mensagens têm regiões próprias. `ResizeObserver` recalcula o limite expandido ao mudar a altura; continua sendo utilizada a integração existente com `VisualViewport`/`--visual-height`. O composer inclui safe-area inferior e fonte de 16px. Uma viewport reduzida é testada, mas não equivale a abrir teclado real de Safari/iOS. Safe areas físicas, browser chrome e PWA standalone exigem aparelho real.
+Cinema é preferência de layout local, não a Fullscreen API. **No mobile, não esconde Chat nem sheets.**
+MediaStage notifica o App quando o elemento persistente entra em fullscreen nativo ou fallback ampliado. Só essa condição oculta o Chat por atributo hidden, sem desmontá-lo. Ao sair, retorna automaticamente; rascunho e mensagens permanecem.
 
-O meta viewport passou a incluir `viewport-fit=cover` para permitir utilização dos safe-area insets. Em paisagem a alça mantém alvo de 44px, mas compartilha a linha com título/ferramentas; o estado recolhido ocupa menos altura.
+A tentativa de travar orientação landscape continua por capability detection. Sem suporte, permanece orientação manual/aviso. Escape encerra o fallback mesmo quando um botão está focado. Desktop continua com dock/drawer anteriores.
 
-## Player e sincronização
+## 2. PLAYER — correções anteriores preservadas
 
-Os controles não são mais forçados visíveis em touch. Reprodução + 2,6s sem interação esconde-os; toque revela novamente. Pausa mantém controles visíveis. Seek/pointer ativo e foco de select/teclado protegem a interação. Há tratamento de cancelamento e reinício do timer.
+Não foi reescrito MediaController nem alterado o contrato de playback nesta rodada.
 
-O servidor segue sendo a autoridade: mediaId, revision, operationId, reconnect snapshots e cálculo temporal existentes foram preservados. Não há polling novo nem seek por frame.
+- Touch revela controles; 2,6s ociosos em reprodução os ocultam. Pausa, seek ativo e interação protegida mantêm acesso.
+- Late join aplica snapshot autoritativo após readiness do adapter. YouTube reconcilia latest snapshot/ready/CUED; Drive aguarda ticket e loadedmetadata, cancela trabalho obsoleto e aplica seek inicial.
+- Revisões antigas continuam rejeitadas, mesmo em resync forçado.
+- Bloqueio de autoplay continua como estado próprio: “Toque para entrar na reprodução”. O gesto busca a posição atual e retoma localmente, sem emitir Play compartilhado ou reiniciar outros clientes.
+- Fonte de tempo permanece a existente: posição local do adapter e autoridade mediaId/revision/startedAt do servidor. Não há clock paralelo, intervalos novos de sync ou eventos de letras.
 
-O controller registra a revisão na chegada, não só na conclusão; uma revisão inferior é ignorada mesmo em resync forçado. Adapters usam gerações para impedir aplicação tardia de trabalho supersedido.
+Os testes existentes de readiness, PAUSED/PLAYING, supersessão, tickets, abort/destroy e retomada local continuam aprovados.
 
-- YouTube: aguarda ready, carrega a mídia mais recente e reconcilia também em CUED. A posição é calculada no instante de aplicação, usando `expectedPosition` existente.
-- Drive: reutiliza a operação pendente da mesma mídia; aguarda metadados antes do seek/play; troca de mídia e destroy abortam tickets/esperas. A primeira aplicação usa seek mesmo com drift pequeno. Recuperação de ticket usa a posição/estado autoritativos mais recentes.
-- Autoplay: `onAutoplayBlocked` do YouTube e `NotAllowedError` do HTML video distinguem bloqueio de política. A tela oferece “Toque para entrar na reprodução”. O gesto recalcula a posição e executa play localmente, sem emitir um comando compartilhado de Play. O aviso só desaparece após evento real de playing.
+## 3. AMBIENTE — causa e arquitetura corrigida
 
-Referência primária consultada: [YouTube IFrame API — onAutoplayBlocked](https://developers.google.com/youtube/iframe_api_reference). Nenhuma política de autoplay é burlada.
+Antes, `.music-presentation` era um cartão pequeno: left/right/bottom fixos, capa de 58px e fundo translúcido. O iframe/video normal permanecia visível atrás. Além disso, regras explícitas de :fullscreen/fallback-fullscreen ocultavam a apresentação.
 
-## Remoção global de reações
+Agora, o Ambiente ocupa **toda a player-frame** e apresenta artwork + título + canal/provider sobre superfície própria. O visual normal fica com opacity:0/pointer-events:none; o iframe/video e adapter **continuam montados**, sem criar player de áudio paralelo.
 
-Removidos controles, efeito flutuante, estado/timer/listener/emissão do App, nomes/assinaturas shared, handler e limite específico no servidor, CSS/keyframes e demonstração/copy de reações da Landing. A Landing não foi redesenhada. Relatórios antigos continuam como registro histórico; esta seção substitui suas menções à feature. Emoji comum digitado em mensagens não foi proibido.
+Não se trata de corrigir empilhamento de dois players: existe um engine e uma apresentação alternativa. Classes locais mudam a superfície; não participam das dependências de criação do controller. Fullscreen usa a mesma superfície e não remove Ambiente.
 
-## Cobertura e limitações
+A barra compartilhada conserva play/pause, seek, mute/volume por capacidade, fullscreen e botão Entrar/Sair do Ambiente, inclusive dentro de fullscreen. Não existe segunda barra. O botão usa a preferência `lumio.presentation.v1` existente; alternar não muda a visualização dos outros participantes.
 
-Unitários novos cobrem snaps por posição/velocidade, YouTube snapshot-before-ready/ready-before-snapshot, mudança de mídia durante entrada, PAUSED, rejeição de revisão antiga, autoplay bloqueado e retomada local; Drive metadata-before-play, revisão PAUSED mais nova durante espera, ready-first, política bloqueada e gesto de retomada. Testes existentes de abort/destroy/ticket antigo continuam.
+Layout adapta portrait, landscape, baixa altura e desktop, sem redesenhar Party/Landing. Erros de reprodução e fallback de gesto continuam prioritários e não são ocultados pelo artwork.
 
-Playwright usa servidor local isolado, contas/outbox descartáveis e Socket.IO real. O cenário desktop cobre Landing/login/restauração/Casa/Party/drawers/Media Hub/exclusão/logout. O cenário touch cobre chat inicial, toggle acessível, arraste com movimento antes de soltar, mensagem, Pessoas/Fila sem Chat tab, call menu, seis larguras (320/360/375/390/412/430), paisagem, viewport reduzida, cinema/restauração, reentrada expandida, ausência de reações, late join PLAYING/PAUSED e fallback de autoplay.
+## 4. AMBIENT LIGHT — estratégia legítima
 
-O player YouTube no E2E é uma fixture controlada; Drive é coberto por adapters com video/fetch simulados e testes de API existentes. Isso não comprova reprodução oficial, autoplay ou streaming Google real em aparelhos. Nenhuma conta Google, credencial, banco ou Casa hospedados foram usados nestes testes.
+### Antes e causa da baixa visibilidade
 
-## Resultados finais
+O efeito estava atrás do player (z-index negativo), com blur de 54px e override reduzindo opacidade para 9%. A superfície opaca do player e o recorte do workspace mobile limitavam sua presença visual. Não havia leitura de frames nem fonte dinâmica de cores.
 
-STATUS: **PASS_WITH_MANUAL_QA**.
+### Agora
 
-| Validação | Resultado |
+A luz fica numa camada decorativa dentro da superfície, sem interceptar toque. Em Vídeo, uma máscara radial concentra a impressão luminosa nas bordas. Em Ambiente, ocupa difusamente o fundo. Opacidades são 32%/26%, com saturação moderada e blur estático de 24px. O gradiente base Lumio mantém fallback mesmo sem artwork ou se a imagem falhar.
+
+A fonte é o thumbnail já existente nos metadados; YouTube pode usar o endereço padrão de thumbnail do vídeo identificado pela integração. Não há scraping, proxy de vídeo, extração de áudio/frames, canvas ou leitura cross-origin.
+
+**Não acompanha frames reais do YouTube.** A cor/impressão vem do artwork estável e muda quando a mídia/artwork muda. Não se calcula numericamente uma paleta de pixels. Isso é um compromisso visual explícito, não sincronização cromática em tempo real.
+
+### Frequência e desempenho
+
+Não há polling/RAF/intervalo novo. A fonte muda por troca de mídia/artwork; fade de entrada de 600ms e transição de opacidade de 500ms suavizam as mudanças. Blur não é animado continuamente. Respeita prefers-reduced-motion; liga/desliga da luz funciona também com Ambiente ativo. Não depende de medir cada frame ou atualizar o App durante playback.
+
+Sem benchmark de bateria/aparelho fraco: inspeção de código e regressões não comprovam custo energético em todos os dispositivos. A opção de desligar permanece.
+
+### Drive
+
+O serviço atual solicita `id,name,mimeType,size,modifiedTime,videoMediaMetadata(durationMillis),capabilities(canDownload)`, não thumbnailLink. Não foram ampliados campos/scopes nem expostas URLs privadas. Na ausência de thumbnail já fornecida, usa símbolo Lumio e iluminação base. Um futuro artwork privado precisa respeitar autorização/cache existentes.
+
+## 5. LYRICS — capability e decisão pendente
+
+**LYRICS_PROVIDER_DECISION_REQUIRED**
+
+A busca nas fontes apps/packages e configuração de exemplo não encontrou integração legítima de letras. YouTube fornece título/canal/thumbnail/duração; Drive fornece metadados de arquivo/vídeo, não letras temporizadas.
+
+`lyricsCapability(media)` declara indisponibilidade com motivo `provider-decision-required`. A seleção de apresentação consome essa capacidade e mantém Artwork View sem erro principal. Texto arbitrário em metadata, títulos ou captions não é tratado como fonte aprovada. Não há heurística para declarar todo YouTube como música.
+
+Nesta versão **não existe Lyrics View ativa nem sincronização de linhas**: sem fonte legítima, não foram fabricadas letras, timestamps ou provas de reprodução temporizada. A estrutura/fallback está pronta para uma decisão posterior, que deve definir fonte, licença, identificação e necessidade de credenciais. Não foi contratado/integrado serviço algum.
+
+Quando houver uma fonte aprovada temporizada, a apresentação deverá derivar a linha do playhead local existente, inclusive em seek/pause/reconnect, sem relógio separado ou novo evento Socket.IO. Isso é requisito futuro, não funcionalidade declarada pronta.
+
+Artwork ausente/inválido/quebrado retorna ao símbolo oficial Lumio. Título vazio usa “Mídia da Party”; canal ausente usa o provider. Ambiente funciona também em documentários e outros vídeos não musicais.
+
+## 6. REACTIONS
+
+A remoção global da rodada anterior permanece: nenhum controle, efeito flutuante, evento reaction:send, handler específico ou demonstração de reação foi reintroduzido. Emoji comum em mensagem não é uma reação da feature. Relatórios antigos são históricos.
+
+## 7. TESTS e evidências
+
+STATUS: **PASS_WITH_MANUAL_QA**; letras permanecem decisão externa declarada.
+
+| Validação | Resultado final |
 | --- | --- |
-| `npm run typecheck` | PASS |
-| `npm run lint` | PASS (scripts do projeto: TypeScript, não ESLint) |
-| `npm test` | 78 PASS: servidor 60, web 14, service worker 4; 5 SKIP de PostgreSQL |
-| `npm run test:e2e` | 2 PASS: desktop e mobile touch; última execução completa: 31,0s |
-| `npm run build` | PASS: shared, servidor e web |
+| `npm run typecheck` | PASS: shared, server, web |
+| `npm run lint` | PASS: scripts TypeScript do projeto, não ESLint |
+| `npm test` | 81 PASS: server 60, web 17, service worker 4; 5 SKIP PostgreSQL |
+| `npm run test:e2e` | 2 PASS: última suíte completa 57,6s |
+| `npm run build` | PASS: shared, server, web |
 | `git diff --check` | PASS |
-| Busca de código runtime de reações | Nenhuma ocorrência em fontes apps/packages |
 
-Os 5 testes PostgreSQL e smokes dependentes de banco não foram executados: não há `LUMIO_TEST_DATABASE_URL` configurada e o daemon Docker local está desligado. Não se utilizou banco hospedado. Sem alterações de schema, `db:generate`/migrations não são necessários nesta atualização. Smokes locais HTTP/Socket.IO fazem parte da suíte de integração/E2E, mas não substituem o smoke de produção PostgreSQL.
+Os cinco testes PostgreSQL foram pulados pela suíte, sem banco de teste configurado. Esta mudança é de apresentação; nenhum schema/migration foi alterado e nenhum banco hospedado foi utilizado.
 
-Uma execução E2E foi interrompida pelo encerramento inesperado do worker Windows (`3221226505`), antes do cenário desktop (0ms). A suíte foi repetida integralmente, sem alterar código para contornar a falha, e terminou com os dois cenários aprovados. Não foi determinada a causa do encerramento do processo.
+Smoke adicional com agent-browser em preview local do build: Landing renderiza e o CTA Entrar navega ao formulário. Esse preview não tinha backend associado; o formulário mostrou “Failed to fetch” ao consultar configuração. Isso **não** valida login nesse preview. O login completo é validado separadamente no E2E isolado com API local. Nenhum login Google real foi solicitado.
 
-Capturas locais inspecionadas: `test-results/mobile-chat-430.png`, `mobile-landscape.png` e `mobile-fullscreen.png`. São artefatos ignorados e podem ser substituídos na próxima execução dos testes. O fullscreen capturado mostra a superfície Lumio em paisagem sem chat externo. Resta validar em dispositivo real.
+### Cobertura
 
-## Arquivos principais
+- Unitários: fonte visual válida/inválida, fallback YouTube/Drive, metadata incompleta, ausência legítima de letras, imutabilidade do estado autoritativo e decisão de fechamento de sheet.
+- Composição Drive: renderização de um único video, uma única superfície de controles, apresentação alternativa e marca fallback; não é streaming Google real.
+- Integração existente: auth/security, Drive OAuth/grants/tickets/Range, servidor HTTP e Socket.IO, provider readiness/supersessão/abort, WebRTC signaling e PWA.
+- E2E desktop: Landing/login/restauração/Casa/Party/drawers/Media Hub/exclusão/logout.
+- E2E mobile com Socket.IO real e provider YouTube simulado: chat sem handle/toggle, mensagem, sheets com movimento antes de soltar, snap-back/drag dismiss/toque/teclado/reaberturas, instância do player preservada, seis larguras, paisagem, cinema com chat, fullscreen sem chat/restauração, late join PLAYING/PAUSED, bloqueio de autoplay e gesto.
+- Ambiente: superfície completa mobile/desktop/fullscreen, provider visual oculto, posição/contagem de play e construção preservadas ao alternar, preferência local conservada na reentrada, mídia nova, pause/play/seek, artwork quebrado, ausência de lyrics, toggle de luz e reduced motion.
+- Visual: capturas mobile-ambiente, mobile-chat-430, mobile-landscape, mobile-fullscreen, desktop-ambiente, mobile-people-sheet e mobile-queue-sheet em test-results. Arquivos ignorados/descartáveis de teste.
 
-- `apps/web/src/components/MobilePartyChat.tsx`: composição, acessibilidade, gesto/snaps e breakpoint.
-- `apps/web/src/App.tsx`: chat estrutural, ferramentas e call composer; retirada de reações.
-- `apps/web/src/components/MediaStage.tsx`: controles e fallback de gesto.
-- `apps/web/src/media/MediaProvider.ts`: readiness, supersessão e retomada local.
-- `apps/web/src/media/MediaProvider.test.ts`, `e2e/party.spec.ts`: cobertura de regressão.
-- `apps/web/src/styles.css`, `apps/web/src/landing.css`, `apps/web/src/components/LandingPage.tsx`: layout e retirada da feature obsoleta.
-- `apps/web/index.html`: viewport-fit para safe areas.
-- `packages/shared/src/index.ts`, `apps/server/src/index.ts`: retirada do contrato/handler de reações.
+A comparação de dimensões na troca de viewport foi ajustada para ler pai/filho no mesmo instante e aguardar a acomodação do layout; antes, duas leituras separadas capturavam alturas de instantes diferentes. Não foi ocultada falha funcional por aumentar tolerância arbitrária.
 
-Não foram alterados OAuth/scopes, schema/migrations, arquitetura WebRTC, providers, TURN ou variáveis reais de produção.
+Os arrastes automatizados usam Pointer Events via mouse em contexto touch Chromium. Gesto de dedo físico, teclado móvel e orientação real ainda exigem aparelho. YouTube E2E é fixture, não autenticação/reprodução oficial. Drive tem testes de lógica/composição/adapters/API simulados, **não E2E de streaming real neste adendo**. Nenhuma conta, Casa, chave ou banco hospedado foi usada.
 
-## MANUAL_REQUIRED — roteiro em aparelho real
+## 8. MANUAL_REQUIRED
 
-1. Em Android Chrome e iPhone Safari, entrar numa Party: player e chat já presentes. Repetir como PWA standalone.
-2. Arrastar só pela alça para baixo/cima; testar gesto lento/rápido, toque e cancelamento. Scroll de mensagens não deve arrastar painel.
-3. Abrir teclado, digitar/enviar, fechar teclado e girar o aparelho. Conferir composer, player, safe areas e ausência de scroll horizontal.
-4. Abrir Pessoas, Fila e menu do microfone; testar entrada/mute/áudio bloqueado e compartilhamento onde suportado.
-5. Com vídeo tocando, aguardar os controles desaparecerem; tocar para revelar. Manipular seek sem desaparecer durante o gesto. Pausar.
-6. Cinema/fullscreen em paisagem: chat não cobre vídeo; sair restaura chat/rascunho. Quando orientação não puder ser travada, girar manualmente.
-7. Com duas contas/celulares, entrar durante PLAYING e PAUSED. Repetir com YouTube e Drive real, troca de mídia durante entrada e reconexão.
-8. Se autoplay for bloqueado, confirmar aviso e um único gesto para entrar no ponto atual sem pausar/reiniciar os demais.
+1. Android Chrome/iPhone Safari/PWA: Chat fixo ao entrar, sem handle/toggle e sem scroll externo/horizontal. Girar e abrir/fechar teclado com Vídeo e Ambiente, conferindo composer/safe areas.
+2. Pessoas/Fila: arraste físico lento/rápido, cancelamento, scroll interno, toque, teclado e fechamento/reabertura. Validar reorder/remover/adicionar existentes e foco. Call e player não podem reiniciar.
+3. Cinema: Chat continua. Fullscreen em landscape: Chat some; sair restaura mensagem em rascunho. Repetir Vídeo/Ambiente, native/fallback e browser sem orientation lock.
+4. YouTube oficial e Drive autorizado: trocar apresentação, mídia/provider, play/pause/seek/volume e fullscreen mantendo reprodução/posição. Conferir vídeo normal não aparecendo atrás do Ambiente.
+5. Duas contas/dispositivos: late join durante PLAYING e PAUSED, também com Ambiente salvo localmente; reconnect/troca de mídia durante entrada e autoplay bloqueado.
+6. Luz em thumbnails claras/escuras, mídia sem capa e dispositivos fracos: perceptível mas sem brilho excessivo; desligar e reduced motion. Ela representa artwork, não frames.
+7. Call/screen share reais durante chat/sheets/troca de apresentação: ouvir/mutar/compartilhar sem duplicar peers/tracks. TURN continua dependente da configuração existente.
+8. Letras: somente após escolha explícita de fonte legítima; validar temporização por playhead local, seek/pause/resume/reconnect e fonte indisponível. Não é teste possível nesta versão.
 
-Deploy: não realizado. Commit/push: responsabilidade do proprietário.
+## 9. Arquivos e entrega
+
+Alterados: App.tsx, MobilePartyChat.tsx, MediaStage.tsx, styles.css, MediaProvider.test.ts e e2e/party.spec.ts.
+Novos: MobileBottomSheet.tsx, AmbientArtwork.tsx, AmbientPresentation.ts e AmbientPresentation.test.ts.
+Atualizado este mesmo relatório, sem manter requisitos antigos conflitantes como descrição da implementação atual.
+
+As orientações React influenciaram refs para gesto frequente e preservação do engine; o navegador e capturas complementam testes determinísticos. Não foram alterados schema, migrations, OAuth, provider de mídia, backend de sync, Landing ou versão do produto.
+Commit/push/deploy: não realizados por este trabalho.
