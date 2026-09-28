@@ -50,6 +50,7 @@ import { PrismaSocialRepository } from "./prismaSocialRepository.js";
 import { PrismaDriveVault } from "./prismaDriveVault.js";
 import { PrismaMediaRepository } from "./prismaMediaRepository.js";
 import { validateProductionEnvironment } from "./productionConfig.js";
+import { bootFailureFields, type BootStage } from "./bootDiagnostics.js";
 
 // npm workspaces execute this package with apps/server as the working directory.
 // Resolve the project-level environment file from this module so dev and dist agree.
@@ -1123,21 +1124,32 @@ io.on("connection", (socket) => {
 });
 
 const boot = async () => {
+  let bootStage: BootStage = "PRISMA_CONNECT";
   try {
     if (db && authRepository && socialRepository) {
-      await db.$connect(); await authRepository.load(); await googleDrive.initialize();
-      for (const house of await socialRepository.load()) store.addHouseRoom(house);
+      await db.$connect();
+      bootStage = "AUTH_RESTORE";
+      await authRepository.load();
+      bootStage = "DRIVE_RESTORE";
+      await googleDrive.initialize();
+      bootStage = "HOUSE_RESTORE";
+      const houses = await socialRepository.load();
+      bootStage = "ROOM_RESTORE";
+      for (const house of houses) store.addHouseRoom(house);
+      bootStage = "MEDIA_RESTORE";
       await mediaRepository?.load();
     }
+    bootStage = "HTTP_LISTEN";
     httpServer.listen(PORT, () => { log("info", "server_listening", { port: PORT }); });
-  } catch {
-    log("error", "server_boot_failed", { category: "PERSISTENCE_OR_CONFIGURATION" });
-    await db?.$disconnect();
+  } catch (error) {
+    log("error", "server_boot_failed", { category: "PERSISTENCE_OR_CONFIGURATION", ...bootFailureFields(bootStage, error) });
     process.exitCode = 1;
+    try { await db?.$disconnect(); }
+    catch (cleanupError) { log("error", "server_boot_cleanup_failed", bootFailureFields(bootStage, cleanupError)); }
   }
 };
 void boot();
-httpServer.on("error", (error) => { log("error", "server_listen_error", { code: "code" in error ? String(error.code) : "UNKNOWN" }); process.exitCode = 1; });
+httpServer.on("error", (error) => { log("error", "server_listen_error", bootFailureFields("HTTP_LISTEN", error)); process.exitCode = 1; });
 
 const shutdown = (signal: "SIGINT" | "SIGTERM") => {
   if (shuttingDown) return;
