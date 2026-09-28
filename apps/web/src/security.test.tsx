@@ -7,6 +7,7 @@ import { safeAuthDestination } from "./authNavigation";
 import { HomePage } from "./components/EntryExperience";
 import { parseInviteInput } from "./inviteInput.js";
 import { MainStage } from "./components/MainStage";
+import { GameHub } from "./components/GameHub";
 
 test("post-login destination rejects cross-origin and protocol-relative redirects", () => {
   const origin = "https://lumio.example.test";
@@ -44,4 +45,10 @@ test("game presentation keeps the existing YouTube surface visible instead of ba
   assert.match(html, /game-media-visible/); assert.equal(html.includes('inert=""'), false);
   assert.equal((html.match(/<iframe/g) ?? []).length, 1);
   assert.equal(html.includes("Iniciar jogo"), false);
+});
+test("Game Hub shows one real game with original vector identity and concise accessible copy", () => {
+  const html = renderToStaticMarkup(createElement(GameHub, { onBack: () => undefined, onFullscreen: () => undefined, fullscreen: false }));
+  assert.equal((html.match(/class="draw-entry"/g) ?? []).length, 1);
+  assert.match(html, /draw-game-icon/); assert.match(html, /2–12 jogadores/);
+  for (const text of ["Em breve", "Na mesma Party", "Desenhe, adivinhe e ria"]) assert.equal(html.includes(text), false);
 });

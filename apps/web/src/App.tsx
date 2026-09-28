@@ -37,6 +37,8 @@ import { LumioLogo } from "./components/LumioLogo";
 import { AuthPage, BootstrapPage, EmailActionPage, HomePage, InvitePage } from "./components/EntryExperience";
 import { safeAuthDestination } from "./authNavigation";
 import { parseInviteInput } from "./inviteInput";
+import { PartyGameChatProvider, usePartyGameChat } from "./games/PartyGameChat";
+import { PartyComposer } from "./components/PartyComposer";
 
 const MediaHub = lazy(() => import("./components/MediaHub").then((module) => ({ default: module.MediaHub })));
 const MediaStage = lazy(() => import("./components/MediaStage").then((module) => ({ default: module.MediaStage })));
@@ -782,7 +784,7 @@ export function App() {
   const micLabel = !micEnabled || muted ? "Ativar microfone" : "Desativar microfone";
   const syncLabel = connectionState === "connected" ? "Sincronizado com a Party" : connectionState === "connecting" ? "Entrando na Party" : connectionState === "reconnecting" ? "Reconectando à Party" : "Sem conexão com a Party";
 
-  return <Suspense fallback={<LoadingScreen user={session.user} connectionState="connecting" onBack={() => navigate("/app")} />}><div className={`app-shell ${mobileParty ? "mobile-party" : ""} ${rightPanelCollapsed ? "panel-collapsed" : ""} ${stageView === "game" ? "game-mode" : ""} ${theaterMode ? "theater-shell" : ""}`}>
+  return <Suspense fallback={<LoadingScreen user={session.user} connectionState="connecting" onBack={() => navigate("/app")} />}><PartyGameChatProvider key={snapshot.id} socket={socket} roomId={snapshot.id} userId={session.user.id} onSelect={() => { if (!mobileParty) openDrawer("chat"); }}><div className={`app-shell ${mobileParty ? "mobile-party" : ""} ${rightPanelCollapsed ? "panel-collapsed" : ""} ${stageView === "game" ? "game-mode" : ""} ${theaterMode ? "theater-shell" : ""}`}>
     <a className="skip-link" href="#party-content">Ir para o conteúdo principal</a>
     <main className="party-main" id="party-content">
       <header className="party-header">
@@ -801,7 +803,7 @@ export function App() {
 
       <div className={`party-workspace ${rightPanelCollapsed ? "" : "drawer-open"}`}>
         <section className="party-content">
-          <MainStage gameConnection={socket ? { socket, roomId: snapshot.id, userId: session.user.id } : undefined} onFullscreenChange={setGameFullscreen} youtubeVisible={snapshot.currentMedia.provider === "youtube" && Boolean(snapshot.currentMedia.mediaId)} screenShare={snapshot.screenShare} screenStream={isSharingScreen ? localScreenStream : remoteScreenStream} view={stageView} onViewChange={setStageView} media={<MediaStage shortcutsEnabled={stageView === "media"} media={snapshot.currentMedia} roomId={snapshot.id} onSkip={nextMedia} onRemove={() => { if (currentQueueItem) setPendingQueueRemoval(currentQueueItem); }} onAddMedia={() => setShowMediaHub(true)} onPlaybackCommand={sendPlaybackCommand} onEnded={handleProviderEnded} apiUrl={API_URL} token={session.token} theater={theaterMode} onTheaterChange={setTheaterMode} ambient={ambientMode} musicView={presentationMode === "music" && stageView !== "game"} onMusicViewChange={(active) => setPresentationMode(active ? "music" : "video")} onFullscreenChange={setPlayerFullscreen} volume={audioSettings.mediaVolume} effectiveVolume={mediaVolume} onVolumeChange={(value) => setAudioSettings((current) => ({ ...current, mediaVolume: value }))} resyncToken={playerResyncToken} />} />
+          <MainStage gameChat={<PartyComposer onSend={sendChat} onTyping={(typing) => socket?.emit(eventNames.chatTyping, { roomId: snapshot.id, typing })} />} gameConnection={socket ? { socket, roomId: snapshot.id, userId: session.user.id } : undefined} onFullscreenChange={setGameFullscreen} youtubeVisible={snapshot.currentMedia.provider === "youtube" && Boolean(snapshot.currentMedia.mediaId)} screenShare={snapshot.screenShare} screenStream={isSharingScreen ? localScreenStream : remoteScreenStream} view={stageView} onViewChange={setStageView} media={<MediaStage shortcutsEnabled={stageView === "media"} media={snapshot.currentMedia} roomId={snapshot.id} onSkip={nextMedia} onRemove={() => { if (currentQueueItem) setPendingQueueRemoval(currentQueueItem); }} onAddMedia={() => setShowMediaHub(true)} onPlaybackCommand={sendPlaybackCommand} onEnded={handleProviderEnded} apiUrl={API_URL} token={session.token} theater={theaterMode} onTheaterChange={setTheaterMode} ambient={ambientMode} musicView={presentationMode === "music" && stageView !== "game"} onMusicViewChange={(active) => setPresentationMode(active ? "music" : "video")} onFullscreenChange={setPlayerFullscreen} volume={audioSettings.mediaVolume} effectiveVolume={mediaVolume} onVolumeChange={(value) => setAudioSettings((current) => ({ ...current, mediaVolume: value }))} resyncToken={playerResyncToken} />} />
           {theaterMode ? <div className="theater-members" aria-label="Participantes">{snapshot.members.slice(0, 6).map((member) => <span key={member.user.id} className={member.speaking ? "speaking" : ""} title={member.user.displayName} style={{ background: member.user.color }}>{avatarLetters(member.user.displayName)}</span>)}</div> : null}
 
           <section className="now-playing" aria-labelledby="now-playing-title">
@@ -844,7 +846,7 @@ export function App() {
     {showHouseSettings && house ? <HouseSettingsDialog apiUrl={API_URL} token={session.token} house={house} currentUserId={session.user.id} roomSettings={snapshot.settings} onRoomSettings={(settings) => socket?.emit(eventNames.roomSettings, { roomId: snapshot.id, settings })} onClose={() => setShowHouseSettings(false)} onLeft={() => { setShowHouseSettings(false); setSnapshot(null); setHouse(null); localStorage.removeItem(HOUSE_KEY); navigate("/app"); void refreshHouses(); }} onChanged={(next) => { setHouse(next); void refreshHouses(); }} /> : null}
     {showProfile ? <ProfileDialog apiUrl={API_URL} token={session.token} user={session.user} onClose={() => setShowProfile(false)} onSaved={(user) => { const nextSession = { ...session, user }; setSession(nextSession); localStorage.setItem(SESSION_KEY, JSON.stringify(nextSession)); }} /> : null}
     {showCallSettings ? <Suspense fallback={<div className="overlay-loading" role="status">Abrindo configurações...</div>}><CallSettings settings={audioSettings} devices={audioDevices} getMicLevel={getMicLevel} outputSelectionSupported={"setSinkId" in HTMLMediaElement.prototype} onChange={setAudioSettings} onClose={() => setShowCallSettings(false)} /></Suspense> : null}
-  </div></Suspense>;
+  </div></PartyGameChatProvider></Suspense>;
 }
 
 function MobileCallControls({ micEnabled, muted, deafened, callState, voiceError, micLabel, isSharingScreen, shareOccupied, canShare, onMic, onDeafen, onShare, onSettings, audioBlocked, onEnableAudio }: {
@@ -899,35 +901,25 @@ function HistoryList({ history: items }: { history: HouseHistoryEntry[] }) {
 }
 
 function ChatPanel({ messages, currentUser, typingNames, onTyping, onSend, composerAccessory }: { composerAccessory?: ReactNode; messages: ChatMessage[]; currentUser: User; typingNames: string[]; onTyping: (typing: boolean) => void; onSend: (body: string) => boolean }) {
-  const [draft, setDraft] = useState("");
+  const gameChat = usePartyGameChat();
   const [newBelow, setNewBelow] = useState(0);
-  const timer = useRef<number>();
   const listRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
   const atBottom = useRef(true);
   const lastMessageId = useRef(messages.at(-1)?.id);
-  const typingSent = useRef(false);
-  const onTypingRef = useRef(onTyping);
-  onTypingRef.current = onTyping;
-  useEffect(() => { listRef.current?.scrollTo({ top: listRef.current.scrollHeight }); if (!window.matchMedia("(pointer: coarse)").matches) inputRef.current?.focus(); return () => { window.clearTimeout(timer.current); if (typingSent.current) onTypingRef.current(false); }; }, []);
+  const events = gameChat?.game?.feed ?? [];
+  const timeline = [...messages.map((message) => ({ key: message.id, time: Date.parse(message.createdAt), message, event: null as typeof events[number] | null })), ...events.map((event) => ({ key: `game-${gameChat?.game?.sessionId}-${event.id}`, time: event.createdAt ?? 0, message: null as ChatMessage | null, event }))].sort((a, b) => a.time - b.time);
+  const lastEvent = events.at(-1)?.id;
+  useEffect(() => { listRef.current?.scrollTo({ top: listRef.current.scrollHeight }); }, []);
   useEffect(() => {
-    const nextId = messages.at(-1)?.id;
+    const nextId = `${messages.at(-1)?.id}:${lastEvent}`;
     if (nextId === lastMessageId.current) return;
     lastMessageId.current = nextId;
     if (atBottom.current) listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: "smooth" });
     else setNewBelow((value) => value + 1);
-  }, [messages]);
-  const changed = (value: string) => {
-    setDraft(value);
-    if (value.trim() && !typingSent.current) { onTyping(true); typingSent.current = true; }
-    if (!value.trim() && typingSent.current) { onTyping(false); typingSent.current = false; }
-    window.clearTimeout(timer.current);
-    if (value.trim()) timer.current = window.setTimeout(() => { onTypingRef.current(false); typingSent.current = false; }, 1400);
-  };
-  const submit = (event: FormEvent) => { event.preventDefault(); if (draft.trim() && onSend(draft)) { setDraft(""); if (typingSent.current) onTyping(false); typingSent.current = false; window.clearTimeout(timer.current); } };
+  }, [messages, lastEvent]);
   return <div className="chat-panel"><div ref={listRef} className="messages" onScroll={(event) => { const node = event.currentTarget; atBottom.current = node.scrollHeight - node.scrollTop - node.clientHeight < 72; if (atBottom.current) setNewBelow(0); }}>
-    {messages.length ? messages.map((message) => <article className={`message ${message.user.id === currentUser.id ? "mine" : ""}`} key={message.id}><Avatar className="message-avatar" name={message.user.displayName} src={message.user.avatar} color={message.user.color} /><div><header><strong>{message.user.displayName}</strong><time dateTime={message.createdAt}>{timeLabel(message.createdAt)}</time></header><p>{message.body}</p></div></article>) : <p className="chat-empty">Nenhuma mensagem ainda.</p>}
-  </div>{newBelow ? <button className="chat-new-below" onClick={() => { listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: "smooth" }); atBottom.current = true; setNewBelow(0); }}>Novas mensagens ↓</button> : null}<div className="typing-indicator" aria-live="polite">{typingNames.length ? `${typingNames.slice(0, 2).join(" e ")} está digitando…` : ""}</div><form className="chat-form" onSubmit={submit}>{composerAccessory}<label className="sr-only" htmlFor="chat-message">Mensagem</label><input ref={inputRef} id="chat-message" name="message" autoComplete="off" value={draft} onChange={(event) => changed(event.target.value)} placeholder="Escreva uma mensagem…" /><button disabled={!draft.trim()} aria-label="Enviar mensagem"><Send /></button></form></div>;
+    {timeline.length ? timeline.map(({ key, message, event }) => message ? <article className={`message ${message.user.id === currentUser.id ? "mine" : ""}`} key={key}><Avatar className="message-avatar" name={message.user.displayName} src={message.user.avatar} color={message.user.color} /><div><header><strong>{message.user.displayName}</strong><time dateTime={message.createdAt}>{timeLabel(message.createdAt)}</time></header><p>{message.body}</p></div></article> : <article className="game-chat-event" key={key}><small>Desenhe e Adivinhe</small><p>{event?.text}</p></article>) : <p className="chat-empty">Nenhuma mensagem ainda.</p>}
+  </div>{newBelow ? <button className="chat-new-below" onClick={() => { listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: "smooth" }); atBottom.current = true; setNewBelow(0); }}>Novas mensagens ↓</button> : null}<div className="typing-indicator" aria-live="polite">{typingNames.length ? `${typingNames.slice(0, 2).join(" e ")} está digitando…` : ""}</div><PartyComposer onSend={onSend} onTyping={onTyping} accessory={composerAccessory} /></div>;
 }
 
 function MembersPanel({ members, currentUserId, participantVolumes, onVolume, voiceMembers }: { voiceMembers: RoomSnapshot["members"]; members: HouseMember[]; currentUserId: string; participantVolumes: Record<string, number>; onVolume: (userId: string, volume: number) => void }) {

@@ -54,10 +54,14 @@ test("guess normalization, wrong guesses, scoring, duplicate safety and early re
   assert.ok(f.snap(2).feed.some((entry) => entry.text.includes("palpite obviamente errado")));
   assert.equal(f.act(1, "guess", { text: ` ${normalizeGuess(word).toUpperCase()} ` }).ok, true);
   assert.equal(f.snap().players[1].score, 200); assert.equal(f.snap().players[0].score, 40);
+  assert.deepEqual(f.snap().roundPoints, { "1": 200, "0": 40 });
+  assert.equal(typeof f.snap().feed.at(-1)?.createdAt, "number");
   assert.equal(f.snap().phase, "DRAWING"); assert.ok(!JSON.stringify(f.snap(2)).includes(word));
   assert.equal(f.act(1, "guess", { text: word }).ok, false); assert.equal(f.snap().players[1].score, 200);
   assert.equal(f.act(2, "guess", { text: word }).ok, true); assert.equal(f.snap().phase, "ROUND_RESULT");
   assert.equal(f.snap(2).revealedWord, word); assert.equal(f.snap().players[0].score, 80);
+  assert.deepEqual(f.snap().roundPoints, { "1": 200, "2": 200, "0": 80 });
+  f.advance(100); assert.deepEqual(f.snap().roundPoints, {});
 });
 test("validated drawing, incremental reconstruction, undo, clear and stale operations", () => {
   const f = fixture(); f.act(0, "start"); f.act(0, "choose", { option: 0 });

@@ -187,3 +187,11 @@ Uma tarefa está pronta quando:
 - `game:snapshot` e `game:state` são projeções individuais; choices/secretWord só para drawer ativo. Só resultados revelam revealedWord. Nunca room-broadcast de segredo.
 - Pontos normalizados, lotes de até 32/50ms e pintura imperativa. Metadados não reenviam board; revisão de jogo/board é distinta de mídia/fila. Undo/clear precisam impedir append antigo.
 - Preserve YouTube visível, chat estrutural, RTC e screen stream. Não criar profile/chat/call, banco ou engine paralelos. Consulte `POST_1_0_G1_DRAW_GAME_REPORT.md` para protocolo, limites e QA manual.
+
+## Party Games G2
+
+- O composer tem modos explícitos: palpites vão direto para `game:action/guess`, nunca primeiro para `chat:message`. Somente o backend compara e pontua; acerto gera evento público sem texto da resposta.
+- Rascunhos de conversa/palpite pertencem à Party e são separados. Fullscreen reutiliza o mesmo composer/estado, sem segundo histórico. Drawer, observador, quem acertou e apresentação em mídia usam conversa normal.
+- Contexto social do jogo recebe somente metadados públicos, sem board/choices/secretWord. Feed visual aparece no Chat; protocolo de jogo permanece separado.
+- Ctrl/Cmd+Z e botão Desfazer usam o mesmo undo autoritativo. Ignore edição de texto, overlays, repeat, redo e fase/usuário inelegíveis. Nunca faça undo só local.
+- `roundPoints` e timestamps do feed são calculados no runtime, não inferidos do palpite no cliente. Preserve projeções individuais, limites, batching e o único engine/RTC. Consulte `POST_1_0_G2_PARTY_GAMES_EXPERIENCE_V2_REPORT.md`.

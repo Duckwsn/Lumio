@@ -143,3 +143,10 @@ Só encerre o processo depois de confirmar que ele pertence ao projeto.
 - Canvas 4:3 lógico, Pointer Events e coordenadas normalizadas; pontos em refs e envio incremental limitado. Não sincronizar PNG/base64 ou estado React por ponto.
 - `game:state` não contém traços; `game:snapshot` reconstrói o board e `game:draw` é delta ordenado. Use revisões próprias e rejeite operações anteriores a clear/undo/rodada.
 - Consulte `POST_1_0_G1_DRAW_GAME_REPORT.md`; os testes locais/fixtures não substituem QA Android/iOS, Google e WAN reais. Não mudar OAuth, schema ou produção como parte do jogo.
+
+## Party Games Experience G2
+
+- `PartyGameChatProvider` conserva rascunhos separados e metadados públicos; não recebe deltas de canvas no estado social. `PartyComposer` é a mesma implementação no Chat e fullscreen, sem histórico duplicado.
+- Guess mode depende de apresentação selecionada, DRAWING, participante online não-drawer e sem acerto. Envia `game:action` com type guess e ack; conversa continua em `chat:message`. Não converter o acerto em mensagem contendo a palavra.
+- Feed do jogo aparece no histórico visual do Chat, mas continua efêmero/bounded e fora da autoridade/persistência de chat. `roundPoints` é calculado no servidor.
+- Leia o relatório G2 antes de alterar modal integrado, atalhos, layout com teclado ou composer fullscreen. Não fazer build concorrente com QA no Vite do mesmo checkout.

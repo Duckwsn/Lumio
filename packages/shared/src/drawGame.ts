@@ -19,7 +19,9 @@ export interface DrawSnapshot {
   sessionId: string; roomId: string; revision: number; boardRevision: number; roundId: string; phase: DrawPhase;
   hostId: string; players: DrawPlayer[]; order: string[]; drawerId: string | null; round: number; totalRounds: number;
   startedAt: number; endsAt: number; serverNow: number; maskedWord: string; revealedWord?: string;
-  strokes: DrawStroke[]; feed: { id: number; text: string }[];
+  strokes: DrawStroke[]; feed: { id: number; text: string; createdAt?: number }[];
+  /** Public, authoritative points earned in the current round. Never guess text. */
+  roundPoints?: Record<string, number>;
   // Private projection on the same authenticated socket, NEVER room broadcast.
   choices?: string[]; secretWord?: string;
 }

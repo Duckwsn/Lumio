@@ -16,7 +16,7 @@ export class DrawGameRuntime {
       ...(viewer === s.drawerId && s.active.has(viewer) ? s.phase === "CHOOSING_WORD" ? { choices } : s.phase === "DRAWING" ? { secretWord: word } : {} : {}),
     });
   }
-  private feed(s: Session, text: string) { s.feed.push({ id: ++s.revision, text }); s.feed = s.feed.slice(-40); }
+  private feed(s: Session, text: string) { s.feed.push({ id: ++s.revision, text, createdAt: this.now() }); s.feed = s.feed.slice(-40); }
   private phase(s: Session, phase: Session["phase"], duration = 0) { s.phase = phase; s.startedAt = this.now(); s.endsAt = duration ? s.startedAt + duration : 0; s.revision++; s.touched = this.now(); }
   private next(s: Session) {
     const online = s.players.filter((p) => s.active.has(p.id) && p.online);
@@ -25,7 +25,7 @@ export class DrawGameRuntime {
     while (next < s.totalRounds && !online.some((p) => p.id === s.order[next % s.order.length])) next++;
     if (next >= s.totalRounds) { this.phase(s, "GAME_RESULT"); return; }
     s.round = next + 1; s.drawerId = s.order[next % s.order.length]; s.roundId = crypto.randomUUID();
-    s.strokes = []; s.points = 0; s.boardRevision++; s.word = "";
+    s.strokes = []; s.points = 0; s.boardRevision++; s.word = ""; s.roundPoints = {};
     s.players.forEach((p) => { p.guessed = false; });
     const pool = [...this.words]; s.choices = [];
     while (s.choices.length < 3 && pool.length) s.choices.push(pool.splice(crypto.randomInt(pool.length), 1)[0]);
@@ -73,8 +73,10 @@ export class DrawGameRuntime {
       } else if (a.type === "guess") {
         if (s.phase !== "DRAWING" || user.id === s.drawerId || p.guessed) return { ok: false, message: "Palpite indisponível." };
         if (normalizeGuess(a.text) === normalizeGuess(s.word)) {
-          p.guessed = true; p.score += 100 + Math.ceil(100 * (s.endsAt - time) / this.durations.draw);
-          const drawer = s.players.find((entry) => entry.id === s!.drawerId); if (drawer) drawer.score += 40;
+          const gain = 100 + Math.ceil(100 * (s.endsAt - time) / this.durations.draw);
+          p.guessed = true; p.score += gain;
+          s.roundPoints ??= {}; s.roundPoints[p.id] = gain;
+          const drawer = s.players.find((entry) => entry.id === s!.drawerId); if (drawer) { drawer.score += 40; s.roundPoints[drawer.id] = (s.roundPoints[drawer.id] ?? 0) + 40; }
           this.feed(s, `${p.displayName} acertou!`);
           if (s.players.filter((entry) => s!.active.has(entry.id) && entry.online && entry.id !== s!.drawerId).every((entry) => entry.guessed)) this.finish(s);
         } else this.feed(s, normalizeGuess(a.text).includes(normalizeGuess(s.word)) ? `${p.displayName} enviou um palpite.` : `${p.displayName}: ${a.text}`);

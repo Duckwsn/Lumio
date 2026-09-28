@@ -31,11 +31,13 @@ test("three authenticated real sockets: private choices, drawing, scoring, advan
   const { invite } = await (await request(`/api/houses/${house.id}/invites`, sessions[0].token, { maxUses: 5, expiresInHours: 24 })).json();
   for (const session of sessions.slice(1)) assert.equal((await request(`/api/invites/${invite.token}/accept`, session.token)).status, 200);
   const states: (DrawSnapshot | null)[] = [null, null, null], traffic: unknown[][] = [[], [], []], deltas: DrawDelta[][] = [[], [], []];
+  const chats: unknown[][] = [[], [], []];
   for (const [index, session] of sessions.entries()) {
     const socket = io(api, { transports: ["websocket"], auth: { token: session.token }, extraHeaders: { Origin: origin } }); sockets.push(socket);
     socket.on("game:snapshot", (s: DrawSnapshot | null) => { states[index] = s; traffic[index].push(s); });
     socket.on("game:state", (s: DrawState) => { states[index] = { ...s, strokes: states[index]?.strokes ?? [] }; traffic[index].push(s); });
     socket.on("game:draw", (delta: DrawDelta) => { deltas[index].push(delta); traffic[index].push(delta); });
+    socket.on("chat:message", (message) => { chats[index].push(message); });
     await until(() => socket.connected);
     socket.emit("room:join", { roomId: house.primaryRoomId, user: session.user });
     await new Promise<void>((resolve) => socket.once("room:snapshot", () => resolve()));
@@ -59,14 +61,21 @@ test("three authenticated real sockets: private choices, drawing, scoring, advan
   await until(() => deltas.every((items) => items.length === 1)); assert.deepEqual(deltas[2][0].stroke.points, drawing.points);
   const strokePayloadBytes = Buffer.byteLength(JSON.stringify(deltas[2][0]));
   const start = performance.now();
+  assert.equal((await send(1, "guess", { text: "incorreto de QA" })).ok, true);
+  await until(() => states[2]!.feed.some((entry) => entry.text.includes("incorreto de QA")));
+  assert.deepEqual(chats[2], [], "Wrong guesses use game metadata, not Party chat broadcasts");
   assert.equal((await send(1, "guess", { text: secret })).ok, true);
   await until(() => states[2]!.players[1].guessed);
   assert.ok(states[2]!.players[1].score >= 100); assert.equal(states[2]!.phase, "DRAWING");
   const metadata = traffic[2].at(-1) as DrawState;
+  assert.equal(metadata.roundPoints?.[sessions[0].user.id], 40);
+  assert.deepEqual(chats[2], [], "A correct guess must never be echoed as a chat message");
   assert.equal("strokes" in metadata, false, "A guess must not retransmit the whole board");
   context.diagnostic(`local guess→remote state ${Math.round(performance.now() - start)}ms; 2-point delta ${strokePayloadBytes} bytes; no board in guess metadata (loopback, not WAN)`);
   // Inspect entire received payloads, not DOM/CSS: options, word and correct guess are absent.
   for (const index of [1, 2]) assert.ok(!JSON.stringify(traffic[index]).includes(secret), "Private word leaked in guesser wire payload before reveal");
+  sockets[1].emit("chat:message", { roomId: house.primaryRoomId, body: "Conversa depois do acerto" });
+  await until(() => chats[2].length === 1); assert.ok(!JSON.stringify(chats[2]).includes(secret));
   assert.equal((await send(1, "guess", { text: secret })).ok, false);
   assert.equal((await send(2, "guess", { text: secret })).ok, true);
   await until(() => states.every((s) => s?.phase === "ROUND_RESULT"));
