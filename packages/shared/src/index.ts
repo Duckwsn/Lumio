@@ -62,6 +62,7 @@ export const houseSummarySchema = z.object({
 export type HouseSummary = z.infer<typeof houseSummarySchema>;
 
 export const houseInviteSchema = z.object({
+  code: z.string().optional(),
   id: z.string(), houseId: z.string(), token: z.string(), role: houseRoleSchema,
   createdBy: userSchema, createdAt: z.string(), expiresAt: z.string(),
   maxUses: z.number().int().positive(), uses: z.number().int().nonnegative(), revokedAt: z.string().nullable(),

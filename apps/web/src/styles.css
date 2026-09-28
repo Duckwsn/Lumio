@@ -716,6 +716,9 @@ svg { flex:none; }
 .pwa-update { position:fixed; z-index:100; right:calc(16px + env(safe-area-inset-right)); bottom:calc(16px + env(safe-area-inset-bottom)); display:flex; max-width:min(440px,calc(100vw - 32px)); align-items:center; gap:12px; padding:12px; border:1px solid var(--border-strong); border-radius:12px; background:var(--surface-2); box-shadow:var(--shadow); color:var(--text-soft); font-size:12px; }
 .pwa-update button { flex:none; min-height:44px; padding:0 12px; border-radius:8px; color:var(--primary-ink); background:var(--primary); font-weight:700; }
 .pwa-install-hint { display:block; padding:8px 10px; color:var(--muted); font-size:11px; line-height:1.4; }
+.invite-result .invite-code { font-size:clamp(20px,5vw,28px); font-weight:700; letter-spacing:.08em; text-align:center; font-family:monospace; min-width:0; }
+.invite-share-actions { display:flex; flex-wrap:wrap; gap:8px; }
+.invite-result button { min-height:44px; }
 .mobile-call-controls { display:none; }
 .app-shell,.party-main { height:100dvh; }
 .party-main { grid-template-columns:minmax(0,1fr); }
@@ -895,7 +898,7 @@ svg { flex:none; }
 .fullscreen-fallback-note { position:absolute; z-index:9; top:calc(12px + env(safe-area-inset-top)); left:50%; width:max-content; max-width:calc(100% - 24px); padding:6px 10px; border-radius:7px; color:var(--text-soft); background:rgba(20,25,21,.85); font-size:11px; text-align:center; transform:translateX(-50%); }
 .fullscreen-rotate-hint { display:none; }
 .player-touch-surface { position:absolute; z-index:2; inset:0; }
-.mobile-party-chat { display:flex; flex-direction:column; flex:0 1 48%; min-height:106px; overflow:hidden; border-top:1px solid var(--border); background:var(--surface); }
+.mobile-party-chat { display:flex; flex-direction:column; flex:1; min-height:calc(106px + env(safe-area-inset-bottom)); overflow:hidden; border-top:1px solid var(--border); background:var(--surface); }
 .mobile-party-chat[hidden] { display:none; }
 .mobile-chat-heading { display:flex; height:42px; min-height:42px; align-items:center; justify-content:space-between; padding:0 12px; }
 .mobile-chat-heading strong { font-size:14px; }
@@ -905,11 +908,13 @@ svg { flex:none; }
 .mobile-party .party-main { display:flex; flex-direction:column; padding-top:env(safe-area-inset-top); }
 .mobile-party .party-header,.mobile-party .party-connection,.mobile-party .party-notice { flex-shrink:0; }
 .mobile-party .party-workspace,.mobile-party .party-workspace.drawer-open { display:flex; flex:1; flex-direction:column; position:relative; overflow:hidden; }
-.mobile-party .party-content { display:flex; flex:1; min-height:0; flex-direction:column; justify-content:center; overflow:hidden; padding:6px; }
-.mobile-party .party-content>.main-stage,.mobile-party .party-workspace.drawer-open .party-content>.main-stage { width:100%; min-height:0; flex:1; }
-.mobile-party .stage-layer.active,.mobile-party .universal-player { height:100%; min-height:0; }
-.mobile-party .player-frame { width:100%; height:100%; min-height:0; aspect-ratio:auto; }
-.mobile-party .provider-player { object-fit:contain; }
+.mobile-party .party-content { display:flex; flex:0 1 auto; min-height:0; aspect-ratio:16/9; box-sizing:content-box; flex-direction:column; align-items:center; justify-content:center; overflow:hidden; padding:6px; }
+.mobile-party .party-content>.main-stage,.mobile-party .party-workspace.drawer-open .party-content>.main-stage { width:auto; height:100%; max-width:100%; min-height:0; aspect-ratio:16/9; flex:none; transition:none; }
+.mobile-party .stage-layer.active { height:100%; min-height:0; }
+.mobile-party .universal-player:not(:fullscreen):not(.fallback-fullscreen) { height:100%; min-height:0; }
+.mobile-party .lumio-player:not(:fullscreen):not(.fallback-fullscreen) .player-frame { width:100%; height:100%; min-height:0; aspect-ratio:16/9; }
+.mobile-party .provider-player { position:absolute; inset:0; object-fit:contain; }
+.mobile-party .player-empty { position:absolute; inset:0; height:100%; min-height:0; overflow-y:auto; }
 .mobile-party .player-error { padding:12px; overflow-y:auto; }
 .mobile-party .now-playing { display:none; }
 .mobile-party .party-dock { display:none; }
@@ -919,7 +924,7 @@ svg { flex:none; }
 .mobile-party .chat-form { position:relative; margin:0 8px; margin-bottom:calc(8px + env(safe-area-inset-bottom)); padding:4px; flex-shrink:0; }
 .mobile-party .chat-form input { font-size:16px; }
 .mobile-party .chat-form button { width:44px; height:44px; flex-shrink:0; }
-.mobile-party .mobile-call-controls { display:block; position:relative; inset:auto; z-index:25; flex-shrink:0; }
+.mobile-party .mobile-call-controls { display:flex; gap:4px; position:relative; inset:auto; z-index:25; flex-shrink:0; }
 .mobile-party .mobile-call-trigger { display:grid; place-items:center; color:var(--text-soft); background:var(--surface-3); }
 .mobile-party .mobile-call-menu { position:fixed; left:12px; bottom:calc(72px + env(safe-area-inset-bottom)); width:min(280px,calc(100vw - 32px)); max-height:calc(var(--visual-height,100dvh) - 110px); overflow-y:auto; padding:8px; border:1px solid var(--border); border-radius:12px; background:var(--surface-2); box-shadow:var(--shadow); }
 .mobile-party .mobile-call-menu button { display:flex; width:100%; gap:8px; align-items:center; color:var(--text); background:transparent; text-align:left; }
@@ -929,13 +934,19 @@ svg { flex:none; }
 .sheet-drag-handle { display:grid; width:100%; height:44px; min-height:44px; flex-shrink:0; place-items:center; touch-action:none; background:transparent; }
 .sheet-drag-handle span { width:54px; height:5px; border-radius:4px; background:var(--primary); }
 .mobile-party.theater-shell .party-workspace { display:flex; }
-.mobile-party.theater-shell .party-content { padding:0; }
+.mobile-party.theater-shell .party-content { display:flex; height:auto; padding:0; }
 .mobile-party.theater-shell .party-main { grid-template-rows:minmax(0,1fr); }
 .mobile-party.theater-shell .party-drawer { display:flex; }
 .mobile-party.theater-shell .theater-members { display:none; }
 @media (hover:none) { .lumio-player:not(.controls-visible) .lumio-controls { opacity:0; transform:translateY(8px); pointer-events:none; } }
 @media (prefers-reduced-motion:reduce) { .mobile-party .party-drawer { transition:none; } }
-@media (orientation:landscape) { .mobile-party-chat { flex-basis:44%; } }
+@media (orientation:landscape) {
+  .mobile-party .party-workspace,.mobile-party .party-workspace.drawer-open,.mobile-party.theater-shell .party-workspace { display:grid; grid-template-columns:minmax(0,1.6fr) minmax(0,1fr); grid-template-rows:minmax(0,1fr); }
+  .mobile-party .party-content,.mobile-party.theater-shell .party-content { height:100%; aspect-ratio:auto; box-sizing:border-box; container-type:size; }
+  .mobile-party .party-content>.main-stage,.mobile-party .party-workspace.drawer-open .party-content>.main-stage { width:min(100%,calc(100cqh * 16 / 9)); height:auto; }
+  .mobile-party .stage-layer.active { aspect-ratio:16/9; }
+  .mobile-party-chat { height:100%; border-top:0; border-left:1px solid var(--border); }
+}
 @media (orientation:portrait) and (pointer:coarse) { .lumio-player:fullscreen .fullscreen-rotate-hint,.lumio-player.fallback-fullscreen .fullscreen-rotate-hint { display:block; position:absolute; z-index:9; top:calc(44px + env(safe-area-inset-top)); left:50%; width:max-content; max-width:calc(100% - 24px); padding:6px 10px; border-radius:7px; color:var(--text-soft); background:rgba(20,25,21,.85); font-size:11px; text-align:center; transform:translateX(-50%); } }
 
 /* Alternate presentation of the SAME engine. Opacity never unmounts/reloads providers. */
@@ -957,3 +968,6 @@ svg { flex:none; }
 @media (max-width:900px) { .music-presentation { padding:10px 12px 76px; gap:8px; } .music-cover { width:clamp(44px,14vh,140px); height:clamp(44px,14vh,140px); } }
 @media (max-height:450px) { .music-presentation { flex-direction:row; gap:12px; padding:8px 12px 70px; text-align:left; } .music-cover { width:64px; height:64px; flex:0 0 64px; } .music-presentation strong { font-size:15px; } }
 @media (prefers-reduced-motion:reduce) { .ambient-glow,.has-ambient .ambient-glow { animation:none; transition:none; } }
+/* Compact now-playing uses the same proportional canvas, never an extra tall stage. */
+.mobile-party .lumio-player:not(:fullscreen):not(.fallback-fullscreen) .music-presentation { flex-direction:row; padding:10px 12px 74px; gap:12px; text-align:left; }
+.mobile-party .lumio-player:not(:fullscreen):not(.fallback-fullscreen) .music-cover { width:clamp(44px,18vw,84px); height:clamp(44px,18vw,84px); flex:0 0 auto; }

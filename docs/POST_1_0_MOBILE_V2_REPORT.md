@@ -7,9 +7,23 @@ O Git estava limpo antes das alterações. Não houve commit, push, deploy, alte
 
 ## 1. MOBILE PARTY — composição final
 
-Até 900px, Player/Ambiente e Chat são regiões estruturais do mesmo workspace. O Chat fica abaixo do palco também em paisagem; mensagens têm scroll interno, composer fixo na região e ferramentas Pessoas/Fila/Adicionar. Não há handle, altura manipulada por gesto, toggle, botão de fechar, estado collapsed/expanded ou armazenamento desse estado.
+Até 900px, Player/Ambiente e Chat são regiões estruturais do mesmo workspace. Na correção adicional de proporção (base `09576c5`, Lumio 1.2), o Chat fica abaixo do palco em portrait e ao lado em landscape. Mensagens têm scroll interno, composer fixo na região e ferramentas Pessoas/Fila/Adicionar. Não há handle, altura manipulada por gesto, toggle, botão de fechar, estado collapsed/expanded ou armazenamento desse estado.
 
-A altura usa distribuição flexível do espaço disponível, com mínimo para cabeçalho/composer. A integração existente com VisualViewport/--visual-height, viewport-fit=cover, fonte de 16px e safe areas permanece. Viewport reduzida é cobertura automatizada, não prova de teclado real iOS.
+A altura não é mais dividida em percentuais Player/Chat. O palco tem proporção 16:9; Chat usa flex:1 e recebe o restante após header/palco. A integração existente com VisualViewport/--visual-height, viewport-fit=cover, fonte de 16px e safe areas permanece. Viewport reduzida é cobertura automatizada, não prova de teclado real iOS.
+
+### Correção adicional — proporção e espaço do Chat
+
+Causa raiz: a cadeia de regras mobile atribuía flex:1 ao conteúdo/palco, height:100% ao stage/player/frame e aspect-ratio:auto à frame. O Chat tinha flex-basis:48% (44% em landscape). Isso fazia o palco crescer por altura disponível, não por proporção de mídia. A screenshot mostrava esse canvas excessivamente alto; não foi atribuída ao YouTube uma deformação de pixels sem inspeção do provider.
+
+Agora o conteúdo tem aspect-ratio:16/9, flex:0 1 auto e padding integrante do cálculo (content-box). MainStage deriva largura de sua altura mantendo 16:9; frame e provider ocupam essa região. Em portrait comum, isso resulta em largura disponível e altura proporcional, sem max-height arbitrário para um aparelho. Se VisualViewport encolher muito com o teclado, flex-shrink reduz a região proporcionalmente, centrada, reservando cabeçalho/composer do Chat (106px + safe-area inferior). O player não cresce ao abrir teclado. Messages mantém flex:1/min-height:0/overflow:auto; composer não encolhe.
+
+Em landscape, grid separa palco e conversa em colunas 1,6fr/1fr. O palco é limitado pela largura e altura efetivamente disponíveis, por container sizing, sem disputar altura com o Chat. Fullscreen continua recomendado para ocupar toda a tela.
+
+YouTube tem iframe dentro de canvas proporcional; em fullscreen mantém encaixe 16:9 existente. Drive conserva object-fit:contain: vídeos portrait, 4:3 ou 16:9 mantêm sua proporção intrínseca e usam letterbox quando necessário. Não se declarou que todos os arquivos Drive são 16:9: 16:9 é o canvas padrão, não uma alteração das dimensões do vídeo. Nenhuma metadata de dimensão ou autorização nova foi inventada.
+
+Ambiente usa exatamente o mesmo canvas, em composição compacta, sem alterar altura ou reconstruir adapter. Fullscreen é excluído das regras normais de sizing; sua superfície ocupa a tela e sair restaura layout, scroll e rascunho. A herança desktop de height:100% no conteúdo de cinema também foi neutralizada no mobile; Chat permanece.
+
+Somente styles.css, e2e/party.spec.ts e este relatório mudaram nessa correção adicional. Não foi alterado código de player/sync/Drive/call, desktop, Landing, OAuth, banco, versão ou deploy.
 
 O microfone junto ao composer conserva entrada/mute/deafen, áudio bloqueado, screen share por capacidade e configurações. Não foram alterados tracks, peers, signaling ou captura.
 
@@ -109,7 +123,7 @@ STATUS: **PASS_WITH_MANUAL_QA**; letras permanecem decisão externa declarada.
 | `npm run typecheck` | PASS: shared, server, web |
 | `npm run lint` | PASS: scripts TypeScript do projeto, não ESLint |
 | `npm test` | 81 PASS: server 60, web 17, service worker 4; 5 SKIP PostgreSQL |
-| `npm run test:e2e` | 2 PASS: última suíte completa 57,6s |
+| `npm run test:e2e` | 3 PASS: desktop, Party mobile e sizing do vídeo nativo |
 | `npm run build` | PASS: shared, server, web |
 | `git diff --check` | PASS |
 
@@ -123,9 +137,14 @@ Smoke adicional com agent-browser em preview local do build: Landing renderiza e
 - Composição Drive: renderização de um único video, uma única superfície de controles, apresentação alternativa e marca fallback; não é streaming Google real.
 - Integração existente: auth/security, Drive OAuth/grants/tickets/Range, servidor HTTP e Socket.IO, provider readiness/supersessão/abort, WebRTC signaling e PWA.
 - E2E desktop: Landing/login/restauração/Casa/Party/drawers/Media Hub/exclusão/logout.
+- Regressão adicional: proporção 16:9 nas seis larguras, Chat maior que o palco em portrait comum, mensagens com overflow/scroll interno sem scroll da página, mesmo tamanho em Ambiente, layout lado a lado em landscape, viewport visual de 320px sem mudar orientação CSS, composer acessível e rascunho preservado.
+- Native video: fixture isolada usa markup real de MediaStage e CSS do projeto, com três pequenos vídeos sintéticos gerados localmente pelo navegador (portrait 9:16, 4:3 e 16:9). Testa dimensões decodificadas, canvas e object-fit:contain, sem Google/ticket/OAuth. A fixture é interceptação de rede do teste, não rota ou API adicionada ao produto.
 - E2E mobile com Socket.IO real e provider YouTube simulado: chat sem handle/toggle, mensagem, sheets com movimento antes de soltar, snap-back/drag dismiss/toque/teclado/reaberturas, instância do player preservada, seis larguras, paisagem, cinema com chat, fullscreen sem chat/restauração, late join PLAYING/PAUSED, bloqueio de autoplay e gesto.
 - Ambiente: superfície completa mobile/desktop/fullscreen, provider visual oculto, posição/contagem de play e construção preservadas ao alternar, preferência local conservada na reentrada, mídia nova, pause/play/seek, artwork quebrado, ausência de lyrics, toggle de luz e reduced motion.
 - Visual: capturas mobile-ambiente, mobile-chat-430, mobile-landscape, mobile-fullscreen, desktop-ambiente, mobile-people-sheet e mobile-queue-sheet em test-results. Arquivos ignorados/descartáveis de teste.
+- Capturas adicionais: mobile-video-proportion, mobile-video-fullscreen, mobile-visual-viewport, mobile-short-viewport e mobile-native-video. Viewport visual simulada não desenha teclado físico.
+
+Durante a correção adicional, foram detectadas e resolvidas falhas de testes: o segundo drag começava durante o snap-back; agora aguarda transform:none. O cenário revelou a herança real de altura do cinema, corrigida no CSS. A renderização SSR da fixture nativa precisou executar com tsx/tsconfig do workspace web para não usar a transformação JSX de componentes do Playwright. A asserção após rotação/fullscreen também espera VisualViewport atualizar antes de comparar o espaço restante do Chat. Nenhuma dessas falhas foi tratada como aprovação.
 
 A comparação de dimensões na troca de viewport foi ajustada para ler pai/filho no mesmo instante e aguardar a acomodação do layout; antes, duas leituras separadas capturavam alturas de instantes diferentes. Não foi ocultada falha funcional por aumentar tolerância arbitrária.
 

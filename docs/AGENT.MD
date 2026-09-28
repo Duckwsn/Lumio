@@ -69,6 +69,7 @@ Na Landing pública, a demonstração da Party é apenas visual e local: sem soc
 
 ## Call e screen share
 
+- Voz pertence à Party: após snapshot/socket pronto, registre automaticamente com microfone OFF e sem captura. Somente a ação explícita de ativar microfone solicita `getUserMedia`. Reconectar invalida capturas pendentes, encerra tracks e retorna à recepção com mic OFF. Não reintroduza entrar/sair da call; deafen controla recepção e sair da Party encerra recursos.
 - Consulte `docs/CALL_V4.md` antes de editar WebRTC. A call usa P2P mesh na Party existente; o player tem ciclo de vida independente.
 - `voice:join` registra apenas um socket ativo por usuário/Party; ofertas e candidatos são enviados somente ao socket de destino descoberto. Não recrie peers a partir de sinal obsoleto.
 - Use `onnegotiationneeded` para negociar tracks e ICE restart; não abra um segundo caminho manual de offers.
@@ -155,6 +156,8 @@ Uma tarefa está pronta quando:
 - A fonte runtime do Media Hub ainda é o adapter em memória. Não descreva os models Prisma como persistência ativa. Consulte `docs/MEDIA_HUB.md`.
 
 ## Mobile e PWA
+
+- Convites por link e código resolvem o mesmo registro, role, validade, revogação e contador. Código de 10 caracteres usa aleatoriedade criptográfica e normalização no backend; persista somente `codeHash` opcional/único. Convites legados sem código continuam válidos por link. Consulta/aceite compartilham o bucket `invite-entry`; não permita enumeração de códigos indisponíveis nem membership duplicada. Consulte `INVITES_LINK_CODE_REPORT.md` antes de alterar a migração ou o fluxo.
 
 - Mobile, tablet e desktop usam o mesmo frontend, player, call e Media Hub. Preserve a Party desktop aprovada ao ajustar breakpoints.
 - No mobile, Chat acompanha o player no mesmo canvas; controles da call ficam no microfone da caixa de mensagem. Abrir o chat não deve desmontar o player ou reiniciar a call.

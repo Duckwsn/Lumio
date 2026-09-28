@@ -25,7 +25,8 @@ import type { MainStageView } from "./components/MainStage";
 import type { LocalAudioSettings } from "./components/CallSettings";
 import { expectedPosition } from "./media/MediaProvider";
 import { toQueueItem } from "./media/MediaResolver";
-import { shouldIgnoreOffer } from "./rtc/negotiation";
+import { shouldIgnoreOffer, shouldInitiateOffer } from "./rtc/negotiation";
+import { publishMicrophone } from "./rtc/microphone";
 import { summarizeRtcStats } from "./rtc/diagnostics";
 import { HouseSettingsDialog, InviteDialog, ProfileDialog } from "./components/SocialDialogs";
 import { MobilePartyChat, useMobileParty } from "./components/MobilePartyChat";
@@ -35,6 +36,7 @@ import { ConfirmDialog } from "./components/ConfirmDialog";
 import { LumioLogo } from "./components/LumioLogo";
 import { AuthPage, BootstrapPage, EmailActionPage, HomePage, InvitePage } from "./components/EntryExperience";
 import { safeAuthDestination } from "./authNavigation";
+import { parseInviteInput } from "./inviteInput";
 
 const MediaHub = lazy(() => import("./components/MediaHub").then((module) => ({ default: module.MediaHub })));
 const MediaStage = lazy(() => import("./components/MediaStage").then((module) => ({ default: module.MediaStage })));
@@ -86,7 +88,7 @@ export function App() {
   const [audioBlocked, setAudioBlocked] = useState(false);
   const [micEnabled, setMicEnabled] = useState(false);
   const [callState, setCallState] = useState<"idle" | "joining" | "connected" | "reconnecting" | "leaving" | "error">("idle");
-  const [muted, setMuted] = useState(false);
+  const [muted, setMuted] = useState(true);
   const [deafened, setDeafened] = useState(false);
   const [speaking, setSpeaking] = useState(false);
   const [activePanel, setActivePanel] = useState<"chat" | "members" | "queue">("members");
@@ -187,7 +189,7 @@ export function App() {
     localStream.current?.getTracks().forEach((track) => track.stop()); localStream.current = null;
     displayStream.current?.getTracks().forEach((track) => track.stop()); displayStream.current = null;
     analyserCleanup.current?.(); analyserCleanup.current = null;
-    setMicEnabled(false); setLocalScreenStream(null); setRemoteScreenStream(null); setVoiceError(message); setCallState("error");
+    mutedRef.current = true; setMuted(true); setSpeaking(false); setMicEnabled(false); setLocalScreenStream(null); setRemoteScreenStream(null); setVoiceError(message); setCallState("error");
   }, []);
   useEffect(() => () => { window.clearTimeout(partyNoticeTimer.current); window.clearTimeout(offlineTimer.current); }, []);
   useEffect(() => { localStorage.setItem("lumio.audio.v1", JSON.stringify(audioSettings)); }, [audioSettings]);
@@ -234,7 +236,17 @@ export function App() {
     setConnectionState("connecting"); setEntryError("");
     hadSnapshot.current = false; reconnecting.current = false; membersSeen.current.clear(); queueSeen.current.clear(); latestMedia.current = null; screenShareActor.current = null; feedbackRevision.current = -1;
     nextSocket.on("connect", () => { setConnectionState(hadSnapshot.current ? "reconnecting" : "connecting"); nextSocket.emit(eventNames.roomJoin, { roomId: selectedHouse.primaryRoomId, user: session.user }); });
-    nextSocket.on("disconnect", () => { reconnecting.current = hadSnapshot.current; if (callActiveRef.current) { resetPeers.current(); setCallState("reconnecting"); } setConnectionState(hadSnapshot.current ? "reconnecting" : "offline"); window.clearTimeout(offlineTimer.current); offlineTimer.current = window.setTimeout(() => setConnectionState("offline"), 8000); });
+    nextSocket.on("disconnect", () => {
+      reconnecting.current = hadSnapshot.current;
+      callGeneration.current += 1; micRequestInFlight.current = false;
+      localStream.current?.getTracks().forEach((track) => track.stop()); localStream.current = null;
+      analyserCleanup.current?.(); analyserCleanup.current = null;
+      displayStream.current?.getTracks().forEach((track) => track.stop()); displayStream.current = null;
+      mutedRef.current = true; setMuted(true); setMicEnabled(false); setSpeaking(false); setLocalScreenStream(null); setRemoteScreenStream(null);
+      resetPeers.current();
+      if (callActiveRef.current) setCallState("reconnecting");
+      setConnectionState(hadSnapshot.current ? "reconnecting" : "offline"); window.clearTimeout(offlineTimer.current); offlineTimer.current = window.setTimeout(() => setConnectionState("offline"), 8000);
+    });
     nextSocket.on("connect_error", (error) => {
       if (!hadSnapshot.current) setConnectionState("offline");
       if (error.message.toLowerCase().includes("sessão inválida")) {
@@ -264,7 +276,7 @@ export function App() {
         membersSeen.current = nextMembers;
       }
       setSnapshot((current) => current ? { ...nextSnapshot, currentMedia: nextSnapshot.currentMedia.revision < current.currentMedia.revision ? current.currentMedia : nextSnapshot.currentMedia, queue: nextSnapshot.queueRevision < current.queueRevision ? current.queue : nextSnapshot.queue, queueRevision: Math.max(nextSnapshot.queueRevision, current.queueRevision) } : nextSnapshot);
-      if (recovered && callActiveRef.current) { const generation = callGeneration.current; nextSocket.emit(eventNames.voiceJoin, { roomId: nextSnapshot.id }, (result) => { if (!callActiveRef.current || generation !== callGeneration.current) return; if (result.ok) setCallState("connected"); else rejectCall(result.message ?? "Não foi possível voltar à call."); }); }
+      if (recovered && callActiveRef.current) setCallState("joining");
     });
     nextSocket.on("presence:update", (members) => setSnapshot((current) => current ? { ...current, members, connectedCount: members.length } : current));
     nextSocket.on("queue:update", (queue, queueRevision) => {
@@ -297,7 +309,7 @@ export function App() {
     nextSocket.on("member:removed", ({ houseId, message }) => { if (houseId !== routeHouseId) return; setHousesError(message); setSnapshot(null); setHouse(null); localStorage.removeItem(HOUSE_KEY); navigate("/app"); void refreshHouses(); });
     nextSocket.on("house:deleted", ({ houseId }) => { if (houseId !== routeHouseId) return; setShowHouseSettings(false); setSnapshot(null); setHouse(null); setHomeNotice("Casa excluída."); localStorage.removeItem(HOUSE_KEY); navigate("/app"); void refreshHouses(); });
     nextSocket.on("server:error", (message) => { if (!hadSnapshot.current) { setEntryError(message); setConnectionState("error"); } else notifyParty(message, "error"); });
-    return () => { window.clearTimeout(offlineTimer.current); if (nextSocket.connected) nextSocket.emit(eventNames.roomLeave, selectedHouse.primaryRoomId); nextSocket.disconnect(); resetPeers.current(); callGeneration.current += 1; callActiveRef.current = false; micRequestInFlight.current = false; analyserCleanup.current?.(); analyserCleanup.current = null; localStream.current?.getTracks().forEach((track) => track.stop()); localStream.current = null; displayStream.current?.getTracks().forEach((track) => track.stop()); displayStream.current = null; setCallState("idle"); setMicEnabled(false); setLocalScreenStream(null); setRemoteScreenStream(null); setSocket(null); };
+    return () => { window.clearTimeout(offlineTimer.current); if (nextSocket.connected) nextSocket.emit(eventNames.roomLeave, selectedHouse.primaryRoomId); nextSocket.disconnect(); resetPeers.current(); callGeneration.current += 1; callActiveRef.current = false; micRequestInFlight.current = false; analyserCleanup.current?.(); analyserCleanup.current = null; localStream.current?.getTracks().forEach((track) => track.stop()); localStream.current = null; displayStream.current?.getTracks().forEach((track) => track.stop()); displayStream.current = null; mutedRef.current = true; setMuted(true); setSpeaking(false); setAudioBlocked(false); setCallState("idle"); setMicEnabled(false); setLocalScreenStream(null); setRemoteScreenStream(null); setSocket(null); };
   }, [session?.token, routeHouseId, selectedHouse?.id, selectedHouse?.primaryRoomId, rejectCall]);
 
   useEffect(() => {
@@ -387,6 +399,7 @@ export function App() {
       if (displayStream.current?.getVideoTracks().length) connection.addTrack(displayStream.current.getVideoTracks()[0], displayStream.current);
       else connection.addTransceiver("video", { direction: "recvonly" });
       connection.onnegotiationneeded = async () => {
+        if (!shouldInitiateOffer({ polite: state.polite, hasRemoteDescription: Boolean(connection.remoteDescription), signalingState: connection.signalingState })) return;
         try { state.makingOffer = true; await connection.setLocalDescription(); if (connection.localDescription?.sdp && (connection.localDescription.type === "offer" || connection.localDescription.type === "answer")) send(peerId, { type: connection.localDescription.type, sdp: connection.localDescription.sdp }); }
         catch { if (connection.signalingState !== "closed") setVoiceError("Não foi possível negociar a conexão da call."); }
         finally { state.makingOffer = false; }
@@ -403,11 +416,11 @@ export function App() {
         const audio = remoteAudio.current.get(peerId) ?? new Audio();
         audio.autoplay = true; audio.srcObject = event.streams[0] ?? new MediaStream([event.track]); audio.volume = ((participantVolumesRef.current[peerId] ?? 80) / 100) * (audioSettingsRef.current.callVolume / 100); audio.muted = deafenedRef.current;
         if (audioSettingsRef.current.outputDeviceId && "setSinkId" in audio) void (audio as HTMLAudioElement & { setSinkId: (id: string) => Promise<void> }).setSinkId(audioSettingsRef.current.outputDeviceId).catch(() => setVoiceError("Não foi possível selecionar a saída de áudio."));
-        remoteAudio.current.set(peerId, audio); void audio.play().then(() => setAudioBlocked(false), () => setAudioBlocked(true));
+        remoteAudio.current.set(peerId, audio); void Promise.all([...remoteAudio.current.values()].map((element) => element.play())).then(() => setAudioBlocked(false), () => setAudioBlocked(true));
       };
       const restart = () => {
         if (connection.connectionState === "closed" || connection.connectionState === "connected" || state.restartTimer) return;
-        if (state.restartAttempts >= 3) { setCallState("error"); setVoiceError("Não foi possível restabelecer a call. Saia e entre novamente; confira a configuração TURN se estiver em redes diferentes."); return; }
+        if (state.restartAttempts >= 3) { setCallState("error"); setVoiceError("Não foi possível restabelecer a voz. Reabra a Party; redes restritivas podem precisar de TURN."); return; }
         state.restartTimer = window.setTimeout(() => {
           state.restartTimer = undefined;
           if (connection.connectionState === "connected" || connection.connectionState === "closed") return;
@@ -417,7 +430,7 @@ export function App() {
         }, Math.min(1000 * 2 ** state.restartAttempts, 4000));
       };
       connection.onconnectionstatechange = () => {
-        if (connection.connectionState === "connected") { window.clearTimeout(state.restartTimer); window.clearTimeout(state.disconnectTimer); state.restartTimer = undefined; state.restartAttempts = 0; if (![...peerConnections.current.values()].some((peer) => peer.connectionState === "failed" || peer.connectionState === "disconnected")) { setVoiceError(""); setCallState("connected"); } }
+        if (connection.connectionState === "connected") { window.clearTimeout(state.restartTimer); window.clearTimeout(state.disconnectTimer); state.restartTimer = undefined; state.restartAttempts = 0; if (![...peerConnections.current.values()].some((peer) => peer.connectionState === "failed" || peer.connectionState === "disconnected")) { setVoiceError((current) => /^(Conexão instável|Não foi possível (restabelecer|negociar)|Falha na negociação)/.test(current) ? "" : current); setCallState("connected"); } }
         if (connection.connectionState === "disconnected") { setCallState("reconnecting"); state.disconnectTimer ??= window.setTimeout(() => { state.disconnectTimer = undefined; restart(); }, 2500); }
         if (connection.connectionState === "failed") { setCallState("reconnecting"); setVoiceError("Conexão instável; tentando recuperar a call…"); restart(); }
       };
@@ -429,6 +442,7 @@ export function App() {
       const connection = createPeer(fromUserId, fromSocketId); const state = peerSessions.current.get(fromUserId)!;
       try {
         if ("candidate" in signal) {
+          if (state.ignoreOffer) return;
           if (connection.remoteDescription) await connection.addIceCandidate(signal.candidate);
           else if (!state.ignoreOffer) state.candidates.push(signal.candidate);
           return;
@@ -556,6 +570,7 @@ export function App() {
   const joinCall = async (withMic: boolean, deviceOverride?: string) => {
     if (!snapshot) return;
     if (!socket?.connected || !window.RTCPeerConnection) { setVoiceError("A call está indisponível enquanto a Party reconecta."); return; }
+    if (withMic && deafenedRef.current) { setVoiceError("Ative o áudio da Party antes de falar."); return; }
     if (withMic && ((micEnabled && localStream.current?.getAudioTracks().some((track) => track.readyState === "live")) || micRequestInFlight.current)) return;
     if (withMic) micRequestInFlight.current = true;
     const generation = callActiveRef.current ? callGeneration.current : ++callGeneration.current;
@@ -579,23 +594,32 @@ export function App() {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: selectedDevice ? { exact: selectedDevice } : undefined, echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
       acquired = stream;
       if (!callActiveRef.current || generation !== callGeneration.current || !socket.connected) { stream.getTracks().forEach((track) => track.stop()); return; }
-      const shouldMute = deafened || audioSettings.microphoneMode === "ptt"; stream.getAudioTracks().forEach((track) => { track.enabled = !shouldMute; });
+      const shouldMute = deafenedRef.current || audioSettingsRef.current.microphoneMode === "ptt"; stream.getAudioTracks().forEach((track) => { track.enabled = !shouldMute; });
       const track = stream.getAudioTracks()[0];
-      const replacements = await Promise.allSettled([...peerConnections.current.values()].map(async (connection) => { const sender = connection.getSenders().find((candidate) => candidate.track?.kind === "audio"); if (sender) await sender.replaceTrack(track); else connection.addTrack(track, stream); }));
+      const replacements = await Promise.allSettled([...peerConnections.current.values()].map((connection) => publishMicrophone(connection, track, stream)));
       if (!callActiveRef.current || generation !== callGeneration.current) { stream.getTracks().forEach((item) => item.stop()); return; }
-      localStream.current = stream; setMicEnabled(true); setMuted(shouldMute); setVoiceError(replacements.some((result) => result.status === "rejected") ? "Microfone ativo, mas um participante não recebeu a nova track." : ""); startMicMeter(stream);
-      track.addEventListener("ended", () => { if (localStream.current !== stream || !callActiveRef.current) return; analyserCleanup.current?.(); analyserCleanup.current = null; localStream.current = null; setMicEnabled(false); setVoiceError("Microfone desconectado; tentando o dispositivo padrão."); setAudioSettings((current) => ({ ...current, inputDeviceId: "" })); void joinCallRef.current(true, ""); }, { once: true });
-      socket.emit(eventNames.presenceUpdate, { roomId: snapshot.id, speaking: false, muted: shouldMute, deafened });
+      localStream.current = stream; mutedRef.current = shouldMute; setMicEnabled(true); setMuted(shouldMute); setVoiceError(replacements.some((result) => result.status === "rejected") ? "Microfone ativo, mas um participante não recebeu a nova track." : ""); startMicMeter(stream);
+      track.addEventListener("ended", () => { if (localStream.current !== stream || !callActiveRef.current) return; analyserCleanup.current?.(); analyserCleanup.current = null; localStream.current = null; mutedRef.current = true; setMuted(true); setMicEnabled(false); setSpeaking(false); setVoiceError("Microfone desconectado. Toque em Ativar microfone para tentar novamente."); socket.emit(eventNames.presenceUpdate, { roomId: snapshot.id, speaking: false, muted: true, deafened: deafenedRef.current }); }, { once: true });
+      socket.emit(eventNames.presenceUpdate, { roomId: snapshot.id, speaking: false, muted: shouldMute, deafened: deafenedRef.current });
       void navigator.mediaDevices.enumerateDevices().then((devices) => setAudioDevices(devices.filter((device) => device.kind === "audioinput" || device.kind === "audiooutput")));
     } catch { acquired?.getTracks().forEach((track) => track.stop()); if (generation === callGeneration.current) setVoiceError("Microfone indisponível. Você continua na call para ouvir; revise a permissão ou o dispositivo."); }
     finally { if (generation === callGeneration.current) micRequestInFlight.current = false; }
   };
   joinCallRef.current = joinCall;
-  useEffect(() => { if (snapshot?.screenShare && !callActiveRef.current) void joinCallRef.current(false); }, [snapshot?.screenShare?.user.id]);
+  useEffect(() => {
+    if (snapshot && socket?.connected && connectionState === "connected" && !callActiveRef.current) void joinCallRef.current(false);
+  }, [snapshot?.id, socket, connectionState]);
   useEffect(() => {
     if (callState !== "joining" || !socket?.connected || !snapshot) return;
     const generation = callGeneration.current;
-    socket.emit(eventNames.voiceJoin, { roomId: snapshot.id }, (result) => { if (!callActiveRef.current || generation !== callGeneration.current) return; if (result.ok) setCallState("connected"); else rejectCall(result.message ?? "Não foi possível entrar na call."); });
+    const timeout = window.setTimeout(() => { if (generation === callGeneration.current && callActiveRef.current)  { socket.emit(eventNames.voiceLeave, { roomId: snapshot.id }); rejectCall("Voz indisponível: o servidor não respondeu. Reabra a Party para tentar novamente."); } }, 10000);
+    socket.emit(eventNames.voiceJoin, { roomId: snapshot.id }, (result) => {
+      window.clearTimeout(timeout);
+      if (!callActiveRef.current || generation !== callGeneration.current) return;
+      if (result.ok) { setCallState("connected"); socket.emit(eventNames.presenceUpdate, { roomId: snapshot.id, speaking: false, muted: mutedRef.current, deafened: deafenedRef.current }); }
+      else rejectCall(result.message ?? "Não foi possível conectar a voz da Party.");
+    });
+    return () => window.clearTimeout(timeout);
   }, [callState, socket, snapshot?.id, rejectCall]);
   const leaveCall = () => {
     if (!snapshot) return;
@@ -604,17 +628,18 @@ export function App() {
     socket?.emit(eventNames.voiceLeave, { roomId: snapshot.id });
     localStream.current?.getTracks().forEach((track) => track.stop()); localStream.current = null;
     analyserCleanup.current?.(); analyserCleanup.current = null;
-    closeAllPeers(); setMicEnabled(false); setMuted(false); setSpeaking(false); micLevelRef.current = 0; setCallQuality("Calculando"); setVoiceError(""); setAudioBlocked(false); setCallState("idle");
+    closeAllPeers(); mutedRef.current = true; setMicEnabled(false); setMuted(true); setSpeaking(false); micLevelRef.current = 0; setCallQuality("Calculando"); setVoiceError(""); setAudioBlocked(false); setCallState("idle");
   };
   const toggleMute = () => {
     if (!micEnabled) return void joinCall(true);
     if (audioSettings.microphoneMode === "ptt") { setVoiceError("No modo push-to-talk, segure V para falar."); return; }
-    const nextMuted = !muted; setMuted(nextMuted); localStream.current?.getAudioTracks().forEach((track) => { track.enabled = !nextMuted; });
+    if (deafened) { setVoiceError("Ative o áudio da Party antes de falar."); return; }
+    const nextMuted = !muted; mutedRef.current = nextMuted; setMuted(nextMuted); setSpeaking(false); localStream.current?.getAudioTracks().forEach((track) => { track.enabled = !nextMuted; });
     if (snapshot) socket?.emit(eventNames.presenceUpdate, { roomId: snapshot.id, speaking: false, muted: nextMuted, deafened });
   };
   const toggleDeafen = () => {
-    const nextDeafened = !deafened; setDeafened(nextDeafened); remoteAudio.current.forEach((audio) => { audio.muted = nextDeafened; });
-    if (nextDeafened) { setMuted(true); localStream.current?.getAudioTracks().forEach((track) => { track.enabled = false; }); }
+    const nextDeafened = !deafened; deafenedRef.current = nextDeafened; setDeafened(nextDeafened); remoteAudio.current.forEach((audio) => { audio.muted = nextDeafened; });
+    if (nextDeafened) { mutedRef.current = true; setMuted(true); setSpeaking(false); localStream.current?.getAudioTracks().forEach((track) => { track.enabled = false; }); }
     if (snapshot) socket?.emit(eventNames.presenceUpdate, { roomId: snapshot.id, speaking: false, muted: nextDeafened || muted, deafened: nextDeafened });
   };
 
@@ -650,14 +675,15 @@ export function App() {
   useEffect(() => {
     if (!micEnabled || !navigator.mediaDevices?.getUserMedia) return;
     let cancelled = false;
+    const generation = callGeneration.current;
     const selectedDeviceId = audioSettings.inputDeviceId;
     void navigator.mediaDevices.getUserMedia({ audio: { deviceId: selectedDeviceId ? { exact: selectedDeviceId } : undefined, echoCancellation: true, noiseSuppression: true, autoGainControl: true } }).then(async (stream) => {
-      if (cancelled) { stream.getTracks().forEach((track) => track.stop()); return; }
+      if (cancelled || generation !== callGeneration.current || !callActiveRef.current) { stream.getTracks().forEach((track) => track.stop()); return; }
       const previous = localStream.current; const nextTrack = stream.getAudioTracks()[0];
-      const shouldMute = deafenedRef.current || audioSettingsRef.current.microphoneMode === "ptt"; nextTrack.enabled = !shouldMute;
+      const shouldMute = mutedRef.current || deafenedRef.current || audioSettingsRef.current.microphoneMode === "ptt"; nextTrack.enabled = !shouldMute;
       try {
-        await Promise.all([...peerConnections.current.values()].map(async (connection) => { const sender = connection.getSenders().find((candidate) => candidate.track?.kind === "audio"); if (sender) await sender.replaceTrack(nextTrack); else connection.addTrack(nextTrack, stream); }));
-        if (cancelled) { stream.getTracks().forEach((track) => track.stop()); return; }
+        await Promise.all([...peerConnections.current.values()].map((connection) => publishMicrophone(connection, nextTrack, stream)));
+        if (cancelled || generation !== callGeneration.current || !callActiveRef.current) { stream.getTracks().forEach((track) => track.stop()); return; }
         previous?.getTracks().forEach((track) => track.stop()); localStream.current = stream; startMicMeter(stream); setMuted(shouldMute); setVoiceError("");
       } catch { stream.getTracks().forEach((track) => track.stop()); setVoiceError("Não foi possível trocar o microfone. O dispositivo anterior continua ativo."); }
     }).catch(() => { setVoiceError("Microfone selecionado indisponível; tentando o padrão."); if (selectedDeviceId) setAudioSettings((current) => ({ ...current, inputDeviceId: "" })); });
@@ -669,7 +695,8 @@ export function App() {
     if (!micEnabled || !snapshot) return;
     const setTrackEnabled = (enabled: boolean) => localStream.current?.getAudioTracks().forEach((track) => { track.enabled = enabled; });
     if (audioSettings.microphoneMode === "voice") {
-      const nextMuted = deafened; setTrackEnabled(!nextMuted); setMuted(nextMuted);
+      // Leaving deafen never implicitly resumes a previously muted microphone.
+      const nextMuted = deafened || mutedRef.current; setTrackEnabled(!nextMuted); mutedRef.current = nextMuted; setMuted(nextMuted);
       socket?.emit(eventNames.presenceUpdate, { roomId: snapshot.id, speaking: false, muted: nextMuted, deafened });
       return;
     }
@@ -714,14 +741,10 @@ export function App() {
   const openHouse = (target: HouseSummary) => { houseRequestVersion.current += 1; setSnapshot(null); setHouse(null); setShowHouseSettings(false); setShowInvite(false); setShowMediaHub(false); setTypingUserIds([]); setUnreadChat(0); localStorage.setItem(HOUSE_KEY, target.id); navigate(`/house/${encodeURIComponent(target.id)}`); };
   const createHomeHouse = async (name: string) => { if (!session) return; const response = await fetch(`${API_URL}/api/houses`, { method: "POST", headers: { Authorization: `Bearer ${session.token}`, "Content-Type": "application/json" }, body: JSON.stringify({ name }) }); if (!response.ok) { setHousesError((await response.json()).message ?? "Não foi possível criar a Casa."); return; } const data = await response.json() as { house: HouseDetails }; await refreshHouses(); openHouse(data.house); };
   const openInviteInput = (value: string) => {
-    try {
-      const input = value.trim();
-      const url = new URL(input, window.location.origin);
-      const token = url.pathname.startsWith("/invite/") ? url.pathname.slice(8) : url.searchParams.get("invite") ?? input;
-      if (!/^[A-Za-z0-9_-]{20,128}$/.test(token)) return false;
-      navigate(`/invite/${encodeURIComponent(token)}`);
-      return true;
-    } catch { return false; }
+    const identifier = parseInviteInput(value, window.location.origin);
+    if (!identifier) return false;
+    navigate(`/invite/${encodeURIComponent(identifier)}`);
+    return true;
   };
   const acceptedInvite = async (houseId: string) => { await refreshHouses(); localStorage.setItem(HOUSE_KEY, houseId); setHouse(null); setSnapshot(null); navigate(`/house/${encodeURIComponent(houseId)}`); };
 
@@ -754,7 +777,7 @@ export function App() {
   };
   const openDrawer = (panel: "chat" | "members" | "queue") => { if (document.activeElement instanceof HTMLElement) drawerReturnFocus.current = document.activeElement; setActivePanel(panel); setRightPanelCollapsed(false); if (panel === "chat") setUnreadChat(0); };
   const closeDrawer = () => { setRightPanelCollapsed(true); requestAnimationFrame(() => drawerReturnFocus.current?.focus()); };
-  const micLabel = !micEnabled ? callState === "idle" ? "Entrar na call" : "Ativar microfone" : muted ? "Ativar microfone" : "Desativar microfone";
+  const micLabel = !micEnabled || muted ? "Ativar microfone" : "Desativar microfone";
   const syncLabel = connectionState === "connected" ? "Sincronizado com a Party" : connectionState === "connecting" ? "Entrando na Party" : connectionState === "reconnecting" ? "Reconectando à Party" : "Sem conexão com a Party";
 
   return <Suspense fallback={<LoadingScreen user={session.user} connectionState="connecting" onBack={() => navigate("/app")} />}><div className={`app-shell ${mobileParty ? "mobile-party" : ""} ${rightPanelCollapsed ? "panel-collapsed" : ""} ${theaterMode ? "theater-shell" : ""}`}>
@@ -785,12 +808,12 @@ export function App() {
           </section>
         </section>
 
-        {!rightPanelCollapsed && (!mobileParty || activePanel !== "chat") ? <aside className={`party-drawer ${activePanel === "chat" ? "is-chat" : ""}`} aria-label="Painel da Party">{mobileParty ? <MobileSheetHandle onClose={closeDrawer} /> : null}<div className="drawer-header"><div className="drawer-tabs" role="tablist" aria-label="Conteúdo da Party">{!mobileParty ? <button className={activePanel === "chat" ? "active" : ""} onClick={() => setActivePanel("chat")} role="tab" aria-selected={activePanel === "chat"}>Chat</button> : null}<button className={activePanel === "members" ? "active" : ""} onClick={() => setActivePanel("members")} role="tab" aria-selected={activePanel === "members"}>Pessoas</button><button className={activePanel === "queue" ? "active" : ""} onClick={() => setActivePanel("queue")} role="tab" aria-selected={activePanel === "queue"}>Fila</button></div><button className="icon-button" onClick={closeDrawer} aria-label="Fechar painel" data-tooltip="Fechar"><X size={18} /></button></div>{activePanel === "chat" ? <ChatPanel messages={snapshot.messages} currentUser={session.user} typingNames={(house?.members ?? []).filter((member) => typingUserIds.includes(member.user.id)).map((member) => member.user.displayName)} onTyping={(typing) => socket?.emit(eventNames.chatTyping, { roomId: snapshot.id, typing })} onSend={sendChat} /> : activePanel === "members" ? <MembersPanel members={house?.members ?? snapshot.houseMembers ?? []} currentUserId={session.user.id} participantVolumes={participantVolumes} onVolume={(userId, volume) => setParticipantVolumes((current) => ({ ...current, [userId]: volume }))} /> : <div className="drawer-queue"><div className="drawer-section-title"><div><strong>Fila da Party</strong><span>{snapshot.queue.length} {snapshot.queue.length === 1 ? "item" : "itens"} · rev. {snapshot.queueRevision}</span></div><div className="drawer-title-actions"><button className={showHistory ? "active" : ""} onClick={() => setShowHistory((value) => !value)} aria-label="Alternar histórico" data-tooltip="Histórico"><History size={17} /></button>{house?.permissions.includes("QUEUE_MANAGE") && snapshot.queue.length > 1 ? <button onClick={() => setConfirmClearQueue(true)} aria-label="Limpar fila" data-tooltip="Limpar fila"><Trash2 size={16} /></button> : null}</div></div>{showHistory ? <HistoryList history={snapshot.history} /> : null}<QueueList queue={snapshot.queue} onPlay={(item) => socket?.emit(eventNames.mediaChange, { roomId: snapshot.id, item })} onRemove={setPendingQueueRemoval} onMove={moveQueueItem} onNext={nextMedia} onPrevious={previousMedia} onAdd={() => setShowMediaHub(true)} /></div>}</aside> : null}
+        {!rightPanelCollapsed && (!mobileParty || activePanel !== "chat") ? <aside className={`party-drawer ${activePanel === "chat" ? "is-chat" : ""}`} aria-label="Painel da Party">{mobileParty ? <MobileSheetHandle onClose={closeDrawer} /> : null}<div className="drawer-header"><div className="drawer-tabs" role="tablist" aria-label="Conteúdo da Party">{!mobileParty ? <button className={activePanel === "chat" ? "active" : ""} onClick={() => setActivePanel("chat")} role="tab" aria-selected={activePanel === "chat"}>Chat</button> : null}<button className={activePanel === "members" ? "active" : ""} onClick={() => setActivePanel("members")} role="tab" aria-selected={activePanel === "members"}>Pessoas</button><button className={activePanel === "queue" ? "active" : ""} onClick={() => setActivePanel("queue")} role="tab" aria-selected={activePanel === "queue"}>Fila</button></div><button className="icon-button" onClick={closeDrawer} aria-label="Fechar painel" data-tooltip="Fechar"><X size={18} /></button></div>{activePanel === "chat" ? <ChatPanel messages={snapshot.messages} currentUser={session.user} typingNames={(house?.members ?? []).filter((member) => typingUserIds.includes(member.user.id)).map((member) => member.user.displayName)} onTyping={(typing) => socket?.emit(eventNames.chatTyping, { roomId: snapshot.id, typing })} onSend={sendChat} /> : activePanel === "members" ? <MembersPanel voiceMembers={snapshot.members} members={house?.members ?? snapshot.houseMembers ?? []} currentUserId={session.user.id} participantVolumes={participantVolumes} onVolume={(userId, volume) => setParticipantVolumes((current) => ({ ...current, [userId]: volume }))} /> : <div className="drawer-queue"><div className="drawer-section-title"><div><strong>Fila da Party</strong><span>{snapshot.queue.length} {snapshot.queue.length === 1 ? "item" : "itens"} · rev. {snapshot.queueRevision}</span></div><div className="drawer-title-actions"><button className={showHistory ? "active" : ""} onClick={() => setShowHistory((value) => !value)} aria-label="Alternar histórico" data-tooltip="Histórico"><History size={17} /></button>{house?.permissions.includes("QUEUE_MANAGE") && snapshot.queue.length > 1 ? <button onClick={() => setConfirmClearQueue(true)} aria-label="Limpar fila" data-tooltip="Limpar fila"><Trash2 size={16} /></button> : null}</div></div>{showHistory ? <HistoryList history={snapshot.history} /> : null}<QueueList queue={snapshot.queue} onPlay={(item) => socket?.emit(eventNames.mediaChange, { roomId: snapshot.id, item })} onRemove={setPendingQueueRemoval} onMove={moveQueueItem} onNext={nextMedia} onPrevious={previousMedia} onAdd={() => setShowMediaHub(true)} /></div>}</aside> : null}
         {mobileParty ? <MobilePartyChat key={snapshot.id} hidden={playerFullscreen} onPeople={() => openDrawer("members")} onQueue={() => openDrawer("queue")} onAdd={() => setShowMediaHub(true)}><ChatPanel messages={snapshot.messages} currentUser={session.user} typingNames={(house?.members ?? []).filter((member) => typingUserIds.includes(member.user.id)).map((member) => member.user.displayName)} onTyping={(typing) => socket?.emit(eventNames.chatTyping, { roomId: snapshot.id, typing })} onSend={sendChat} composerAccessory={<MobileCallControls
           micEnabled={micEnabled} muted={muted} deafened={deafened} callState={callState} voiceError={voiceError}
           micLabel={micLabel} isSharingScreen={isSharingScreen} shareOccupied={Boolean(snapshot.screenShare && !isSharingScreen)}
           canShare={isSharingScreen || typeof navigator.mediaDevices?.getDisplayMedia === "function"}
-          onMic={() => micEnabled ? toggleMute() : void joinCall(true)} onDeafen={toggleDeafen}
+          onMic={toggleMute} onDeafen={toggleDeafen}
           onShare={() => isSharingScreen ? stopScreenShare(true) : void startScreenShare()}
           audioBlocked={audioBlocked} onEnableAudio={() => { void Promise.all([...remoteAudio.current.values()].map((audio) => audio.play())).then(() => setAudioBlocked(false), () => setAudioBlocked(true)); }}
           onSettings={() => setShowCallSettings(true)}
@@ -798,10 +821,10 @@ export function App() {
       </div>
 
       <footer className="party-dock" aria-label="Controles da Party">
-        {voiceError || callState !== "idle" ? <span className={`dock-call-state ${voiceError ? "error" : "connected"}`} aria-live="polite"><i />{voiceError || (callState === "reconnecting" ? "Reconectando a call…" : callState === "joining" ? "Entrando na call…" : !micEnabled ? "Na call · somente ouvindo" : audioSettings.microphoneMode === "ptt" ? "Segure V para falar" : speaking ? "Você está falando" : `Voz conectada · ${callQuality}`)}</span> : null}
+        {voiceError || callState !== "idle" ? <span className={`dock-call-state ${voiceError ? "error" : "connected"}`} aria-live="polite"><i />{voiceError || (callState === "reconnecting" ? "Reconectando voz…" : callState === "joining" ? "Conectando voz…" : !micEnabled || muted ? "Microfone desligado" : audioSettings.microphoneMode === "ptt" ? "Segure V para falar" : speaking ? "Você está falando" : `Voz conectada · ${callQuality}`)}</span> : null}
         {audioBlocked ? <button className="dock-call-state error" onClick={() => { void Promise.all([...remoteAudio.current.values()].map((audio) => audio.play())).then(() => setAudioBlocked(false), () => setAudioBlocked(true)); }}>Ativar áudio da call</button> : null}
         <div className="dock-actions">
-          <button className={`dock-button dock-call-action ${micEnabled && !muted ? "active" : ""} ${voiceError ? "error" : ""}`} onClick={() => micEnabled ? toggleMute() : void joinCall(true)} aria-label={voiceError ? "Microfone indisponível" : micLabel} data-tooltip={voiceError ? "Microfone indisponível" : micLabel}>{muted && micEnabled ? <MicOff size={20} /> : <Mic size={20} />}</button>
+          <button className={`dock-button dock-call-action ${micEnabled && !muted ? "active" : ""} ${voiceError ? "error" : ""}`} onClick={toggleMute} aria-pressed={micEnabled && !muted} aria-label={micLabel} data-tooltip={micLabel}>{muted || !micEnabled ? <MicOff size={20} /> : <Mic size={20} />}</button>
           <button className={`dock-button dock-call-action ${deafened ? "danger" : ""}`} onClick={toggleDeafen} aria-pressed={deafened} aria-label={deafened ? "Ativar áudio da call" : "Desativar áudio da call"} data-tooltip={deafened ? "Ativar áudio da call" : "Desativar áudio da call"}><Headphones size={20} /></button>
           {isSharingScreen || typeof navigator.mediaDevices?.getDisplayMedia === "function" ? <button className={`dock-button dock-call-action dock-screen-share ${isSharingScreen ? "active" : ""}`} disabled={Boolean(snapshot.screenShare && !isSharingScreen)} onClick={() => isSharingScreen ? stopScreenShare(true) : void startScreenShare()} aria-label={isSharingScreen ? "Parar compartilhamento" : "Compartilhar tela"} data-tooltip={isSharingScreen ? "Parar compartilhamento" : "Compartilhar tela"}>{isSharingScreen ? <ScreenShareOff size={20} /> : <MonitorUp size={20} />}</button> : null}
           <button className={`dock-button ${!rightPanelCollapsed && activePanel === "chat" ? "selected" : ""}`} onClick={() => !rightPanelCollapsed && activePanel === "chat" ? closeDrawer() : openDrawer("chat")} aria-label={unreadChat ? `Abrir chat, ${unreadChat} não lidas` : "Abrir chat"} data-tooltip="Chat"><MessageCircle size={20} />{unreadChat ? <span className="dock-unread" aria-hidden="true" /> : null}</button>
@@ -818,7 +841,7 @@ export function App() {
     {showInvite && house ? <InviteDialog apiUrl={API_URL} token={session.token} house={house} onClose={() => setShowInvite(false)} onChanged={(next) => setHouse(next)} /> : null}
     {showHouseSettings && house ? <HouseSettingsDialog apiUrl={API_URL} token={session.token} house={house} currentUserId={session.user.id} roomSettings={snapshot.settings} onRoomSettings={(settings) => socket?.emit(eventNames.roomSettings, { roomId: snapshot.id, settings })} onClose={() => setShowHouseSettings(false)} onLeft={() => { setShowHouseSettings(false); setSnapshot(null); setHouse(null); localStorage.removeItem(HOUSE_KEY); navigate("/app"); void refreshHouses(); }} onChanged={(next) => { setHouse(next); void refreshHouses(); }} /> : null}
     {showProfile ? <ProfileDialog apiUrl={API_URL} token={session.token} user={session.user} onClose={() => setShowProfile(false)} onSaved={(user) => { const nextSession = { ...session, user }; setSession(nextSession); localStorage.setItem(SESSION_KEY, JSON.stringify(nextSession)); }} /> : null}
-    {showCallSettings ? <Suspense fallback={<div className="overlay-loading" role="status">Abrindo configurações...</div>}><CallSettings settings={audioSettings} devices={audioDevices} getMicLevel={getMicLevel} connected={callState !== "idle"} outputSelectionSupported={"setSinkId" in HTMLMediaElement.prototype} onChange={setAudioSettings} onLeaveCall={() => { leaveCall(); setShowCallSettings(false); }} onClose={() => setShowCallSettings(false)} /></Suspense> : null}
+    {showCallSettings ? <Suspense fallback={<div className="overlay-loading" role="status">Abrindo configurações...</div>}><CallSettings settings={audioSettings} devices={audioDevices} getMicLevel={getMicLevel} outputSelectionSupported={"setSinkId" in HTMLMediaElement.prototype} onChange={setAudioSettings} onClose={() => setShowCallSettings(false)} /></Suspense> : null}
   </div></Suspense>;
 }
 
@@ -832,9 +855,10 @@ function MobileCallControls({ micEnabled, muted, deafened, callState, voiceError
   const root = useRef<HTMLDivElement>(null);
   useEffect(() => { if (!open) return; const outside = (event: PointerEvent) => { if (!root.current?.contains(event.target as Node)) setOpen(false); }; document.addEventListener("pointerdown", outside); return () => document.removeEventListener("pointerdown", outside); }, [open]);
   return <div ref={root} className="mobile-call-controls" onKeyDown={(event) => { if (event.key === "Escape" && open) { event.stopPropagation(); setOpen(false); root.current?.querySelector<HTMLButtonElement>(".mobile-call-trigger")?.focus(); } }}>
-    <button className={`mobile-call-trigger ${micEnabled && !muted ? "active" : ""}`} type="button" aria-label="Controles da call" aria-expanded={open} aria-controls="mobile-call-menu" onClick={() => setOpen((value) => !value)}>{micEnabled && muted ? <MicOff size={19} /> : <Mic size={19} />}</button>
+    {audioBlocked && !open ? <button className="mobile-call-trigger" type="button" aria-label="Ativar áudio da call" onClick={onEnableAudio}><Headphones size={19} /></button> : null}
+    <button className={`mobile-call-trigger ${micEnabled && !muted ? "active" : ""}`} type="button" aria-label="Controles da call" aria-expanded={open} aria-controls="mobile-call-menu" onClick={() => setOpen((value) => !value)}>{!micEnabled || muted ? <MicOff size={19} /> : <Mic size={19} />}</button>
     {open ? <div className="mobile-call-menu" id="mobile-call-menu" role="group" aria-label="Controles da call">
-      <p>{voiceError || (callState === "idle" ? "Você não está na call" : callState === "joining" ? "Entrando na call…" : callState === "reconnecting" ? "Reconectando à call…" : "Na call")}</p>
+      <p>{voiceError || (callState === "idle" || callState === "joining" ? "Conectando voz…" : callState === "reconnecting" ? "Reconectando voz…" : "Voz da Party conectada")}</p>
       {audioBlocked ? <button type="button" onClick={onEnableAudio}><Headphones size={18} />Liberar áudio da call</button> : null}
       <button type="button" onClick={() => { onMic(); setOpen(false); }}>{micEnabled && !muted ? <MicOff size={18} /> : <Mic size={18} />}{micLabel}</button>
       <button type="button" onClick={() => { onDeafen(); setOpen(false); }}><Headphones size={18} />{deafened ? "Ativar áudio da call" : "Mutar áudio da call"}</button>
@@ -904,9 +928,10 @@ function ChatPanel({ messages, currentUser, typingNames, onTyping, onSend, compo
   </div>{newBelow ? <button className="chat-new-below" onClick={() => { listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: "smooth" }); atBottom.current = true; setNewBelow(0); }}>Novas mensagens ↓</button> : null}<div className="typing-indicator" aria-live="polite">{typingNames.length ? `${typingNames.slice(0, 2).join(" e ")} está digitando…` : ""}</div><form className="chat-form" onSubmit={submit}>{composerAccessory}<label className="sr-only" htmlFor="chat-message">Mensagem</label><input ref={inputRef} id="chat-message" name="message" autoComplete="off" value={draft} onChange={(event) => changed(event.target.value)} placeholder="Escreva uma mensagem…" /><button disabled={!draft.trim()} aria-label="Enviar mensagem"><Send /></button></form></div>;
 }
 
-function MembersPanel({ members, currentUserId, participantVolumes, onVolume }: { members: HouseMember[]; currentUserId: string; participantVolumes: Record<string, number>; onVolume: (userId: string, volume: number) => void }) {
+function MembersPanel({ members, currentUserId, participantVolumes, onVolume, voiceMembers }: { voiceMembers: RoomSnapshot["members"]; members: HouseMember[]; currentUserId: string; participantVolumes: Record<string, number>; onVolume: (userId: string, volume: number) => void }) {
+  members = members.map((member) => ({ ...member, speaking: member.inParty ? voiceMembers.find((peer) => peer.user.id === member.user.id)?.speaking ?? false : member.speaking }));
   const sections = [{ label: "Na Party", items: members.filter((m) => m.inParty) }, { label: "Online", items: members.filter((m) => !m.inParty && m.presence !== "OFFLINE") }, { label: "Offline", items: members.filter((m) => m.presence === "OFFLINE") }];
-  return <div className="members-panel"><div className="members-summary"><Users size={20} aria-hidden="true" /><div><strong>{members.filter((m) => m.presence !== "OFFLINE").length} online</strong><span>{members.length} membros na Casa</span></div></div>{sections.map((section) => section.items.length ? <section className="people-section" key={section.label}><h3>{section.label} · {section.items.length}</h3><ul className="members-list">{section.items.map((member) => <li className={`member-row ${member.speaking ? "is-speaking" : ""} ${member.presence === "OFFLINE" ? "is-offline" : ""}`} key={member.user.id}><Avatar className="member-avatar" name={member.user.displayName} src={member.user.avatar} color={member.user.color} /><div className="member-copy"><div><strong>{member.user.displayName}{member.user.id === currentUserId ? " (você)" : ""}</strong>{member.role !== "MEMBER" ? <span className="role-badge">{member.role === "HOST" ? "Host" : "Admin"}</span> : null}</div><span>{member.screenSharing ? "Compartilhando tela" : member.speaking ? "Falando" : member.inCall ? "Na call" : member.inParty ? "Na Party" : member.presence === "IDLE" ? "Ausente" : member.presence === "OFFLINE" ? `Visto ${timeLabel(member.lastSeenAt)}` : member.user.status || "Online"}</span>{member.inCall && member.user.id !== currentUserId ? <label className="participant-volume"><span className="sr-only">Volume de {member.user.displayName}</span><Volume2 size={14} /><input type="range" min="0" max="100" value={participantVolumes[member.user.id] ?? 80} onChange={(event) => onVolume(member.user.id, Number(event.target.value))} /></label> : null}</div>{member.screenSharing ? <MonitorUp size={17} /> : member.speaking ? <span className="speaking-bars"><i /><i /><i /></span> : <span className="online-dot" />}</li>)}</ul></section> : null)}</div>;
+  return <div className="members-panel"><div className="members-summary"><Users size={20} aria-hidden="true" /><div><strong>{members.filter((m) => m.presence !== "OFFLINE").length} online</strong><span>{members.length} membros na Casa</span></div></div>{sections.map((section) => section.items.length ? <section className="people-section" key={section.label}><h3>{section.label} · {section.items.length}</h3><ul className="members-list">{section.items.map((member) => <li className={`member-row ${member.speaking ? "is-speaking" : ""} ${member.presence === "OFFLINE" ? "is-offline" : ""}`} key={member.user.id}><Avatar className="member-avatar" name={member.user.displayName} src={member.user.avatar} color={member.user.color} /><div className="member-copy"><div><strong>{member.user.displayName}{member.user.id === currentUserId ? " (você)" : ""}</strong>{member.role !== "MEMBER" ? <span className="role-badge">{member.role === "HOST" ? "Host" : "Admin"}</span> : null}</div><span>{member.screenSharing ? "Compartilhando tela" : member.speaking ? "Falando" : member.inParty ? (voiceMembers.find((peer) => peer.user.id === member.user.id)?.deafened ? "Áudio desativado" : voiceMembers.find((peer) => peer.user.id === member.user.id)?.muted !== false ? "Microfone desligado" : "Microfone ativo") : member.presence === "IDLE" ? "Ausente" : member.presence === "OFFLINE" ? `Visto ${timeLabel(member.lastSeenAt)}` : member.user.status || "Online"}</span>{member.inCall && member.user.id !== currentUserId ? <label className="participant-volume"><span className="sr-only">Volume de {member.user.displayName}</span><Volume2 size={14} /><input type="range" min="0" max="100" value={participantVolumes[member.user.id] ?? 80} onChange={(event) => onVolume(member.user.id, Number(event.target.value))} /></label> : null}</div>{member.screenSharing ? <MonitorUp size={17} /> : member.speaking ? <span className="speaking-bars"><i /><i /><i /></span> : <span className="online-dot" />}</li>)}</ul></section> : null)}</div>;
 }
 
 function RoomSettingsDialog({ settings, onClose, onSave }: { settings: RoomSettings; onClose: () => void; onSave: (settings: RoomSettings) => void }) {

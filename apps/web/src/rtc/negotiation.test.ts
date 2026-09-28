@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { shouldIgnoreOffer } from "./negotiation.js";
+import { shouldIgnoreOffer, shouldInitiateOffer } from "./negotiation.js";
+
+test("one side starts receive-only negotiation; both may renegotiate after discovery", () => {
+  assert.equal(shouldInitiateOffer({ polite: true, hasRemoteDescription: false, signalingState: "stable" }), false);
+  assert.equal(shouldInitiateOffer({ polite: false, hasRemoteDescription: false, signalingState: "stable" }), true);
+  assert.equal(shouldInitiateOffer({ polite: true, hasRemoteDescription: true, signalingState: "stable" }), true);
+  assert.equal(shouldInitiateOffer({ polite: false, hasRemoteDescription: true, signalingState: "have-local-offer" }), false);
+});
 
 test("impolite peer ignores colliding offer", () => {
   assert.equal(shouldIgnoreOffer({ polite: false, makingOffer: true, signalingState: "stable", settingAnswer: false }), true);

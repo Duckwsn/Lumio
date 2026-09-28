@@ -43,6 +43,9 @@ test("PostgreSQL House, membership and hashed invite survive restart; presence d
     assert.equal(details.members.find((entry) => entry.user.id === guest.id)?.presence, "OFFLINE");
     assert.equal(details.members.find((entry) => entry.user.id === guest.id)?.inParty, false);
     assert.equal(restored.inspectInvite(invite.token).status, "LIMIT_REACHED");
+    assert.equal(restored.getInvite(invite.code!)?.id, invite.id);
+    assert.equal(restored.acceptInvite(invite.code!, guest).ok, true);
+    assert.ok((await db.houseInvite.findUnique({ where: { id: invite.id } }))?.codeHash);
     assert.equal(restored.acceptInvite(invite.token, guest).ok, true);
   } finally {
     if (houseId) await db.group.deleteMany({ where: { id: houseId } });

@@ -5,6 +5,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type { HouseSummary } from "@lumio/shared";
 import { safeAuthDestination } from "./authNavigation";
 import { HomePage } from "./components/EntryExperience";
+import { parseInviteInput } from "./inviteInput.js";
 
 test("post-login destination rejects cross-origin and protocol-relative redirects", () => {
   const origin = "https://lumio.example.test";
@@ -18,4 +19,13 @@ test("House names are escaped as text in the Home UI", () => {
   const html = renderToStaticMarkup(createElement(HomePage, { user: { id: "duck", displayName: "Duck", color: "#fff" }, houses: [house], onRetry: () => undefined, onOpenHouse: () => undefined, onCreate: async () => undefined, onInvite: () => false, onAccount: () => undefined, onLogout: () => undefined }));
   assert.equal(html.includes(malicious), false);
   assert.match(html, /&lt;img src=x onerror=alert\(1\)&gt;/);
+});
+test("invite input supports normalized codes and existing local invitation links", () => {
+  const origin = "https://lumio.example.test", token = "a".repeat(32);
+  assert.equal(parseInviteInput(" abcde-fghjk ", origin), "ABCDEFGHJK");
+  assert.equal(parseInviteInput(`${origin}/invite/${token}`, origin), token);
+  assert.equal(parseInviteInput(token, origin), token);
+  for (const input of ["ABCDE/FGHJK", "1234567890", `https://attacker.test/invite/${token}`, "javascript:alert(1)"]) assert.equal(parseInviteInput(input, origin), null);
+  const next = `/invite/${parseInviteInput("abcde fghjk", origin)}`;
+  assert.equal(safeAuthDestination(next, origin), next);
 });

@@ -13,14 +13,12 @@ export interface LocalAudioSettings {
   duckingVolume: number;
 }
 
-export function CallSettings({ settings, devices, getMicLevel, connected, outputSelectionSupported, onChange, onLeaveCall, onClose }: {
+export function CallSettings({ settings, devices, getMicLevel, outputSelectionSupported, onChange, onClose }: {
   settings: LocalAudioSettings;
   devices: MediaDeviceInfo[];
   getMicLevel: () => number;
-  connected: boolean;
   outputSelectionSupported: boolean;
   onChange: (settings: LocalAudioSettings) => void;
-  onLeaveCall: () => void;
   onClose: () => void;
 }) {
   const [micLevel, setMicLevel] = useState(getMicLevel);
@@ -40,6 +38,6 @@ export function CallSettings({ settings, devices, getMicLevel, connected, output
     <label>Volume da call: {settings.callVolume}%<input type="range" min="0" max="100" value={settings.callVolume} onChange={(event) => update("callVolume", Number(event.target.value))} /></label>
     <label className="settings-check"><input type="checkbox" checked={settings.duckingEnabled} onChange={(event) => update("duckingEnabled", event.target.checked)} /> Reduzir mídia quando alguém fala</label>
     <label>Reduzir mídia para: {settings.duckingVolume}%<input type="range" min="10" max="80" value={settings.duckingVolume} disabled={!settings.duckingEnabled} onChange={(event) => update("duckingVolume", Number(event.target.value))} /></label>
-    <div className="call-settings-actions">{connected ? <button className="leave-call-action" onClick={onLeaveCall}>Sair da call</button> : null}<button className="primary-action" onClick={onClose}>Concluir</button></div>
+    <div className="call-settings-actions"><button className="primary-action" onClick={onClose}>Concluir</button></div>
   </section></div>;
 }

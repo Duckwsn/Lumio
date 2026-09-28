@@ -137,12 +137,12 @@ app.use((request, response, next) => {
 
 const authAttempts = new Map<string, { count: number; resetAt: number }>();
 const googleChallenges = new Map<string, { mode: "login" | "link"; userId?: string; expiresAt: number }>();
-const authRateLimit = (request: express.Request, response: express.Response) => {
+const authRateLimit = (request: express.Request, response: express.Response, bucket?: string) => {
   const now = Date.now();
   if (authAttempts.size > 10_000) for (const [key, entry] of authAttempts) if (entry.resetAt <= now) authAttempts.delete(key);
   if (authAttempts.size > 20_000) { response.status(429).json({ message: "Muitas tentativas. Aguarde alguns minutos e tente novamente." }); return false; }
   const email = typeof request.body?.email === "string" ? request.body.email.trim().toLowerCase() : "";
-  const route = request.route?.path ?? request.path;
+  const route = bucket ?? request.route?.path ?? request.path;
   const keys = [`${route}:ip:${request.ip ?? "local"}`];
   if (email) keys.push(`${route}:email:${crypto.createHash("sha256").update(email).digest("hex")}`);
   let limited = false;
@@ -497,8 +497,8 @@ app.patch("/api/profile", async (request, response) => {
   const parsed = z.object({ displayName: z.string().trim().min(2).max(32), avatar: safeImageUrl.optional().or(z.literal("")), status: z.string().trim().max(80).optional() }).safeParse(request.body); if (!parsed.success) return response.status(400).json({ message: "Perfil inválido." });
   social.updateProfile(user, { ...parsed.data, avatar: parsed.data.avatar || undefined }); auth.saveProfile(user.id); try { await saveAuth(user.id); } catch { return response.status(503).json({ message: "Perfil indisponível no momento." }); } for (const house of social.listForUser(user.id)) { emitHouse(house.id); emitSnapshot(house.primaryRoomId); } for (const peer of io.sockets.sockets.values()) if ((peer.data.user as User | undefined)?.id === user.id) peer.emit("profile:update", user); return response.json({ user });
 });
-app.get("/api/invites/:token", (request, response) => { if (!authRateLimit(request, response)) return; const invite = social.getInvite(request.params.token); if (invite && deletingHouses.has(invite.houseId)) return response.json({ status: "INVALID", isMember: false }); const state = social.inspectInvite(request.params.token); const user = getUser(request); const isMember = Boolean(user && invite && social.isMember(invite.houseId, user.id)); return response.json({ ...state, houseId: isMember ? invite?.houseId : state.status === "VALID" ? state.houseId : undefined, isMember }); });
-app.post("/api/invites/:token/accept", async (request, response) => { if (!authRateLimit(request, response)) return; const user = requireUser(request, response); if (!user) return; const invite = social.getInvite(request.params.token); if (invite && deletingHouses.has(invite.houseId)) return response.status(410).json({ status: "INVALID" }); const result = social.acceptInvite(request.params.token, user); if (!result.ok) return response.status(410).json(result); try { await saveHouse(result.houseId); } catch { return response.status(503).json({ message: "Convite indisponível no momento." }); } emitHouse(result.houseId); return response.json(result); });
+app.get("/api/invites/:token", (request, response) => { if (!authRateLimit(request, response, "invite-entry")) return; const invite = social.getInvite(request.params.token); if (invite && deletingHouses.has(invite.houseId)) return response.json({ status: "INVALID", isMember: false }); const state = social.inspectInvite(request.params.token); const user = getUser(request); const isMember = Boolean(user && invite && social.isMember(invite.houseId, user.id)); return response.json({ ...state, ...(isMember ? { houseName: social.getHouse(invite!.houseId)?.name } : {}), houseId: isMember ? invite?.houseId : state.status === "VALID" ? state.houseId : undefined, isMember }); });
+app.post("/api/invites/:token/accept", async (request, response) => { if (!authRateLimit(request, response, "invite-entry")) return; const user = requireUser(request, response); if (!user) return; const invite = social.getInvite(request.params.token); if (invite && deletingHouses.has(invite.houseId)) return response.status(410).json({ status: "INVALID" }); const result = social.acceptInvite(request.params.token, user); if (!result.ok) return response.status(410).json(result); try { await saveHouse(result.houseId); } catch { return response.status(503).json({ message: "Convite indisponível no momento." }); } emitHouse(result.houseId); return response.json(result); });
 app.post("/api/houses/:houseId/invites", async (request, response) => {
   const user = requireHousePermission(request, response, "INVITE_CREATE"); if (!user) return;
   const parsed = z.object({ expiresInHours: z.union([z.literal(1), z.literal(24), z.literal(168)]), maxUses: z.number().int().min(1).max(100).default(1), role: houseRoleSchema.optional() }).safeParse(request.body); if (!parsed.success) return response.status(400).json({ message: "Configuração de convite inválida." });

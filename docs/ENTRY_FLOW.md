@@ -44,3 +44,9 @@ npm run build
 ```
 
 Then start `npm run dev` and verify Landing → register → empty Home → create House → Party. For an invitation test, create a link as host, log out, open `/invite/:token`, authenticate, return to the invite and explicitly choose **Entrar na Casa**.
+
+## Invitation link and code — September 2026 update
+
+Home's **Entrar com convite** accepts either a same-origin `/invite/:token` link or a ten-character code. Codes ignore case, whitespace and hyphens; the display format is `ABCDE-FGHJK`. Both resolve to the same invite and use `/invite/:identifier`, the existing inspection/acceptance endpoints and the same authenticated membership rules. Login retains this local path through `next`; acceptance remains explicit. Already-members open the Party without consuming another use. Network errors and HTTP 429 have retry/wait feedback.
+
+**Convidar** returns the link and code once, with separate copy actions and optional Web Share support. Older invitations remain link-only; create a new invite to obtain a code without revoking the old link. See `INVITES_LINK_CODE_REPORT.md` for migration, persistence and security details. Earlier persistence descriptions in this document are historical: production now uses the PostgreSQL adapters introduced in Stage 18.

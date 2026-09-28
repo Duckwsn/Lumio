@@ -29,3 +29,11 @@ The Prisma schema and migration `0003_house_social` define profiles, unique `(gr
 ## Local verification
 
 Run `npm run typecheck`, `npm run lint`, `npm test` and `npm run build`. For manual testing, run `npm run dev`, enter with two browser profiles, create an invitation as host, accept it as the second user, then verify role changes, removal, multi-tab presence, typing and the five-second offline grace period.
+
+## Current invitation/persistence update — September 2026
+
+The Stage 13 persistence section above describes the historical implementation. Stage 18 added `PrismaSocialRepository`, which loads PostgreSQL Houses/members/invites into the single-process runtime and saves House snapshots in a queued Prisma transaction. This is not a multi-instance, database-authoritative invite-use claim.
+
+New invites have two bearer credentials for one record: the existing 192-bit link token and a random ten-character human code. Only their hashes persist; `HouseInvite.codeHash` is nullable and unique. Legacy NULL codes preserve the existing token lookup. Code and link share expiration, revocation, role and usage; an existing member consumes no extra use. Code lookup normalizes whitespace/hyphens/case on the server. Missing, revoked, expired and exhausted codes have the same unavailable response without House metadata for non-members.
+
+Inspection and acceptance share one IP-limited `invite-entry` bucket: 30 requests per 15 minutes, independent of identifier. This limiter is in memory, not distributed. Creation/revocation keep the existing permission checks. Raw code is returned only at creation, never in retained House details. Migration and verification: `INVITES_LINK_CODE_REPORT.md`.

@@ -2,12 +2,13 @@ import crypto from "node:crypto";
 import type { HouseActivity, HouseDetails, HouseInvite, HouseMember, HouseRole, HouseSummary, PresenceStatus, User } from "@lumio/shared";
 import { rolePermissions } from "./authorization.js";
 import { publicUser } from "./privacy.js";
+import { generateInviteCode, inviteCodeHash, normalizeInviteCode } from "./inviteCode.js";
 
 interface HouseRecord { id: string; name: string; avatar?: string; primaryRoomId: string; members: Map<string, HouseMember>; invites: Map<string, HouseInvite>; activity: HouseActivity[] }
 export interface PersistedHouse {
   id: string; name: string; avatar?: string; primaryRoomId: string;
   members: { userId: string; role: HouseRole; joinedAt: string; lastSeenAt: string }[];
-  invites: { hash: string; id: string; createdById: string; role: HouseRole; createdAt: string; expiresAt: string; maxUses: number; uses: number; revokedAt: string | null }[];
+  invites: { codeHash?: string; hash: string; id: string; createdById: string; role: HouseRole; createdAt: string; expiresAt: string; maxUses: number; uses: number; revokedAt: string | null }[];
   activity: { id: string; actorId?: string; kind: HouseActivity["kind"]; text: string; createdAt: string }[];
 }
 
@@ -16,13 +17,15 @@ const initials = (name: string) => name.split(/\s+/).map((part) => part[0]).join
 export class SocialStore {
   private houses = new Map<string, HouseRecord>();
   private inviteByToken = new Map<string, HouseInvite>();
+  private inviteByCode = new Map<string, HouseInvite>();
+  private codeHashByInvite = new Map<string, string>();
 
   snapshotHouse(houseId: string): PersistedHouse | null {
     const house = this.houses.get(houseId); if (!house) return null;
     return {
       id: house.id, name: house.name, avatar: house.avatar, primaryRoomId: house.primaryRoomId,
       members: [...house.members.values()].map((entry) => ({ userId: entry.user.id, role: entry.role, joinedAt: entry.joinedAt, lastSeenAt: entry.lastSeenAt })),
-      invites: [...this.inviteByToken].filter(([, invite]) => invite.houseId === houseId).map(([hash, invite]) => ({ hash, id: invite.id, createdById: invite.createdBy.id, role: invite.role, createdAt: invite.createdAt, expiresAt: invite.expiresAt, maxUses: invite.maxUses, uses: invite.uses, revokedAt: invite.revokedAt })),
+      invites: [...this.inviteByToken].filter(([, invite]) => invite.houseId === houseId).map(([hash, invite]) => ({ hash, codeHash: this.codeHashByInvite.get(invite.id), id: invite.id, createdById: invite.createdBy.id, role: invite.role, createdAt: invite.createdAt, expiresAt: invite.expiresAt, maxUses: invite.maxUses, uses: invite.uses, revokedAt: invite.revokedAt })),
       activity: house.activity.map((entry) => ({ id: entry.id, actorId: entry.actor?.id, kind: entry.kind, text: entry.text, createdAt: entry.createdAt })),
     };
   }
@@ -37,6 +40,7 @@ export class SocialStore {
       const createdBy = getUser(entry.createdById); if (!createdBy) throw new Error("Convite sem criador.");
       const invite: HouseInvite = { id: entry.id, houseId: input.id, token: "", role: entry.role, createdBy, createdAt: entry.createdAt, expiresAt: entry.expiresAt, maxUses: entry.maxUses, uses: entry.uses, revokedAt: entry.revokedAt };
       house.invites.set(invite.id, invite); this.inviteByToken.set(entry.hash, invite);
+      if (entry.codeHash) { this.inviteByCode.set(entry.codeHash, invite); this.codeHashByInvite.set(invite.id, entry.codeHash); }
     }
     house.activity = input.activity.map((entry) => ({ id: entry.id, houseId: input.id, kind: entry.kind, text: entry.text, createdAt: entry.createdAt, actor: entry.actorId ? getUser(entry.actorId) : undefined }));
     this.houses.set(house.id, house);
@@ -78,6 +82,7 @@ export class SocialStore {
   deleteHouse(houseId: string) {
     const house = this.houses.get(houseId); if (!house) return false;
     for (const [hash, invite] of this.inviteByToken) if (invite.houseId === houseId) this.inviteByToken.delete(hash);
+    for (const [hash, invite] of this.inviteByCode) if (invite.houseId === houseId) { this.inviteByCode.delete(hash); this.codeHashByInvite.delete(invite.id); }
     this.houses.delete(houseId);
     return true;
   }
@@ -105,19 +110,28 @@ export class SocialStore {
   createInvite(houseId: string, actor: User, input: { expiresInHours: 1 | 24 | 168; maxUses: number; role?: HouseRole }) {
     const house = this.houses.get(houseId); if (!house) return null;
     const timestamp = Date.now(); const token = crypto.randomBytes(24).toString("base64url");
+    let code = generateInviteCode();
+    for (let attempt = 0; this.inviteByCode.has(inviteCodeHash(normalizeInviteCode(code)!)); attempt++) {
+      if (attempt >= 16) throw new Error("Não foi possível gerar um código único.");
+      code = generateInviteCode();
+    }
     const invite: HouseInvite = { id: crypto.randomUUID(), houseId, token, role: "MEMBER", createdBy: actor, createdAt: new Date(timestamp).toISOString(), expiresAt: new Date(timestamp + input.expiresInHours * 3_600_000).toISOString(), maxUses: Math.max(1, Math.min(100, input.maxUses)), uses: 0, revokedAt: null };
-    const stored = { ...invite, token: "" };
+    invite.code = code;
+    const stored = { ...invite, token: "", code: undefined };
+    const hash = inviteCodeHash(normalizeInviteCode(code)!);
+    this.inviteByCode.set(hash, stored); this.codeHashByInvite.set(invite.id, hash);
     house.invites.set(invite.id, stored); this.inviteByToken.set(crypto.createHash("sha256").update(token).digest("hex"), stored); this.log(house, "INVITE_CREATED", `${actor.displayName} criou um convite.`, actor); return invite;
   }
   inspectInvite(token: string) {
-    const invite = this.inviteByToken.get(crypto.createHash("sha256").update(token).digest("hex")); if (!invite) return { status: "INVALID" as const };
+    const invite = this.getInvite(token); if (!invite) return { status: "INVALID" as const };
     const house = this.houses.get(invite.houseId)!;
-    if (invite.revokedAt) return { status: "REVOKED" as const, houseName: house.name };
-    if (new Date(invite.expiresAt).getTime() <= Date.now()) return { status: "EXPIRED" as const, houseName: house.name };
-    if (invite.uses >= invite.maxUses) return { status: "LIMIT_REACHED" as const, houseName: house.name };
+    const short = Boolean(normalizeInviteCode(token));
+    if (invite.revokedAt) return short ? { status: "INVALID" as const } : { status: "REVOKED" as const, houseName: house.name };
+    if (new Date(invite.expiresAt).getTime() <= Date.now()) return short ? { status: "INVALID" as const } : { status: "EXPIRED" as const, houseName: house.name };
+    if (invite.uses >= invite.maxUses) return short ? { status: "INVALID" as const } : { status: "LIMIT_REACHED" as const, houseName: house.name };
     return { status: "VALID" as const, houseId: house.id, houseName: house.name, invitedBy: invite.createdBy.displayName, onlineCount: [...house.members.values()].filter((member) => member.presence !== "OFFLINE").length, role: invite.role, expiresAt: invite.expiresAt };
   }
-  getInvite(token: string) { return this.inviteByToken.get(crypto.createHash("sha256").update(token).digest("hex")); }
+  getInvite(token: string) { const code = normalizeInviteCode(token); return code ? this.inviteByCode.get(inviteCodeHash(code)) : this.inviteByToken.get(crypto.createHash("sha256").update(token).digest("hex")); }
   acceptInvite(token: string, user: User) {
     const invite = this.getInvite(token);
     const house = invite && this.houses.get(invite.houseId);

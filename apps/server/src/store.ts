@@ -157,7 +157,7 @@ export class RoomStore {
     };
   }
 
-  addMember(roomId: string, user: User, role?: Role) { const room = this.rooms.get(roomId); if (!room) return null; const existing = room.members.get(user.id); room.members.set(user.id, { user, role: existing?.role ?? role ?? (room.members.size === 0 ? "HOST" : "MEMBER"), presence: "online", speaking: false, muted: false, deafened: false, joinedAt: existing?.joinedAt ?? new Date().toISOString() }); return this.getSnapshot(roomId); }
+  addMember(roomId: string, user: User, role?: Role) { const room = this.rooms.get(roomId); if (!room) return null; const existing = room.members.get(user.id); room.members.set(user.id, { user, role: existing?.role ?? role ?? (room.members.size === 0 ? "HOST" : "MEMBER"), presence: "online", speaking: false, muted: true, deafened: false, joinedAt: existing?.joinedAt ?? new Date().toISOString() }); return this.getSnapshot(roomId); }
   removeMember(roomId: string, userId: string) { const room = this.rooms.get(roomId); if (!room) return null; room.members.delete(userId); room.votes.delete(userId); if (room.screenShare?.user.id === userId) room.screenShare = null; return this.getSnapshot(roomId); }
   updatePresence(roomId: string, userId: string, input: { speaking: boolean; muted: boolean; deafened?: boolean }) { const room = this.rooms.get(roomId); const member = room?.members.get(userId); if (!member) return null; member.speaking = input.speaking; member.muted = input.muted; member.deafened = input.deafened ?? member.deafened; return this.getSnapshot(roomId); }
   setMode(roomId: string, mode: RoomMode) { const room = this.rooms.get(roomId); if (!room) return null; room.mode = mode; return room.mode; }

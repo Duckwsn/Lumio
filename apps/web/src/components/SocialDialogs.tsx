@@ -18,14 +18,50 @@ export function ProfileDialog({ apiUrl, token, user, onClose, onSaved }: { apiUr
 }
 
 export function InviteDialog({ apiUrl, token, house, onClose, onChanged }: { apiUrl: string; token: string; house: HouseDetails; onClose: () => void; onChanged: (house: HouseDetails) => void }) {
-  const [expiresInHours, setExpiry] = useState<1 | 24 | 168>(24); const [maxUses, setMaxUses] = useState(1); const [invite, setInvite] = useState<HouseInvite | null>(null); const [copied, setCopied] = useState(false); const [error, setError] = useState(""); const [busy, setBusy] = useState(false); const allowed = house.permissions.includes("INVITE_CREATE");
-  const create = async () => { setBusy(true); setError(""); try { const response = await fetch(`${apiUrl}/api/houses/${house.id}/invites`, { method: "POST", headers: jsonHeaders(token), body: JSON.stringify({ expiresInHours, maxUses, role: "MEMBER" }) }); if (!response.ok) { setError((await response.json()).message ?? "Não foi possível criar o convite."); return; } const data = await response.json() as { invite: HouseInvite }; setInvite(data.invite); const next = await readHouse(apiUrl, token, house.id); if (next) onChanged(next); } catch { setError("Sem conexão. Tente novamente."); } finally { setBusy(false); } };
+  const [expiresInHours, setExpiry] = useState<1 | 24 | 168>(24);
+  const [maxUses, setMaxUses] = useState(1);
+  const [invite, setInvite] = useState<HouseInvite | null>(null);
+  const [copied, setCopied] = useState<"link" | "code" | null>(null);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const creating = useRef(false);
+  const allowed = house.permissions.includes("INVITE_CREATE");
+  const create = async () => {
+    if (creating.current) return;
+    creating.current = true; setBusy(true); setError("");
+    try {
+      const response = await fetch(`${apiUrl}/api/houses/${house.id}/invites`, { method: "POST", headers: jsonHeaders(token), body: JSON.stringify({ expiresInHours, maxUses, role: "MEMBER" }) });
+      if (!response.ok) { setError((await response.json()).message ?? "Não foi possível criar o convite."); return; }
+      const data = await response.json() as { invite: HouseInvite };
+      setInvite(data.invite);
+      const next = await readHouse(apiUrl, token, house.id); if (next) onChanged(next);
+    } catch { setError("Sem conexão. Tente novamente."); }
+    finally { creating.current = false; setBusy(false); }
+  };
   const link = invite ? `${window.location.origin}/invite/${encodeURIComponent(invite.token)}` : "";
-  const copy = async () => { try { await navigator.clipboard.writeText(link); setCopied(true); window.setTimeout(() => setCopied(false), 1600); } catch { setError("Não foi possível copiar. Selecione o link acima manualmente."); } };
-  return <Dialog title={`Convidar para ${house.name}`} subtitle="O link expira e tem limite de uso. Você pode revogá-lo a qualquer momento." onClose={onClose}>{error ? <p className="form-error" role="alert">{error}</p> : null}{!allowed ? <p className="empty-note">Somente host e admins podem criar convites.</p> : invite ? <div className="invite-result"><Link2 /><strong>Convite pronto</strong><input readOnly value={link} aria-label="Link do convite" /><button className="primary-action" onClick={() => void copy()}>{copied ? <Check /> : <Copy />} {copied ? "Copiado" : "Copiar link"}</button><small>Expira em {expiresInHours === 1 ? "1 hora" : expiresInHours === 24 ? "24 horas" : "7 dias"} · {maxUses} {maxUses === 1 ? "uso" : "usos"}</small></div> : <div className="social-form"><label>Validade<select value={expiresInHours} onChange={(e) => setExpiry(Number(e.target.value) as 1 | 24 | 168)}><option value={1}>1 hora</option><option value={24}>24 horas</option><option value={168}>7 dias</option></select></label><label>Limite de usos<input type="number" min={1} max={100} value={maxUses} onChange={(e) => setMaxUses(Number(e.target.value))} /></label><button className="primary-action" disabled={busy} onClick={() => void create()}>{busy ? "Criando…" : "Criar convite seguro"}</button></div>}</Dialog>;
+  const copy = async (kind: "link" | "code") => {
+    try { await navigator.clipboard.writeText(kind === "code" ? invite?.code ?? "" : link); setCopied(kind); setError(""); }
+    catch { setError("Não foi possível copiar. Selecione o código ou link manualmente."); }
+  };
+  const share = async () => {
+    if (!navigator.share) return copy("link");
+    try { await navigator.share({ title: "Convite para o Lumio", text: "Entre na minha Casa no Lumio", url: link }); }
+    catch (error) { if (!(error instanceof DOMException && error.name === "AbortError")) await copy("link"); }
+  };
+  return <Dialog title={`Convidar para ${house.name}`} subtitle="Link e código são o mesmo convite: validade, usos e revogação compartilhados." onClose={onClose}>
+    {error ? <p className="form-error" role="alert">{error}</p> : null}
+    {!allowed ? <p className="empty-note">Somente host e admins podem criar convites.</p> : invite ? <div className="invite-result">
+      <strong>Convite pronto</strong>
+      {invite.code ? <><label htmlFor="invite-code">Código do convite</label><input id="invite-code" className="invite-code" readOnly value={invite.code} onFocus={(event) => event.target.select()} /><small>Para falar ou digitar na Home em Entrar com convite.</small><button className="primary-action" onClick={() => void copy("code")}><Copy />Copiar código</button></> : <small>Código indisponível neste servidor. Use o link.</small>}
+      <label htmlFor="invite-link">Link do convite</label><input id="invite-link" readOnly value={link} onFocus={(event) => event.target.select()} /><small>Para enviar por mensagem.</small>
+      <div className="invite-share-actions"><button className="primary-action" onClick={() => void copy("link")}><Link2 />Copiar link</button>{typeof navigator.share === "function" ? <button className="quiet-button" onClick={() => void share()}>Compartilhar</button> : null}</div>
+      {copied ? <span role="status">{copied === "code" ? "Código copiado." : "Link copiado."}</span> : null}
+      <small>Expira em {expiresInHours === 1 ? "1 hora" : expiresInHours === 24 ? "24 horas" : "7 dias"} · {maxUses} {maxUses === 1 ? "uso" : "usos"}</small>
+    </div> : <div className="social-form"><label>Validade<select value={expiresInHours} onChange={(event) => setExpiry(Number(event.target.value) as 1 | 24 | 168)}><option value={1}>1 hora</option><option value={24}>24 horas</option><option value={168}>7 dias</option></select></label><label>Limite de usos<input type="number" min={1} max={100} value={maxUses} onChange={(event) => setMaxUses(Number(event.target.value))} /></label><button className="primary-action" disabled={busy} onClick={() => void create()}>{busy ? "Criando…" : "Criar convite seguro"}</button></div>}
+  </Dialog>;
 }
 
-const permissionLabels: Record<Permission, string> = { HOUSE_MANAGE: "Gerenciar a Casa", MEMBER_MANAGE: "Gerenciar membros", INVITE_CREATE: "Criar convites", INVITE_REVOKE: "Revogar convites", MEDIA_ADD: "Adicionar mídia", MEDIA_CONTROL: "Controlar reprodução", QUEUE_MANAGE: "Organizar fila", LIBRARY_MANAGE: "Editar biblioteca", PLAYLIST_CREATE: "Criar playlists", PLAYLIST_EDIT: "Editar playlists", PLAYLIST_DELETE: "Excluir playlists", CHAT_SEND: "Conversar", CHAT_MODERATE: "Moderar chat", CALL_JOIN: "Entrar na call", SCREEN_SHARE: "Compartilhar tela" };
+const permissionLabels: Record<Permission, string> = { HOUSE_MANAGE: "Gerenciar a Casa", MEMBER_MANAGE: "Gerenciar membros", INVITE_CREATE: "Criar convites", INVITE_REVOKE: "Revogar convites", MEDIA_ADD: "Adicionar mídia", MEDIA_CONTROL: "Controlar reprodução", QUEUE_MANAGE: "Organizar fila", LIBRARY_MANAGE: "Editar biblioteca", PLAYLIST_CREATE: "Criar playlists", PLAYLIST_EDIT: "Editar playlists", PLAYLIST_DELETE: "Excluir playlists", CHAT_SEND: "Conversar", CHAT_MODERATE: "Moderar chat", CALL_JOIN: "Voz da Party", SCREEN_SHARE: "Compartilhar tela" };
 const matrices = houseRolePermissions;
 
 function MembershipActions({ apiUrl, token, house, onChanged, onLeft }: { apiUrl: string; token: string; house: HouseDetails; onChanged: (house: HouseDetails) => void; onLeft: () => void }) {

@@ -2,6 +2,17 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { RoomStore } from "./store.js";
 
+test("Party entry and re-entry start with microphone off and not speaking", () => {
+  const store = new RoomStore();
+  store.addHouseRoom({ houseId: "voice", houseName: "Voice", roomId: "voice-room" });
+  const user = { id: "listener", displayName: "Listener", color: "#fff" };
+  const joined = store.addMember("voice-room", user)!;
+  assert.equal(joined.members[0].muted, true); assert.equal(joined.members[0].speaking, false);
+  store.updatePresence("voice-room", user.id, { muted: false, speaking: true });
+  const recovered = store.addMember("voice-room", user)!;
+  assert.equal(recovered.members[0].muted, true); assert.equal(recovered.members[0].speaking, false);
+});
+
 test("deleting a House clears its Party media state without clearing another House", () => {
   const store = new RoomStore();
   const user = { id: "host", displayName: "Host", color: "#fff" };

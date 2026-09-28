@@ -16,7 +16,7 @@ export class PrismaSocialRepository {
       const input: PersistedHouse = {
         id: group.id, name: group.name, avatar: group.avatar ?? undefined, primaryRoomId: group.rooms[0].id,
         members: group.members.map((entry) => ({ userId: entry.userId, role: entry.role as HouseRole, joinedAt: entry.joinedAt.toISOString(), lastSeenAt: entry.lastSeenAt.toISOString() })),
-        invites: group.invites.map((entry) => ({ hash: entry.tokenHash, id: entry.id, createdById: entry.createdById, role: entry.role as HouseRole, createdAt: entry.createdAt.toISOString(), expiresAt: entry.expiresAt.toISOString(), maxUses: entry.maxUses, uses: entry.uses, revokedAt: entry.revokedAt?.toISOString() ?? null })),
+        invites: group.invites.map((entry) => ({ hash: entry.tokenHash, codeHash: entry.codeHash ?? undefined, id: entry.id, createdById: entry.createdById, role: entry.role as HouseRole, createdAt: entry.createdAt.toISOString(), expiresAt: entry.expiresAt.toISOString(), maxUses: entry.maxUses, uses: entry.uses, revokedAt: entry.revokedAt?.toISOString() ?? null })),
         activity: group.activity.map((entry) => ({ id: entry.id, actorId: entry.actorId ?? undefined, kind: entry.kind as HouseActivity["kind"], text: entry.text, createdAt: entry.createdAt.toISOString() })),
       };
       this.store.restoreHouse(input, this.getUser);
@@ -37,7 +37,7 @@ export class PrismaSocialRepository {
         await tx.groupMember.deleteMany({ where: { groupId: snapshot.id } });
         if (snapshot.members.length) await tx.groupMember.createMany({ data: snapshot.members.map((entry) => ({ groupId: snapshot.id, userId: entry.userId, role: entry.role, joinedAt: new Date(entry.joinedAt), lastSeenAt: new Date(entry.lastSeenAt) })) });
         await tx.houseInvite.deleteMany({ where: { groupId: snapshot.id } });
-        if (snapshot.invites.length) await tx.houseInvite.createMany({ data: snapshot.invites.map((entry) => ({ id: entry.id, groupId: snapshot.id, createdById: entry.createdById, tokenHash: entry.hash, role: entry.role, createdAt: new Date(entry.createdAt), expiresAt: new Date(entry.expiresAt), maxUses: entry.maxUses, uses: entry.uses, revokedAt: entry.revokedAt ? new Date(entry.revokedAt) : null })) });
+        if (snapshot.invites.length) await tx.houseInvite.createMany({ data: snapshot.invites.map((entry) => ({ id: entry.id, groupId: snapshot.id, createdById: entry.createdById, tokenHash: entry.hash, codeHash: entry.codeHash ?? null, role: entry.role, createdAt: new Date(entry.createdAt), expiresAt: new Date(entry.expiresAt), maxUses: entry.maxUses, uses: entry.uses, revokedAt: entry.revokedAt ? new Date(entry.revokedAt) : null })) });
         await tx.houseActivity.deleteMany({ where: { groupId: snapshot.id } });
         if (snapshot.activity.length) await tx.houseActivity.createMany({ data: snapshot.activity.map((entry) => ({ id: entry.id, groupId: snapshot.id, actorId: entry.actorId, kind: entry.kind, text: entry.text, createdAt: new Date(entry.createdAt) })) });
       });

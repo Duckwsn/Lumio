@@ -115,6 +115,7 @@ model HouseInvite {
   groupId     String
   createdById String
   tokenHash   String   @unique
+  codeHash    String?  @unique
   role        String   @default("MEMBER")
   maxUses     Int      @default(1)
   uses        Int      @default(0)
