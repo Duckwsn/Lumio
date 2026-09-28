@@ -179,3 +179,11 @@ Uma tarefa está pronta quando:
 - Reconnect conserva backoff com jitter e converge pelo snapshot autoritativo. Não repetir mutations às cegas.
 - Streaming Drive mantém Range, autorização, `no-store`, backpressure e cancelamento do upstream quando o cliente sai; não bufferizar o vídeo inteiro.
 - Logs HTTP/WS usam IDs técnicos e templates de rota, nunca payload privado ou tokens. Consulte `docs/PERFORMANCE_RESILIENCE_17.md` antes de alterar lifecycle, saúde ou infraestrutura.
+
+## Draw Game G1
+
+- Desenhe e Adivinhe vive na Party e usa seu socket autenticado. Participação é explícita; GameHub/voltar à mídia são apresentação local, não leave do jogo.
+- Runtime é efêmero por roomId. Coordenador inicia, mas não ganha privilégios da House. Ordem, fase, prazo, segredo e pontos são server-authoritative.
+- `game:snapshot` e `game:state` são projeções individuais; choices/secretWord só para drawer ativo. Só resultados revelam revealedWord. Nunca room-broadcast de segredo.
+- Pontos normalizados, lotes de até 32/50ms e pintura imperativa. Metadados não reenviam board; revisão de jogo/board é distinta de mídia/fila. Undo/clear precisam impedir append antigo.
+- Preserve YouTube visível, chat estrutural, RTC e screen stream. Não criar profile/chat/call, banco ou engine paralelos. Consulte `POST_1_0_G1_DRAW_GAME_REPORT.md` para protocolo, limites e QA manual.

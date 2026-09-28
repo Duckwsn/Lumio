@@ -7,6 +7,99 @@ import os from "node:os";
 import path from "node:path";
 import { io } from "socket.io-client";
 
+test("G1 three-user Draw Game: touch geometry, privacy, undo/clear, reconnect, mobile and next round", async ({ browser, request }) => {
+  test.setTimeout(180000);
+  const origin = `http://127.0.0.1:${webPort}`, api = `http://127.0.0.1:${apiPort}`;
+  const sessions = [];
+  for (const displayName of ["Draw Ana", "Draw Bia", "Draw Caio"]) {
+    const email = `draw-${crypto.randomUUID()}@example.test`, password = "local-e2e-password-123";
+    expect((await request.post(`${api}/api/auth/signup`, { data: { displayName, email, password } })).status()).toBe(201);
+    const link = JSON.parse(fs.readFileSync(path.join(directory, "mail.jsonl"), "utf8").trim().split("\n").at(-1)!).text.match(/https?:\/\/\S+/)[0];
+    expect((await request.post(`${api}/api/auth/verification/confirm`, { data: { token: new URL(link).hash.slice(7) } })).status()).toBe(204);
+    sessions.push(await (await request.post(`${api}/api/auth/login`, { data: { email, password } })).json());
+  }
+  const headers = { Authorization: `Bearer ${sessions[0].token}` };
+  const { house } = await (await request.post(`${api}/api/houses`, { headers, data: { name: "G1 Friends" } })).json();
+  const { invite } = await (await request.post(`${api}/api/houses/${house.id}/invites`, { headers, data: { expiresInHours: 1, maxUses: 3 } })).json();
+  for (const session of sessions.slice(1)) expect((await request.post(`${api}/api/invites/${invite.token}/accept`, { headers: { Authorization: `Bearer ${session.token}` } })).status()).toBe(200);
+  const contexts = await Promise.all(sessions.map((_, index) => browser.newContext(index === 0 ? { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true } : { viewport: { width: 1280, height: 900 } })));
+  try {
+    for (let i = 0; i < 3; i++) await contexts[i].addInitScript((session) => localStorage.setItem("lumio.session.v1", JSON.stringify(session)), sessions[i]);
+    const [a, b, c] = await Promise.all(contexts.map((context) => context.newPage()));
+    const errors: string[] = []; for (const page of [a, b, c]) page.on("pageerror", (error) => errors.push(error.message));
+    for (const page of [a, b, c]) {
+      await page.goto(`${origin}/house/${house.id}`);
+      await page.getByRole("button", { name: "Jogos", exact: true }).click();
+      await page.getByRole("button", { name: /Desenhe e Adivinhe/ }).click();
+      await page.getByRole("button", { name: "Participar", exact: true }).click();
+    }
+    await expect(a.getByRole("list", { name: "Placar do jogo" }).locator("li")).toHaveCount(3);
+    await a.getByRole("button", { name: "Iniciar partida", exact: true }).click();
+    const choice = a.locator(".draw-choices button").first(); const word = (await choice.textContent())!; await choice.click();
+    for (const page of [b, c]) { await expect(page.locator(".draw-word")).not.toContainText(word); await expect(page.getByRole("textbox", { name: "Seu palpite" })).toBeVisible(); }
+    const board = (page: typeof a) => page.locator(".draw-board canvas").evaluate((node: HTMLCanvasElement) => node.toDataURL());
+    const blank = await board(b);
+    const canvas = a.locator(".draw-board canvas"); await canvas.scrollIntoViewIfNeeded();
+    const rect = (await canvas.boundingBox())!;
+    const cdp = await contexts[0].newCDPSession(a);
+    const point = (x: number, y: number) => ({ x: rect.x + rect.width * x, y: rect.y + rect.height * y });
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [point(.2, .2)] });
+    for (let i = 3; i <= 8; i++) await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [point(i / 10, i / 10)] });
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    await expect.poll(() => board(b)).not.toBe(blank); await expect.poll(() => board(c)).toBe(await board(b));
+    expect(await board(a)).toBe(await board(b));
+    const drawn = await board(b);
+    await b.setViewportSize({ width: 1262, height: 632 });
+    const desktopBoard = (await b.locator(".draw-board canvas").boundingBox())!;
+    const desktopGuess = (await b.getByRole("textbox", { name: "Seu palpite" }).boundingBox())!;
+    expect(desktopBoard.y + desktopBoard.height).toBeLessThanOrEqual(632); expect(desktopGuess.y + desktopGuess.height).toBeLessThanOrEqual(632);
+    expect(await board(b)).toBe(drawn);
+    await a.getByRole("button", { name: "Borracha", exact: true }).click(); await canvas.scrollIntoViewIfNeeded();
+    const erase = (await canvas.boundingBox())!;
+    await a.mouse.move(erase.x + erase.width * .3, erase.y + erase.height * .3); await a.mouse.down();
+    await a.mouse.move(erase.x + erase.width * .6, erase.y + erase.height * .6, { steps: 5 }); await a.mouse.up();
+    await expect.poll(() => board(b)).not.toBe(drawn);
+    await a.getByRole("button", { name: "Desfazer", exact: true }).click(); await expect.poll(() => board(b)).toBe(drawn);
+    await b.reload(); await b.getByRole("button", { name: "Jogos", exact: true }).click(); await b.getByRole("button", { name: /Desenhe e Adivinhe/ }).click();
+    await expect.poll(() => board(b)).toBe(drawn); await expect(b.locator(".draw-word")).not.toContainText(word);
+    for (const width of [320, 360, 375, 390, 412, 430]) {
+      await a.setViewportSize({ width, height: 844 }); await canvas.scrollIntoViewIfNeeded();
+      const box = (await canvas.boundingBox())!; expect(box.width).toBeGreaterThanOrEqual(width - 40); expect(Math.abs(box.width / box.height - 4 / 3)).toBeLessThan(.02);
+      expect(await canvas.evaluate((node) => getComputedStyle(node).touchAction)).toBe("none");
+      expect(await a.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      await expect(a.getByRole("textbox", { name: "Mensagem" })).toBeVisible();
+      for (const name of ["Pessoas da Party", "Fila da Party"]) { await a.getByRole("button", { name, exact: true }).click(); await a.getByRole("button", { name: "Fechar painel", exact: true }).click(); }
+      expect(await board(a)).toBe(drawn);
+      await a.screenshot({ path: `test-results/g1-mobile-${width}.png` });
+    }
+    await a.getByRole("textbox", { name: "Mensagem" }).fill("Chat independente do jogo"); await a.getByRole("button", { name: "Enviar mensagem", exact: true }).click();
+    await c.getByRole("button", { name: /Abrir chat/ }).click();
+    await expect(c.getByText("Chat independente do jogo", { exact: true })).toBeVisible();
+    await a.getByRole("button", { name: "Tela cheia de Jogos", exact: true }).click(); await expect(a.locator(".mobile-party-chat")).toBeHidden();
+    expect(await board(a)).toBe(drawn);
+    await a.getByRole("button", { name: "Sair da tela cheia de Jogos", exact: true }).click();
+    await a.setViewportSize({ width: 844, height: 390 });
+    await a.getByRole("button", { name: "Tela cheia de Jogos", exact: true }).click(); expect(await board(a)).toBe(drawn);
+    await canvas.scrollIntoViewIfNeeded(); const landscapeBoard = (await canvas.boundingBox())!;
+    expect(landscapeBoard.y).toBeGreaterThanOrEqual(0); expect(landscapeBoard.y + landscapeBoard.height).toBeLessThanOrEqual(390);
+    await a.screenshot({ path: "test-results/g1-landscape-fullscreen.png" });
+    await a.getByRole("button", { name: "Sair da tela cheia de Jogos", exact: true }).click(); await a.setViewportSize({ width: 390, height: 844 });
+    await a.getByRole("button", { name: "Limpar tela", exact: true }).click(); await expect.poll(() => board(c)).toBe(blank);
+    await b.getByRole("textbox", { name: "Seu palpite" }).fill("resposta incorreta"); await b.getByRole("button", { name: "Enviar palpite", exact: true }).click();
+    await expect(c.getByText("Draw Bia: resposta incorreta", { exact: true })).toBeVisible();
+    await b.getByRole("textbox", { name: "Seu palpite" }).fill(word); await b.getByRole("button", { name: "Enviar palpite", exact: true }).click();
+    await expect(b.getByText("Você acertou!", { exact: true })).toBeVisible(); await expect(c.locator(".draw-word")).not.toContainText(word);
+    await c.setViewportSize({ width: 390, height: 500 });
+    await c.getByRole("textbox", { name: "Seu palpite" }).scrollIntoViewIfNeeded();
+    await expect(c.getByRole("textbox", { name: "Mensagem" })).toBeVisible();
+    expect(await c.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await c.getByRole("textbox", { name: "Seu palpite" }).fill(word); await c.getByRole("button", { name: "Enviar palpite", exact: true }).click();
+    await expect(c.locator(".draw-word")).toHaveText(`Era: ${word}`);
+    await expect(b.locator(".draw-choices button")).toHaveCount(3, { timeout: 10000 }); await expect(a.locator(".draw-choices button")).toHaveCount(0);
+    await b.screenshot({ path: "test-results/g1-next-drawer-desktop.png" }); expect(errors).toEqual([]);
+  } finally { await Promise.all(contexts.map((context) => context.close())); }
+});
+
 const root = path.resolve(__dirname, "..");
 const serverRoot = path.join(root, "apps", "server");
 const webRoot = path.join(root, "apps", "web");
@@ -255,12 +348,25 @@ test("automatic voice: three real RTC clients, explicit capture, denial, deafen,
     const receivedBeforeGames = await packets(b);
     await a.getByRole("button", { name: "Jogos", exact: true }).click();
     await expect(a.getByRole("heading", { name: "O que vamos jogar?" })).toBeVisible();
+    await a.getByRole("button", { name: /Desenhe e Adivinhe/ }).click();
+    await expect(a.getByRole("button", { name: "Participar", exact: true })).toBeVisible();
+    await a.getByRole("button", { name: "Participar", exact: true }).click();
     await expect(a.getByRole("button", { name: "Desativar microfone", exact: true })).toBeVisible();
     await expect(b.locator(".main-stage")).toHaveAttribute("data-view", "media");
+    await b.getByRole("button", { name: "Jogos", exact: true }).click();
+    await b.getByRole("button", { name: /Desenhe e Adivinhe/ }).click();
+    await b.getByRole("button", { name: "Participar", exact: true }).click();
+    await a.getByRole("button", { name: "Iniciar partida", exact: true }).click();
+    await a.locator(".draw-choices button").first().click();
+    const callBoard = (await a.locator(".draw-board canvas").boundingBox())!;
+    await a.mouse.move(callBoard.x + 30, callBoard.y + 30); await a.mouse.down();
+    await a.mouse.move(callBoard.x + 90, callBoard.y + 90, { steps: 5 }); await a.mouse.up();
+    await expect(b.locator(".draw-word")).toContainText("_");
     await expect.poll(() => packets(b), { timeout: 20000 }).toBeGreaterThan(receivedBeforeGames);
     expect(await a.evaluate(() => ({ peers: (window as any).qaVoice.peers.length, captures: (window as any).qaVoice.captures }))).toEqual(voiceBeforeGames);
     await a.screenshot({ path: "test-results/g0-desktop-games.png" });
     await a.getByRole("button", { name: "Voltar à mídia", exact: true }).click();
+    await b.getByRole("button", { name: "Voltar à mídia", exact: true }).click();
     await expect(a.getByRole("button", { name: "Jogos", exact: true })).toBeFocused();
     await connected(a, 1); await connected(b, 1);
     await join(c);
@@ -383,12 +489,15 @@ test("mobile permanent chat, gesture, secondary tools, late join and player idle
     await expect(page.getByRole("textbox", { name: "Mensagem" })).toHaveValue("Draft preserved in Games");
     await page.getByRole("button", { name: "Enviar mensagem" }).tap();
     await expect(page.getByText("Draft preserved in Games", { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: /Desenhe e Adivinhe/ }).tap();
+    await expect(page.getByRole("button", { name: "Participar", exact: true })).toBeVisible();
     for (const width of [320, 360, 375, 390, 412, 430]) {
       await page.setViewportSize({ width, height: 844 });
       await expect(page.getByRole("textbox", { name: "Mensagem" })).toBeVisible();
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth && document.documentElement.scrollHeight <= innerHeight)).toBe(true);
       const box = await page.locator("iframe.provider-player").boundingBox();
       expect(box!.width).toBeGreaterThanOrEqual(200); expect(box!.height).toBeGreaterThanOrEqual(200);
+      expect(box!.y).toBeGreaterThanOrEqual(0); expect(box!.y + box!.height).toBeLessThanOrEqual(844);
       for (const name of ["Pessoas da Party", "Fila da Party"]) {
         await page.getByRole("button", { name, exact: true }).tap();
         await expect(page.getByRole("button", { name: "Recolher painel da Party" })).toBeVisible();
@@ -681,7 +790,10 @@ test("Drive native video keeps portrait/4:3/16:9 content contained in the mobile
       const recorder = new MediaRecorder(stream);
       recorder.ondataavailable = (event) => chunks.push(event.data);
       const stopped = new Promise<void>((resolve) => { recorder.onstop = () => resolve(); });
-      recorder.start(); await new Promise((resolve) => setTimeout(resolve, 200)); recorder.stop(); await stopped;
+      recorder.start();
+      // A static canvas may produce no encoded frames in headless Windows Chromium.
+      const frames = setInterval(() => canvas.getContext("2d")!.fillRect(0, 0, width, height), 40);
+      await new Promise((resolve) => setTimeout(resolve, 400)); clearInterval(frames); recorder.stop(); await stopped;
       const video = document.querySelector<HTMLVideoElement>("video.provider-player")!;
       const source = URL.createObjectURL(new Blob(chunks, { type: recorder.mimeType }));
       try {

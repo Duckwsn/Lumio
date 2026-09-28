@@ -134,3 +134,12 @@ Só encerre o processo depois de confirmar que ele pertence ao projeto.
 - O Chat mobile divide o canvas com o player (abaixo em portrait, ao lado em landscape). O microfone junto ao campo de mensagem abre as ações da call; o Dock desktop continua inalterado.
 - A PWA oferece instalação apenas quando o navegador disponibiliza o prompt. O service worker guarda somente arquivos estáticos e uma página offline honesta; API, Drive, YouTube e mídia privada nunca entram no Cache Storage.
 - Uma nova versão espera confirmação explícita para recarregar a Party. Instalação, Google Login, Drive OAuth e WebRTC variam por navegador e precisam de teste real antes de declarar suporte em Android/iOS.
+
+## Desenhe e Adivinhe G1
+
+- GameHub carrega o jogo lazy dentro do MainStage; MediaStage, call, chat e fila permanecem os mesmos. Sair da apresentação não encerra participação.
+- `DrawGameRuntime` mantém uma sessão efêmera por Party, com fases, ordem e score autoritativos. Não persista jogos sem necessidade explícita.
+- Segredo/opções são projeções por usuário: somente drawer ativo. Resultado revela a resposta por regra; guesses corretos nunca são ecoados durante desenho.
+- Canvas 4:3 lógico, Pointer Events e coordenadas normalizadas; pontos em refs e envio incremental limitado. Não sincronizar PNG/base64 ou estado React por ponto.
+- `game:state` não contém traços; `game:snapshot` reconstrói o board e `game:draw` é delta ordenado. Use revisões próprias e rejeite operações anteriores a clear/undo/rodada.
+- Consulte `POST_1_0_G1_DRAW_GAME_REPORT.md`; os testes locais/fixtures não substituem QA Android/iOS, Google e WAN reais. Não mudar OAuth, schema ou produção como parte do jogo.
