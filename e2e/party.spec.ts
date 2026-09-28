@@ -251,6 +251,18 @@ test("automatic voice: three real RTC clients, explicit capture, denial, deafen,
     await b.evaluate(() => { (window as any).qaVoice.blockAudio = false; });
     await b.getByRole("button", { name: "Ativar áudio da call", exact: true }).click();
     await expect.poll(() => b.evaluate(() => (window as any).qaVoice.audio.some((audio: HTMLAudioElement) => !audio.paused && !audio.muted))).toBe(true);
+    const voiceBeforeGames = await a.evaluate(() => ({ peers: (window as any).qaVoice.peers.length, captures: (window as any).qaVoice.captures }));
+    const receivedBeforeGames = await packets(b);
+    await a.getByRole("button", { name: "Jogos", exact: true }).click();
+    await expect(a.getByRole("heading", { name: "O que vamos jogar?" })).toBeVisible();
+    await expect(a.getByRole("button", { name: "Desativar microfone", exact: true })).toBeVisible();
+    await expect(b.locator(".main-stage")).toHaveAttribute("data-view", "media");
+    await expect.poll(() => packets(b), { timeout: 20000 }).toBeGreaterThan(receivedBeforeGames);
+    expect(await a.evaluate(() => ({ peers: (window as any).qaVoice.peers.length, captures: (window as any).qaVoice.captures }))).toEqual(voiceBeforeGames);
+    await a.screenshot({ path: "test-results/g0-desktop-games.png" });
+    await a.getByRole("button", { name: "Voltar à mídia", exact: true }).click();
+    await expect(a.getByRole("button", { name: "Jogos", exact: true })).toBeFocused();
+    await connected(a, 1); await connected(b, 1);
     await join(c);
     await expect.poll(() => c.evaluate(() => ({ ready: (window as any).qaVoice.peers.some((peer: RTCPeerConnection) => peer.connectionState === "connected"), peers: (window as any).qaVoice.peers.map((peer: RTCPeerConnection) => ({ state: peer.connectionState, signaling: peer.signalingState, ice: peer.iceConnectionState, slots: peer.getTransceivers().map((slot) => ({ kind: slot.receiver.track.kind, direction: slot.direction, current: slot.currentDirection, sender: Boolean(slot.sender.track) })) })), voice: document.querySelector(".dock-call-state")?.textContent })), { timeout: 20000 }).toMatchObject({ ready: true });
     await expect.poll(() => packets(c), { timeout: 20000 }).toBeGreaterThan(0);
@@ -363,6 +375,40 @@ test("mobile permanent chat, gesture, secondary tools, late join and player idle
     await expect(page.getByRole("button", { name: /Recolher chat|Expandir chat/ })).toHaveCount(0);
     const engine = () => page.evaluate(() => ({ created: (window as any).qaPlayer.created, destroyed: (window as any).qaPlayer.destroyed, position: (window as any).qaPlayer.position, plays: (window as any).qaPlayer.plays }));
     const originalEngine = await engine();
+    const mediaNode = await page.locator("iframe.provider-player").elementHandle();
+    await page.getByRole("textbox", { name: "Mensagem" }).fill("Draft preserved in Games");
+    await page.getByRole("button", { name: "Jogos", exact: true }).tap();
+    await expect(page.getByRole("heading", { name: "O que vamos jogar?" })).toBeFocused();
+    await expect(page.locator(".main-stage")).toHaveAttribute("data-view", "game");
+    await expect(page.getByRole("textbox", { name: "Mensagem" })).toHaveValue("Draft preserved in Games");
+    await page.getByRole("button", { name: "Enviar mensagem" }).tap();
+    await expect(page.getByText("Draft preserved in Games", { exact: true })).toBeVisible();
+    for (const width of [320, 360, 375, 390, 412, 430]) {
+      await page.setViewportSize({ width, height: 844 });
+      await expect(page.getByRole("textbox", { name: "Mensagem" })).toBeVisible();
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth && document.documentElement.scrollHeight <= innerHeight)).toBe(true);
+      const box = await page.locator("iframe.provider-player").boundingBox();
+      expect(box!.width).toBeGreaterThanOrEqual(200); expect(box!.height).toBeGreaterThanOrEqual(200);
+      for (const name of ["Pessoas da Party", "Fila da Party"]) {
+        await page.getByRole("button", { name, exact: true }).tap();
+        await expect(page.getByRole("button", { name: "Recolher painel da Party" })).toBeVisible();
+        await page.getByRole("button", { name: "Fechar painel", exact: true }).tap();
+        await expect(page.locator(".main-stage")).toHaveAttribute("data-view", "game");
+      }
+    }
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.screenshot({ path: "test-results/g0-mobile-games.png" });
+    await page.getByRole("button", { name: "Tela cheia de Jogos", exact: true }).tap();
+    await expect.poll(() => page.evaluate(() => Boolean(document.fullscreenElement || document.querySelector(".game-fallback-fullscreen")))).toBe(true);
+    await expect(page.locator(".mobile-party-chat")).toBeHidden();
+    await page.getByRole("button", { name: "Sair da tela cheia de Jogos", exact: true }).tap();
+    await expect(page.locator(".mobile-party-chat")).toBeVisible();
+    await expect(page.locator(".main-stage")).toHaveAttribute("data-view", "game");
+    await page.getByRole("button", { name: "Voltar à mídia", exact: true }).tap();
+    await expect(page.locator(".main-stage")).toHaveAttribute("data-view", "media");
+    expect(await engine()).toEqual(originalEngine);
+    expect(await mediaNode!.evaluate((node) => node === document.querySelector("iframe.provider-player"))).toBe(true);
+    expect(await page.evaluate(() => (window as any).qaMicCaptures)).toBe(0);
     const assertPortraitLayout = async () => {
       await expect.poll(() => page.locator(".player-frame").evaluate((node) => Math.abs(node.getBoundingClientRect().width / node.getBoundingClientRect().height - 16 / 9))).toBeLessThan(0.02);
       // VisualViewport resize arrives asynchronously after setViewportSize/fullscreen.
@@ -552,6 +598,64 @@ test("mobile permanent chat, gesture, secondary tools, late join and player idle
 
 // Isolated layout fixture: actual MediaStage markup/CSS + locally generated video.
 // This covers native video sizing used by Drive, NOT authenticated Google streaming.
+test("G0 Drive engine survives game presentation, paused return and screen stream switching", async ({ page }) => {
+  const errors: string[] = []; page.on("pageerror", (error) => errors.push(error.message));
+  const origin = `http://127.0.0.1:${webPort}`;
+  await page.goto(origin);
+  const recording = await page.evaluate(async () => {
+    const canvas = document.createElement("canvas"); canvas.width = 320; canvas.height = 180;
+    canvas.getContext("2d")!.fillRect(0, 0, 320, 180);
+    const stream = canvas.captureStream(15), chunks: Blob[] = [], recorder = new MediaRecorder(stream);
+    recorder.ondataavailable = (event) => chunks.push(event.data);
+    const stopped = new Promise<void>((resolve) => { recorder.onstop = () => resolve(); });
+    const frames = setInterval(() => { canvas.getContext("2d")!.fillStyle = Date.now() % 2 ? "#101210" : "#102210"; canvas.getContext("2d")!.fillRect(0, 0, 320, 180); }, 40);
+    recorder.start(); await new Promise((resolve) => setTimeout(resolve, 1500)); recorder.stop(); await stopped; clearInterval(frames);
+    stream.getTracks().forEach((track) => track.stop());
+    return { bytes: Array.from(new Uint8Array(await new Blob(chunks).arrayBuffer())), mime: recorder.mimeType };
+  });
+  let tickets = 0;
+  await page.route(`${origin}/api/google-drive/files/qa-g0/playback`, (route) => { tickets++; return route.fulfill({ json: { url: "/api/google-drive/playback/qa-g0" } }); });
+  await page.route(`${origin}/api/google-drive/playback/qa-g0`, (route) => route.fulfill({ body: Buffer.from(recording.bytes), contentType: recording.mime }));
+  await page.route(`${origin}/qa-g0`, (route) => route.fulfill({ contentType: "text/html", body: `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/src/styles.css"></head><body><div id="root"></div><script type="module">
+    import RefreshRuntime from '/@react-refresh'; RefreshRuntime.injectIntoGlobalHook(window); window.$RefreshReg$=()=>{}; window.$RefreshSig$=()=>type=>type; window.__vite_plugin_react_preamble_installed__=true;
+    const {default:React} = await import('/node_modules/.vite/deps/react.js'); const {createRoot} = (await import('/node_modules/.vite/deps/react-dom_client.js')).default;
+    const {MainStage} = await import('/src/components/MainStage.tsx'); const {MediaStage} = await import('/src/components/MediaStage.tsx');
+    const e=React.createElement; window.qaCommands=0;
+    function Fixture(){ const [view,setView]=React.useState('media'); const [share,setShare]=React.useState(null); const [stream,setStream]=React.useState(null);
+      const [media,setMedia]=React.useState({provider:'google-drive',mediaId:'qa-g0',title:'Local Drive fixture',type:'video',state:'paused',position:0,duration:10,playbackRate:1,startedAt:null,updatedAt:Date.now(),controlledBy:'qa',revision:1});
+      const command=(c)=>{window.qaCommands++;setMedia(m=>({...m,state:c.action==='pause'?'paused':'playing',position:c.position,startedAt:c.action==='pause'?null:Date.now(),revision:m.revision+1}));return true;};
+      const noop=React.useCallback(()=>{},[]);
+      return e('main',null,e('button',{onClick:()=>setView('game')},'Jogos'),e('button',{onClick:()=>{const canvas=document.createElement('canvas');canvas.width=320;canvas.height=180;canvas.getContext('2d').fillRect(0,0,320,180);window.qaScreen=canvas.captureStream(10);setStream(window.qaScreen);setShare({user:{id:'qa',displayName:'QA',color:'#78a98c'}});}},'Test screen'),e(MainStage,{view,onViewChange:setView,screenShare:share,screenStream:stream,onFullscreenChange:noop,media:e(MediaStage,{media,roomId:'qa',apiUrl:location.origin,token:'fixture',theater:false,ambient:false,musicView:false,volume:0,effectiveVolume:0,resyncToken:0,shortcutsEnabled:view==='media',onSkip:noop,onRemove:noop,onAddMedia:noop,onEnded:noop,onPlaybackCommand:command,onTheaterChange:noop,onMusicViewChange:noop,onFullscreenChange:noop,onVolumeChange:noop})}));
+    } createRoot(document.getElementById('root')).render(e(Fixture));
+  </script></body></html>` }));
+  await page.goto(`${origin}/qa-g0`);
+  await expect.poll(() => page.locator(".main-stage").count(), { message: "G0 React fixture must mount" }).toBe(1);
+  expect(errors).toEqual([]);
+  await expect(page.getByRole("button", { name: "Reproduzir", exact: true })).toBeVisible();
+  const native = await page.locator("video.provider-player").elementHandle();
+  await native!.evaluate((video: HTMLVideoElement) => { video.loop = true; });
+  const initialTickets = tickets;
+  await page.getByRole("button", { name: "Jogos", exact: true }).click();
+  await expect(page.locator(".stage-layer.hidden video.provider-player")).toHaveCount(1);
+  expect(await native!.evaluate((video: HTMLVideoElement) => video.paused)).toBe(true);
+  await page.getByRole("button", { name: "Voltar à mídia", exact: true }).click();
+  expect(await native!.evaluate((video: HTMLVideoElement) => video.currentTime)).toBe(0);
+  await page.getByRole("button", { name: "Reproduzir", exact: true }).click();
+  await expect.poll(() => native!.evaluate((video: HTMLVideoElement) => video.currentTime)).toBeGreaterThan(0.1);
+  const before = await native!.evaluate((video: HTMLVideoElement) => video.currentTime);
+  await page.getByRole("button", { name: "Jogos", exact: true }).click();
+  await expect.poll(() => native!.evaluate((video: HTMLVideoElement) => video.currentTime)).toBeGreaterThan(before);
+  await page.getByRole("button", { name: "Test screen", exact: true }).click();
+  await expect.poll(() => page.locator(".screen-share-stage video").evaluate((node: HTMLVideoElement) => node.srcObject === (window as any).qaScreen)).toBe(true);
+  expect(await page.evaluate(() => (window as any).qaScreen.getTracks()[0].readyState)).toBe("live");
+  await expect(page.locator(".main-stage")).toHaveAttribute("data-view", "game");
+  await page.getByRole("button", { name: "Tela compartilhada", exact: true }).click();
+  await expect(page.locator(".main-stage")).toHaveAttribute("data-view", "screen");
+  await page.getByRole("button", { name: "Mídia", exact: true }).click();
+  expect(await native!.evaluate((video) => video === document.querySelector("video.provider-player"))).toBe(true);
+  expect(tickets).toBe(initialTickets); expect(await page.evaluate(() => (window as any).qaCommands)).toBe(1);
+});
+
 test("Drive native video keeps portrait/4:3/16:9 content contained in the mobile canvas", async ({ page }) => {
   const player = execFileSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", `
     import { createElement } from "react";

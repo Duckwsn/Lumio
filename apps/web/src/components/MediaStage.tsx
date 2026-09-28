@@ -3,6 +3,7 @@ import { Clapperboard, Gauge, Maximize, Minimize2, Pause, Play, Plus, RotateCcw,
 import type { MediaState } from "@lumio/shared";
 import { ambientMetadata } from "../media/AmbientPresentation";
 import { AmbientArtwork } from "./AmbientArtwork";
+import { useFullscreenSurface } from "./useFullscreenSurface";
 import { DriveProvider, MediaController, YouTubeProvider, type ProviderCapabilities, type ProviderEvent } from "../media/MediaProvider";
 
 type PlaybackCommand = { action: "play" | "pause" | "seek" | "rate"; position: number; playbackRate?: number };
@@ -10,19 +11,21 @@ const emptyCapabilities: ProviderCapabilities = { playPause: false, seek: false,
 const formatTime = (value: number) => `${Math.floor(Math.max(0, value) / 60)}:${Math.floor(Math.max(0, value) % 60).toString().padStart(2, "0")}`;
 const isEditableTarget = (target: EventTarget | null) => { const node = target as HTMLElement | null; return Boolean(node?.isContentEditable || node?.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="textbox"], [role="searchbox"], button, [role="slider"]')); };
 
-export function MediaStage({ media, roomId, onSkip, onRemove, onAddMedia, onPlaybackCommand, onEnded, apiUrl, token, theater, onTheaterChange, ambient, musicView, onMusicViewChange, onFullscreenChange, volume, effectiveVolume, onVolumeChange, resyncToken }: {
+export function MediaStage({ media, roomId, onSkip, onRemove, onAddMedia, onPlaybackCommand, onEnded, apiUrl, token, theater, onTheaterChange, ambient, musicView, onMusicViewChange, onFullscreenChange, volume, effectiveVolume, onVolumeChange, resyncToken, shortcutsEnabled = true }: {
   media: MediaState; roomId: string; onSkip: () => void; onRemove: () => void; onAddMedia: () => void;
   onPlaybackCommand: (command: PlaybackCommand) => boolean; onEnded: () => void;
   apiUrl: string; token: string; theater: boolean; onTheaterChange: (active: boolean) => void; ambient: boolean; musicView: boolean;
   onMusicViewChange: (active: boolean) => void; onFullscreenChange: (active: boolean) => void;
   volume: number; effectiveVolume: number; onVolumeChange: (volume: number) => void; resyncToken: number;
+  shortcutsEnabled?: boolean;
 }) {
-  const stageRef = useRef<HTMLElement>(null); const iframeRef = useRef<HTMLIFrameElement>(null); const videoRef = useRef<HTMLVideoElement>(null); const controllerRef = useRef<MediaController | null>(null); const endedKeyRef = useRef(""); const hideTimer = useRef<number>(); const seekingRef = useRef(false); const orientationLockedRef = useRef(false); const mediaIdentityRef = useRef({ id: media.mediaId, revision: media.revision }); const onEndedRef = useRef(onEnded);
+  const stageRef = useRef<HTMLElement>(null); const iframeRef = useRef<HTMLIFrameElement>(null); const videoRef = useRef<HTMLVideoElement>(null); const controllerRef = useRef<MediaController | null>(null); const endedKeyRef = useRef(""); const hideTimer = useRef<number>(); const seekingRef = useRef(false); const mediaIdentityRef = useRef({ id: media.mediaId, revision: media.revision }); const onEndedRef = useRef(onEnded);
+  const { fullscreen, fallbackFullscreen, fullscreenError, toggleFullscreen, setFallbackFullscreen } = useFullscreenSurface(stageRef);
   const appliedVolume = useRef(effectiveVolume);
   const pointerActive = useRef(false);
   const touchInput = useRef(false);
   const [autoplayDenied, setAutoplayDenied] = useState(false);
-  const [providerError, setProviderError] = useState(""); const [providerState, setProviderState] = useState(media.state); const [position, setPosition] = useState(media.position); const [duration, setDuration] = useState(media.duration); const [seeking, setSeeking] = useState(false); const [muted, setMuted] = useState(false); const [capabilities, setCapabilities] = useState(emptyCapabilities); const [rates, setRates] = useState<number[]>([1]); const [controlsVisible, setControlsVisible] = useState(true); const [fullscreen, setFullscreen] = useState(false); const [fallbackFullscreen, setFallbackFullscreen] = useState(false); const [fullscreenError, setFullscreenError] = useState("");
+  const [providerError, setProviderError] = useState(""); const [providerState, setProviderState] = useState(media.state); const [position, setPosition] = useState(media.position); const [duration, setDuration] = useState(media.duration); const [seeking, setSeeking] = useState(false); const [muted, setMuted] = useState(false); const [capabilities, setCapabilities] = useState(emptyCapabilities); const [rates, setRates] = useState<number[]>([1]); const [controlsVisible, setControlsVisible] = useState(true);
   const empty = media.provider === "demo" || !media.mediaId;
   useEffect(() => { onFullscreenChange(fullscreen || fallbackFullscreen); }, [fullscreen, fallbackFullscreen, onFullscreenChange]);
   useEffect(() => () => onFullscreenChange(false), [onFullscreenChange]);
@@ -64,32 +67,6 @@ export function MediaStage({ media, roomId, onSkip, onRemove, onAddMedia, onPlay
 
   const issue = useCallback((action: PlaybackCommand["action"], nextPosition = controllerRef.current?.getCurrentTime() ?? position, playbackRate?: number) => { if (!onPlaybackCommand({ action, position: Math.max(0, nextPosition), playbackRate })) return; const controller = controllerRef.current; if (action === "play") void Promise.resolve(controller?.play()).catch((error: unknown) => setProviderError(error instanceof Error ? error.message : "Não foi possível iniciar a reprodução.")); else if (action === "pause") void controller?.pause(); else if (action === "seek") void controller?.seek(nextPosition); else if (playbackRate) controller?.setPlaybackRate(playbackRate); }, [onPlaybackCommand, position]);
   const togglePlayback = useCallback(() => issue(providerState === "playing" ? "pause" : "play"), [issue, providerState]);
-  const toggleFullscreen = useCallback(() => {
-    setFullscreenError("");
-    if (fallbackFullscreen) { setFallbackFullscreen(false); return; }
-    if (document.fullscreenElement === stageRef.current) { void document.exitFullscreen().catch(() => setFullscreenError("Não foi possível sair da tela cheia.")); return; }
-    const target = stageRef.current;
-    if (!target) return;
-    if (typeof target.requestFullscreen !== "function" || !document.fullscreenEnabled) { setFallbackFullscreen(true); setControlsVisible(true); return; }
-    setControlsVisible(true);
-    void target.requestFullscreen().then(async () => {
-      const orientation = screen.orientation as ScreenOrientation & { lock?: (value: "landscape") => Promise<void> };
-      if (window.matchMedia("(pointer: coarse) and (max-width: 900px)").matches && typeof orientation?.lock === "function") {
-        try {
-          await orientation.lock("landscape");
-          if (document.fullscreenElement === target) orientationLockedRef.current = true;
-          else screen.orientation.unlock();
-        } catch { /* Some mobile browsers do not allow orientation lock; the user can rotate manually. */ }
-      }
-    }).catch(() => setFullscreenError("O navegador não permitiu a tela cheia. Tente novamente pelo botão do player."));
-  }, [fallbackFullscreen]);
-  useEffect(() => {
-    const changed = () => { const active = document.fullscreenElement === stageRef.current; setFullscreen(active); setControlsVisible(true); if (!active && orientationLockedRef.current) { screen.orientation.unlock(); orientationLockedRef.current = false; } };
-    const failed = () => setFullscreenError("O navegador não permitiu a tela cheia.");
-    document.addEventListener("fullscreenchange", changed); stageRef.current?.addEventListener("fullscreenerror", failed);
-    const target = stageRef.current;
-    return () => { document.removeEventListener("fullscreenchange", changed); target?.removeEventListener("fullscreenerror", failed); };
-  }, []);
   const revealControls = useCallback(() => {
     setControlsVisible(true); window.clearTimeout(hideTimer.current);
     if (media.state === "playing") hideTimer.current = window.setTimeout(() => {
@@ -101,6 +78,7 @@ export function MediaStage({ media, roomId, onSkip, onRemove, onAddMedia, onPlay
   useEffect(() => () => window.clearTimeout(hideTimer.current), []);
 
   useEffect(() => {
+    if (!shortcutsEnabled) return;
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape" && fallbackFullscreen) { event.preventDefault(); setFallbackFullscreen(false); return; }
       if (isEditableTarget(event.target) || empty) return;
@@ -111,7 +89,7 @@ export function MediaStage({ media, roomId, onSkip, onRemove, onAddMedia, onPlay
       else if (event.key === "ArrowRight" && capabilities.seek) { event.preventDefault(); issue("seek", Math.min(duration, (controllerRef.current?.getCurrentTime() ?? position) + 10)); }
     };
     window.addEventListener("keydown", onKey); return () => window.removeEventListener("keydown", onKey);
-  }, [capabilities.seek, duration, empty, fallbackFullscreen, issue, position, toggleFullscreen, togglePlayback]);
+  }, [shortcutsEnabled, capabilities.seek, duration, empty, fallbackFullscreen, issue, position, toggleFullscreen, togglePlayback]);
 
   const presentation = ambientMetadata(media);
   const ambientThumbnail = presentation.artwork;

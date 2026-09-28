@@ -6,6 +6,7 @@ import type { HouseSummary } from "@lumio/shared";
 import { safeAuthDestination } from "./authNavigation";
 import { HomePage } from "./components/EntryExperience";
 import { parseInviteInput } from "./inviteInput.js";
+import { MainStage } from "./components/MainStage";
 
 test("post-login destination rejects cross-origin and protocol-relative redirects", () => {
   const origin = "https://lumio.example.test";
@@ -28,4 +29,19 @@ test("invite input supports normalized codes and existing local invitation links
   for (const input of ["ABCDE/FGHJK", "1234567890", `https://attacker.test/invite/${token}`, "javascript:alert(1)"]) assert.equal(parseInviteInput(input, origin), null);
   const next = `/invite/${parseInviteInput("abcde fghjk", origin)}`;
   assert.equal(safeAuthDestination(next, origin), next);
+});
+
+test("MainStage recognizes games while retaining exactly one media surface", () => {
+  for (const view of ["media", "game", "screen"] as const) {
+    const html = renderToStaticMarkup(createElement(MainStage, { media: createElement("video", { "data-engine": "single" }), screenShare: null, screenStream: null, view, onViewChange: () => undefined, onFullscreenChange: () => undefined }));
+    assert.equal((html.match(/data-engine="single"/g) ?? []).length, 1);
+    assert.equal(html.includes("O que vamos jogar?"), view === "game");
+    assert.equal(html.includes('inert=""'), view !== "media");
+  }
+});
+test("game presentation keeps the existing YouTube surface visible instead of background playback", () => {
+  const html = renderToStaticMarkup(createElement(MainStage, { media: createElement("iframe", { title: "YouTube" }), screenShare: null, screenStream: null, view: "game", youtubeVisible: true, onViewChange: () => undefined, onFullscreenChange: () => undefined }));
+  assert.match(html, /game-media-visible/); assert.equal(html.includes('inert=""'), false);
+  assert.equal((html.match(/<iframe/g) ?? []).length, 1);
+  assert.equal(html.includes("Iniciar jogo"), false);
 });
