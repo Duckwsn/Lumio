@@ -250,7 +250,6 @@ export const eventNames = {
   mediaRequestSync: "media:request-sync",
   voteSkip: "vote:skip",
   chatMessage: "chat:message",
-  reactionSend: "reaction:send",
   voiceJoin: "voice:join",
   voiceLeave: "voice:leave",
   voiceSpeaking: "voice:speaking",
@@ -301,7 +300,6 @@ export interface ServerToClientEvents {
   "room:settings": (settings: RoomSettings) => void;
   "vote:skip": (vote: { count: number; required: number; votedBy: string[]; advanced: boolean }) => void;
   "chat:message": (message: ChatMessage) => void;
-  "reaction:send": (reaction: { id: string; emoji: string; user: User }) => void;
   "voice:signal": (payload: { fromUserId: string; fromSocketId: string; signal: z.infer<typeof voiceSignalSchema>["signal"] }) => void;
   "voice:peer-joined": (peer: VoicePeer) => void;
   "voice:peer-left": (peer: { userId: string; socketId: string }) => void;
@@ -335,7 +333,6 @@ export interface ClientToServerEvents {
   "media:request-sync": (input: { roomId: string }) => void;
   "vote:skip": (input: { roomId: string }) => void;
   "chat:message": (input: z.infer<typeof chatInputSchema>) => void;
-  "reaction:send": (input: { roomId: string; emoji: string }) => void;
   "presence:update": (input: z.infer<typeof presenceInputSchema>) => void;
   "voice:join": (input: { roomId: string }, respond?: (result: { ok: boolean; message?: string }) => void) => void;
   "voice:leave": (input: { roomId: string }) => void;

@@ -5,6 +5,7 @@ import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { io } from "socket.io-client";
 
 const root = path.resolve(__dirname, "..");
 const serverRoot = path.join(root, "apps", "server");
@@ -101,7 +102,7 @@ test("Landing → login → restored session → House → Party → queue/drawe
   expect(manifest.ok()).toBe(true);
   expect((await manifest.json() as { icons: unknown[] }).icons.length).toBeGreaterThan(0);
   await page.setViewportSize({ width: 390, height: 844 });
-  await expect(page.getByLabel("Controles da Party")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Recolher chat" })).toBeVisible();
   await page.setViewportSize({ width: 844, height: 390 });
   await expect(page.getByRole("heading", { name: "QA E2E Casa" })).toBeVisible();
   await page.setViewportSize({ width: 1280, height: 800 });
@@ -126,4 +127,128 @@ test("Landing → login → restored session → House → Party → queue/drawe
   await expect(page.getByRole("heading", { name: /Fiquem juntos/i })).toBeVisible();
   await page.getByRole("button", { name: "Entrar", exact: true }).first().click();
   await expect(page).toHaveURL(/\/login$/);
+});
+
+test("mobile permanent chat, gesture, secondary tools, late join and player idle controls", async ({ browser, request }) => {
+  test.setTimeout(120_000);
+  const origin = `http://127.0.0.1:${webPort}`, api = `http://127.0.0.1:${apiPort}`;
+  const email = `mobile-${crypto.randomUUID()}@example.test`, password = "local-e2e-password-123";
+  expect((await request.post(`${api}/api/auth/signup`, { data: { displayName: "Mobile QA", email, password } })).status()).toBe(201);
+  const mail = fs.readFileSync(path.join(directory, "mail.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line) as { text: string });
+  const link = mail.at(-1)!.text.match(/https?:\/\/\S+/)![0];
+  expect((await request.post(`${api}/api/auth/verification/confirm`, { data: { token: new URL(link).hash.slice(7) } })).status()).toBe(204);
+  const login = await request.post(`${api}/api/auth/login`, { data: { email, password } });
+  const session = await login.json();
+  const created = await request.post(`${api}/api/houses`, { headers: { Authorization: `Bearer ${session.token}` }, data: { name: "Mobile QA Casa" } });
+  expect(created.ok()).toBe(true);
+  const result = await created.json(); const house = result.house;
+  const socket = io(api, { autoConnect: false, auth: { token: session.token }, transports: ["websocket"], extraHeaders: { Origin: origin } });
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+  try {
+    const snapshot = new Promise<any>((resolve, reject) => { const timer = setTimeout(() => reject(new Error("Local fixture join timeout")), 5000); socket.once("room:snapshot", (value) => { clearTimeout(timer); resolve(value); }); socket.once("connect_error", reject); socket.once("server:error", (message) => reject(new Error(message))); });
+    socket.on("connect", () => socket.emit("room:join", { roomId: house.primaryRoomId, user: session.user }));
+    socket.connect();
+    await snapshot;
+    const item = { id: crypto.randomUUID(), provider: "youtube", providerMediaId: "dQw4w9WgXcQ", type: "video", title: "Local player mock", duration: 300, addedBy: session.user, addedAt: new Date().toISOString() };
+    const added = await socket.timeout(5000).emitWithAck("queue:add", { roomId: house.primaryRoomId, item }); expect(added.ok).toBe(true);
+    const changed = await socket.timeout(5000).emitWithAck("media:change", { roomId: house.primaryRoomId, item }); expect(changed.ok).toBe(true);
+    await context.addInitScript((session) => {
+      if (window.top !== window || !["http:", "https:"].includes(location.protocol)) return;
+      localStorage.setItem("lumio.session.v1", JSON.stringify(session));
+      (window as any).qaPlayer = { plays: 0, position: 0, state: -1, blocked: localStorage.getItem("qa.blocked") === "1" };
+      (window as any).YT = { Player: class {
+        events: any;
+        constructor(_id: string, options: any) { this.events = options.events; setTimeout(() => this.events.onReady(), 80); }
+        cueVideoById() {} seekTo(value: number) { (window as any).qaPlayer.position = value; }
+        playVideo() { const qa = (window as any).qaPlayer; qa.plays++; if (qa.blocked) this.events.onAutoplayBlocked(); else { qa.state = 1; this.events.onStateChange({ data: 1 }); } }
+        pauseVideo() { (window as any).qaPlayer.state = 2; this.events.onStateChange({ data: 2 }); }
+        getCurrentTime() { return (window as any).qaPlayer.position; } getPlayerState() { return (window as any).qaPlayer.state; }
+        getDuration() { return 300; } getPlaybackRate() { return 1; } getAvailablePlaybackRates() { return [1]; }
+        setVolume() {} setPlaybackRate() {} mute() {} unMute() {} destroy() {}
+      } };
+    }, session);
+    await context.route("https://www.youtube-nocookie.com/**", (route) => route.fulfill({ body: "<html><body style='background:#101210;color:#a7f3c2'>Local media fixture</body></html>", contentType: "text/html" }));
+    const page = await context.newPage();
+    const pageErrors: string[] = []; page.on("pageerror", (error) => pageErrors.push(error.message));
+    await page.goto(`${origin}/house/${house.id}`);
+    await expect(page.getByRole("heading", { name: "Mobile QA Casa", exact: true })).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByRole("textbox", { name: "Mensagem" })).toBeVisible();
+    await expect.poll(() => page.evaluate(() => (window as any).qaPlayer.state)).toBe(1);
+    await expect.poll(() => page.evaluate(() => (window as any).qaPlayer.plays)).toBeGreaterThan(0);
+    const handle = page.getByRole("button", { name: "Recolher chat" });
+    await expect(handle).toHaveAttribute("aria-expanded", "true");
+    await handle.tap(); await expect(page.getByRole("button", { name: "Expandir chat" })).toHaveAttribute("aria-expanded", "false");
+    await expect(page.getByRole("textbox", { name: "Mensagem" })).toBeHidden();
+    await page.getByRole("button", { name: "Expandir chat" }).tap();
+    await expect(handle).toHaveAttribute("aria-expanded", "true");
+    await page.locator(".mobile-party-chat").evaluate((node) => Promise.all(node.getAnimations().map((animation) => animation.finished)));
+    const box = await handle.boundingBox();
+    await page.mouse.move(box!.x + box!.width / 2, box!.y + 20); await page.mouse.down();
+    await expect(page.locator(".mobile-party-chat")).toHaveAttribute("data-dragging", "true");
+    const before = await page.locator(".mobile-party-chat").evaluate((node) => node.getBoundingClientRect().height);
+    await page.mouse.move(box!.x + box!.width / 2, box!.y + 300, { steps: 12 });
+    const during = await page.locator(".mobile-party-chat").evaluate((node) => node.getBoundingClientRect().height);
+    expect(during).toBeLessThan(before); await page.mouse.up();
+    await expect(page.getByRole("button", { name: "Expandir chat" })).toBeVisible();
+    await page.getByRole("button", { name: "Expandir chat" }).tap();
+    await page.getByRole("textbox", { name: "Mensagem" }).fill("Mobile message");
+    await page.getByRole("button", { name: "Enviar mensagem" }).tap(); await expect(page.getByText("Mobile message", { exact: true })).toBeVisible();
+    for (const name of ["Pessoas da Party", "Fila da Party"]) {
+      await page.getByRole("button", { name, exact: true }).tap();
+      await expect(page.getByRole("complementary", { name: "Painel da Party" })).toBeVisible();
+      await expect(page.getByRole("tab", { name: "Chat", exact: true })).toHaveCount(0);
+      await page.getByRole("button", { name: "Fechar painel" }).tap();
+    }
+    for (const width of [320, 360, 375, 390, 412, 430]) {
+      await page.setViewportSize({ width, height: 844 });
+      await expect(page.getByRole("textbox", { name: "Mensagem" })).toBeVisible();
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    }
+    await page.screenshot({ path: "test-results/mobile-chat-430.png" });
+    await page.getByRole("button", { name: "Controles da call", exact: true }).tap();
+    await expect(page.getByRole("button", { name: "Entrar na call", exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Controles da call", exact: true }).tap();
+    await page.locator(".player-touch-surface").tap({ position: { x: 20, y: 20 } });
+    await expect(page.locator(".lumio-controls")).toHaveCSS("opacity", "1");
+    await expect(page.locator(".lumio-controls")).toHaveCSS("opacity", "0", { timeout: 5000 });
+    await page.locator(".player-touch-surface").tap({ position: { x: 20, y: 20 } });
+    await page.getByRole("button", { name: "Entrar no modo cinema", exact: true }).tap();
+    await expect(page.locator(".mobile-party-chat")).toBeHidden();
+    await page.getByRole("button", { name: "Sair do modo cinema", exact: true }).tap();
+    await expect(page.getByRole("textbox", { name: "Mensagem" })).toBeVisible();
+    await page.setViewportSize({ width: 844, height: 390 });
+    await expect(page.getByRole("textbox", { name: "Mensagem" })).toBeVisible();
+    await expect.poll(() => page.locator(".mobile-party-chat").evaluate((node) => node.getBoundingClientRect().height)).toBeLessThan(200);
+    await page.locator(".mobile-party-chat").evaluate((node) => Promise.all(node.getAnimations().map((animation) => animation.finished)));
+    await page.screenshot({ path: "test-results/mobile-landscape.png" });
+    const landscapeComposer = await page.getByRole("textbox", { name: "Mensagem" }).boundingBox();
+    expect(landscapeComposer!.y + landscapeComposer!.height).toBeLessThanOrEqual(390);
+    await page.locator(".player-touch-surface").tap({ position: { x: 20, y: 20 } });
+    await page.getByRole("button", { name: "Tela cheia", exact: true }).tap();
+    await expect.poll(() => page.evaluate(() => Boolean(document.fullscreenElement || document.querySelector(".fallback-fullscreen")))).toBe(true);
+    await page.screenshot({ path: "test-results/mobile-fullscreen.png" });
+    await page.getByRole("button", { name: /Sair da tela (cheia|ampliada)/ }).tap();
+    await expect(page.getByRole("textbox", { name: "Mensagem" })).toBeVisible();
+    await page.locator(".player-touch-surface").tap({ position: { x: 20, y: 20 } });
+    await page.getByRole("button", { name: "Pausar", exact: true }).tap();
+    await page.reload();
+    await expect.poll(() => page.evaluate(() => (window as any).qaPlayer.state)).toBe(2);
+    expect(await page.evaluate(() => (window as any).qaPlayer.plays)).toBe(0);
+    await expect(page.locator(".lumio-controls")).toHaveCSS("opacity", "1");
+    await page.getByRole("button", { name: "Reproduzir", exact: true }).tap();
+    await page.evaluate(() => localStorage.setItem("qa.blocked", "1")); await page.reload();
+    await expect(page.getByText("Toque para entrar na reprodução", { exact: true })).toBeVisible();
+    await page.evaluate(() => { (window as any).qaPlayer.blocked = false; localStorage.removeItem("qa.blocked"); });
+    await page.getByRole("button", { name: "Entrar na reprodução", exact: true }).tap();
+    await expect.poll(() => page.evaluate(() => (window as any).qaPlayer.state)).toBe(1);
+    await expect(page.getByText("Toque para entrar na reprodução", { exact: true })).toBeHidden();
+    await page.setViewportSize({ width: 320, height: 450 });
+    await page.getByRole("textbox", { name: "Mensagem" }).fill("Keyboard-sized viewport");
+    const input = await page.getByRole("textbox", { name: "Mensagem" }).boundingBox(); expect(input!.y + input!.height).toBeLessThanOrEqual(450);
+    await page.reload(); await expect(page.getByRole("button", { name: "Recolher chat" })).toBeVisible();
+    expect(await page.locator(".reaction-actions,.reaction-float").count()).toBe(0);
+    expect(fs.readFileSync(path.join(serverRoot, "src/index.ts"), "utf8")).not.toContain("reaction:send");
+    expect(fs.readFileSync(path.join(root, "packages/shared/src/index.ts"), "utf8")).not.toContain("reaction:send");
+    expect(pageErrors).toEqual([]);
+  } finally { socket.disconnect(); await context.close(); }
 });

@@ -780,7 +780,7 @@ io.on("connection", (socket) => {
     if (socket.data.revoked) return next(new Error("Acesso à Casa revogado."));
     if (event !== eventNames.roomLeave && (!payload || typeof payload !== "object" || Array.isArray(payload))) return next(new Error("Payload inválido."));
     if (event !== eventNames.roomJoin && joinedRoomId) { const house = social.getByRoom(joinedRoomId); if (deletingRooms.has(joinedRoomId) || !house || !social.isMember(house.id, user.id)) return next(new Error("Acesso à Casa revogado.")); }
-    const ceiling = event === eventNames.chatMessage ? 20 : event === eventNames.reactionSend ? 40 : event === eventNames.chatTyping ? 60 : event === eventNames.voiceSignal ? 600 : 120;
+    const ceiling = event === eventNames.chatMessage ? 20 : event === eventNames.chatTyping ? 60 : event === eventNames.voiceSignal ? 600 : 120;
     const now = Date.now(), key = `${user.id}:${event}`, bucket = socketEventAttempts.get(key);
     if (socketEventAttempts.size > 20_000) for (const [id, entry] of socketEventAttempts) if (entry.resetAt <= now) socketEventAttempts.delete(id);
     if (socketEventAttempts.size > 40_000) return next(new Error("Muitas ações em pouco tempo."));
@@ -1045,15 +1045,6 @@ io.on("connection", (socket) => {
     const input = { ...parsed.data, speaking: parsed.data.speaking && !parsed.data.muted && !parsed.data.deafened && callSockets.isJoined(parsed.data.roomId, user.id, socket.id) };
     const snapshot = store.updatePresence(parsed.data.roomId, user.id, input);
     if (snapshot) io.to(parsed.data.roomId).emit("presence:update", snapshot.members);
-  });
-
-  socket.on(eventNames.reactionSend, (input) => {
-    const parsed = z.object({ roomId: z.string(), emoji: z.string().min(1).max(4) }).safeParse(input);
-    if (!parsed.success || parsed.data.roomId !== joinedRoomId) return;
-    const lastReactionAt = Number(socket.data.lastReactionAt ?? 0);
-    if (Date.now() - lastReactionAt < 350) return;
-    socket.data.lastReactionAt = Date.now();
-    io.to(parsed.data.roomId).emit("reaction:send", { id: crypto.randomUUID(), emoji: parsed.data.emoji, user: publicUser(user) });
   });
 
   socket.on(eventNames.voiceSignal, (rawInput) => {

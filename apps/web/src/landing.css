@@ -65,7 +65,6 @@
 .landing-demo-dock { display:flex; height:52px; align-items:center; justify-content:center; gap:9px; border-top:1px solid #2e3730; background:#171d19; }
 .landing-demo-dock>span { display:inline-flex; min-width:31px; height:31px; align-items:center; justify-content:center; border-radius:7px; color:#bfccc0; background:#29312b; }
 .landing-demo-dock .landing-dock-add { gap:6px; padding:0 11px; color:#121b14; background:#a2d0b1; font-size:10px; font-weight:700; }
-.landing-demo-reaction { position:absolute; top:11%; right:-18px; display:grid; width:43px; height:43px; place-items:center; border:1px solid #384b3b; border-radius:12px; color:#e5a7a2; background:#26352a; box-shadow:0 10px 30px #0006; animation:landing-reaction 5s ease-in-out infinite; }
 .landing-demo-caption { display:block; margin-top:12px; color:#8a968c; text-align:right; font-size:11px; }
 .landing-promise { border-block:1px solid #263027; background:#141b16; }
 .landing-promise .landing-container { display:flex; min-height:138px; align-items:center; justify-content:space-between; gap:30px; }
@@ -113,13 +112,11 @@
 .landing-final-v3 { padding-block:145px 158px; background:radial-gradient(circle at 80% 60%,#233628,transparent 36%),#0d100e; }.landing-final-v3 h2 { margin-bottom:32px; font-size:clamp(50px,6vw,90px); }
 .landing-footer { border-top:1px solid #273029; }.landing-footer .landing-container { display:flex; min-height:115px; align-items:center; gap:40px; }.landing-footer .landing-brand { font-size:17px; }.landing-footer .landing-brand .brand-symbol { width:29px; height:29px; flex-basis:29px; }.landing-footer .landing-container>span:nth-child(2) { flex:1; color:#a8b4aa; font-size:12px; }.landing-footer small { color:#9eaca0; font-size:11px; }
 @keyframes landing-speaking { 50% { transform:scaleY(.55); opacity:.7; } }
-@keyframes landing-reaction { 0%,82%,100% { opacity:.65; transform:translateY(0); } 88% { opacity:1; transform:translateY(-8px); } }
 @media (max-width:1100px) {
   .landing-container { width:min(100% - 64px,1380px); }
   .landing-hero-v3 { grid-template-columns:minmax(0,.95fr) minmax(0,1.05fr); gap:26px; }
   .landing-party-body { grid-template-columns:minmax(0,1fr) 133px; }
   .landing-demo-side { padding-inline:10px; }
-  .landing-demo-reaction { right:-8px; }
 }
 @media (max-width:900px) {
   .landing-container { width:calc(100% - 36px); }

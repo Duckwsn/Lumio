@@ -16,25 +16,31 @@ export function MediaStage({ media, roomId, onSkip, onRemove, onAddMedia, onPlay
 }) {
   const stageRef = useRef<HTMLElement>(null); const iframeRef = useRef<HTMLIFrameElement>(null); const videoRef = useRef<HTMLVideoElement>(null); const controllerRef = useRef<MediaController | null>(null); const endedKeyRef = useRef(""); const hideTimer = useRef<number>(); const seekingRef = useRef(false); const orientationLockedRef = useRef(false); const mediaIdentityRef = useRef({ id: media.mediaId, revision: media.revision }); const onEndedRef = useRef(onEnded);
   const appliedVolume = useRef(effectiveVolume);
+  const pointerActive = useRef(false);
+  const touchInput = useRef(false);
+  const [autoplayDenied, setAutoplayDenied] = useState(false);
   const [providerError, setProviderError] = useState(""); const [providerState, setProviderState] = useState(media.state); const [position, setPosition] = useState(media.position); const [duration, setDuration] = useState(media.duration); const [seeking, setSeeking] = useState(false); const [muted, setMuted] = useState(false); const [capabilities, setCapabilities] = useState(emptyCapabilities); const [rates, setRates] = useState<number[]>([1]); const [controlsVisible, setControlsVisible] = useState(true); const [fullscreen, setFullscreen] = useState(false); const [fallbackFullscreen, setFallbackFullscreen] = useState(false); const [fullscreenError, setFullscreenError] = useState("");
   const empty = media.provider === "demo" || !media.mediaId;
-  const autoplayBlocked = /NotAllowedError|play\(\) failed|autoplay|user gesture|user interaction/i.test(providerError);
+  const autoplayBlocked = media.state === "playing" && (autoplayDenied || /NotAllowedError|play\(\) failed|autoplay|user gesture|user interaction/i.test(providerError));
   const showLoading = providerState === "loading" && !capabilities.playPause;
   const showBuffering = providerState === "buffering" && media.state === "playing";
 
   mediaIdentityRef.current = { id: media.mediaId, revision: media.revision }; onEndedRef.current = onEnded;
   const onProviderEvent = useCallback((event: ProviderEvent) => {
     if (event.type === "error") setProviderError(event.message);
+    else if (event.type === "autoplay-blocked") setAutoplayDenied(true);
     else if (event.type === "duration") setDuration(event.duration);
-    else { setProviderState(event.type); if (event.type === "ended") { const identity = mediaIdentityRef.current; const key = `${identity.id}:${identity.revision}`; if (endedKeyRef.current !== key) { endedKeyRef.current = key; onEndedRef.current(); } } }
+    else { setProviderState(event.type); if (event.type === "playing") { setAutoplayDenied(false); setProviderError(""); } if (event.type === "ended") { const identity = mediaIdentityRef.current; const key = `${identity.id}:${identity.revision}`; if (endedKeyRef.current !== key) { endedKeyRef.current = key; onEndedRef.current(); } } }
   }, []);
 
   useEffect(() => {
     controllerRef.current?.destroy(); controllerRef.current = null; setProviderError(""); setCapabilities(emptyCapabilities);
+    setAutoplayDenied(false);
     if (empty) return;
     const controller = new MediaController({ youtube: () => new YouTubeProvider(iframeRef.current!, onProviderEvent), "google-drive": () => new DriveProvider(videoRef.current!, apiUrl, token, roomId, onProviderEvent) }, setProviderError);
     controllerRef.current = controller; return () => controller.destroy();
   }, [apiUrl, empty, media.provider, onProviderEvent, roomId, token]);
+  useEffect(() => { setAutoplayDenied(false); }, [media.mediaId, media.state]);
 
   useEffect(() => {
     if (empty) return;
@@ -51,7 +57,7 @@ export function MediaStage({ media, roomId, onSkip, onRemove, onAddMedia, onPlay
   useEffect(() => { controllerRef.current?.setMuted(muted); }, [muted, media.provider]);
   useEffect(() => { if (empty || seeking || providerState !== "playing") return; const timer = window.setInterval(() => { const value = controllerRef.current?.getCurrentTime() ?? 0; if (value >= 0) setPosition(value); }, 500); return () => window.clearInterval(timer); }, [empty, providerState, seeking]);
 
-  const issue = useCallback((action: PlaybackCommand["action"], nextPosition = controllerRef.current?.getCurrentTime() ?? position, playbackRate?: number) => { if (!onPlaybackCommand({ action, position: Math.max(0, nextPosition), playbackRate })) return; const controller = controllerRef.current; if (action === "play") void controller?.play(); else if (action === "pause") void controller?.pause(); else if (action === "seek") void controller?.seek(nextPosition); else if (playbackRate) controller?.setPlaybackRate(playbackRate); }, [onPlaybackCommand, position]);
+  const issue = useCallback((action: PlaybackCommand["action"], nextPosition = controllerRef.current?.getCurrentTime() ?? position, playbackRate?: number) => { if (!onPlaybackCommand({ action, position: Math.max(0, nextPosition), playbackRate })) return; const controller = controllerRef.current; if (action === "play") void Promise.resolve(controller?.play()).catch((error: unknown) => setProviderError(error instanceof Error ? error.message : "Não foi possível iniciar a reprodução.")); else if (action === "pause") void controller?.pause(); else if (action === "seek") void controller?.seek(nextPosition); else if (playbackRate) controller?.setPlaybackRate(playbackRate); }, [onPlaybackCommand, position]);
   const togglePlayback = useCallback(() => issue(providerState === "playing" ? "pause" : "play"), [issue, providerState]);
   const toggleFullscreen = useCallback(() => {
     setFullscreenError("");
@@ -82,10 +88,11 @@ export function MediaStage({ media, roomId, onSkip, onRemove, onAddMedia, onPlay
   const revealControls = useCallback(() => {
     setControlsVisible(true); window.clearTimeout(hideTimer.current);
     if (media.state === "playing") hideTimer.current = window.setTimeout(() => {
-      if (!seekingRef.current && !stageRef.current?.querySelector(".lumio-controls:focus-within")) setControlsVisible(false);
+      const focus = stageRef.current?.querySelector(".lumio-controls:focus-within");
+      if (!seekingRef.current && !pointerActive.current && (!focus || touchInput.current && !(document.activeElement instanceof HTMLSelectElement))) setControlsVisible(false);
     }, 2600);
   }, [media.state]);
-  useEffect(() => { if (fullscreen || fallbackFullscreen) revealControls(); }, [fullscreen, fallbackFullscreen, revealControls]);
+  useEffect(() => { revealControls(); }, [media.mediaId, fullscreen, fallbackFullscreen, revealControls]);
   useEffect(() => () => window.clearTimeout(hideTimer.current), []);
 
   useEffect(() => {
@@ -102,15 +109,16 @@ export function MediaStage({ media, roomId, onSkip, onRemove, onAddMedia, onPlay
 
   const ambientThumbnail = media.thumbnail ?? (media.provider === "youtube" && media.mediaId ? `https://i.ytimg.com/vi/${media.mediaId}/hqdefault.jpg` : undefined);
   const visualStyle = ambient && ambientThumbnail ? { "--ambient-image": `url("${ambientThumbnail.split('"').join('%22')}")` } as CSSProperties : undefined;
-  return <section ref={stageRef} className={`universal-player lumio-player ${theater ? "is-theater" : ""} ${ambient || musicView ? "has-ambient" : ""} ${musicView ? "is-music-view" : ""} ${fallbackFullscreen ? "fallback-fullscreen" : ""} ${controlsVisible || media.state !== "playing" ? "controls-visible" : ""}`} style={visualStyle} aria-label="Lumio Player" onPointerMove={revealControls} onFocusCapture={revealControls} onPointerDown={(event) => { if ((fullscreen || fallbackFullscreen) && !(event.target as HTMLElement).closest(".lumio-controls, button, input, select")) { setControlsVisible((visible) => !visible); window.clearTimeout(hideTimer.current); } }}>
+  return <section ref={stageRef} className={`universal-player lumio-player ${theater ? "is-theater" : ""} ${ambient || musicView ? "has-ambient" : ""} ${musicView ? "is-music-view" : ""} ${fallbackFullscreen ? "fallback-fullscreen" : ""} ${controlsVisible || media.state !== "playing" ? "controls-visible" : ""}`} style={visualStyle} aria-label="Lumio Player" onPointerMove={(event) => { if (event.pointerType === "mouse") revealControls(); }} onFocusCapture={revealControls} onBlurCapture={revealControls}>
     <div className="ambient-glow" aria-hidden="true" /><div className="player-frame">
       {empty ? <div className="player-empty"><span className="player-empty-icon"><Clapperboard aria-hidden="true" /></span><h2>Nenhuma mídia tocando</h2><p>Adicione um vídeo ou uma música para começar a Party.</p><button className="primary-action" onClick={onAddMedia}><Plus size={18} /> Adicionar mídia</button></div> : null}
       {media.provider === "youtube" && media.mediaId ? <iframe ref={iframeRef} className="provider-player" title={media.title} src={`https://www.youtube-nocookie.com/embed/${media.mediaId}?enablejsapi=1&origin=${window.location.origin}&controls=0&disablekb=1&rel=0&playsinline=1`} referrerPolicy="strict-origin-when-cross-origin" allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowFullScreen /> : null}
       {media.provider === "google-drive" && media.mediaId ? <video ref={videoRef} className="provider-player" playsInline preload="metadata" poster={media.thumbnail} /> : null}
+      {!empty ? <div className="player-touch-surface" aria-hidden="true" onPointerDown={(event) => { touchInput.current = event.pointerType !== "mouse"; revealControls(); }} /> : null}
       {musicView && !empty ? <div className="music-presentation" aria-hidden="true"><div className="music-cover">{ambientThumbnail ? <img src={ambientThumbnail} alt="" /> : <Clapperboard />}</div><div><span>Ambiente musical</span><strong>{media.title}</strong><small>{String(media.metadata?.channelTitle ?? (media.provider === "youtube" ? "YouTube" : "Google Drive"))}</small></div></div> : null}
       {!empty && !providerError && (showLoading || showBuffering) ? <div className="player-buffering" role="status"><span /> {showBuffering ? "Carregando vídeo…" : "Preparando reprodução…"}</div> : null}
-      {providerError ? <div className="player-error" role="alert"><strong>{autoplayBlocked ? "O navegador pausou a reprodução automática" : "Não foi possível reproduzir esta mídia"}</strong><p>{autoplayBlocked ? "Clique abaixo para iniciar neste navegador." : providerError}</p><div>{autoplayBlocked ? <button onClick={() => void Promise.resolve(controllerRef.current?.play()).then(() => setProviderError(""), () => setProviderError("Clique em reproduzir para iniciar a mídia."))}><Play size={17} /> Clique para iniciar reprodução</button> : <button onClick={() => { setProviderError(""); void controllerRef.current?.sync(media, { force: true }); }}><RotateCcw size={17} /> Tentar novamente</button>}<button onClick={onSkip}><SkipForward size={17} /> Pular</button><button className="danger-action" onClick={onRemove}>Remover</button></div></div> : null}
-      {!empty ? <div className="lumio-controls" aria-label="Controles do Lumio Player" onPointerDown={() => window.clearTimeout(hideTimer.current)} onPointerUp={(event) => { if ((event.target as HTMLElement).matches("button")) (event.target as HTMLElement).blur(); revealControls(); }}>
+      {providerError || autoplayBlocked ? <div className="player-error" role="alert"><strong>{autoplayBlocked ? "Toque para entrar na reprodução" : "Não foi possível reproduzir esta mídia"}</strong><p>{autoplayBlocked ? "O navegador exige um gesto. Você entrará no ponto atual da Party." : providerError}</p><div>{autoplayBlocked ? <button onClick={() => { void Promise.resolve(controllerRef.current?.resumeFromGesture()).catch((error: unknown) => setProviderError(error instanceof Error ? error.message : "Tente tocar novamente.")); }}><Play size={17} /> Entrar na reprodução</button> : <button onClick={() => { setProviderError(""); void controllerRef.current?.sync(media, { force: true }); }}><RotateCcw size={17} /> Tentar novamente</button>}<button onClick={onSkip}><SkipForward size={17} /> Pular</button><button className="danger-action" onClick={onRemove}>Remover</button></div></div> : null}
+      {!empty ? <div className="lumio-controls" aria-label="Controles do Lumio Player" onPointerDown={(event) => { pointerActive.current = true; touchInput.current = event.pointerType !== "mouse"; window.clearTimeout(hideTimer.current); }} onPointerUp={(event) => { pointerActive.current = false; if ((event.target as HTMLElement).matches("button") || touchInput.current && !(event.target instanceof HTMLSelectElement)) (event.target as HTMLElement).blur(); revealControls(); }} onPointerCancel={() => { pointerActive.current = false; seekingRef.current = false; setSeeking(false); revealControls(); }}>
         {capabilities.seek ? <input className="lumio-timeline" type="range" min="0" max={Math.max(1, duration)} step="0.1" value={Math.min(position, Math.max(1, duration))} aria-label={`Posição: ${formatTime(position)} de ${formatTime(duration)}`} onPointerDown={() => { seekingRef.current = true; setSeeking(true); }} onChange={(event) => setPosition(Number(event.target.value))} onPointerUp={() => { seekingRef.current = false; setSeeking(false); issue("seek", position); }} onKeyUp={(event) => { if (["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) issue("seek", position); }} /> : null}
         <div className="lumio-control-row">
           {capabilities.playPause ? <button onClick={togglePlayback} aria-label={providerState === "playing" ? "Pausar" : "Reproduzir"} data-tooltip={providerState === "playing" ? "Pausar (Espaço)" : "Reproduzir (Espaço)"}>{providerState === "playing" ? <Pause fill="currentColor" /> : <Play fill="currentColor" />}</button> : null}
