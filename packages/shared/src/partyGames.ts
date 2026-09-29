@@ -1,9 +1,11 @@
 import { z } from "zod";
 import { gameActionSchema, type DrawSnapshot, type DrawState, type GameAction } from "./drawGame.js";
+import type { CardAction, CardSnapshot } from "./cardGame.js";
 
 export const gameRegistry = [
   { id: "draw", name: "Desenhe e Adivinhe", minPlayers: 2, maxPlayers: 12 },
   { id: "quiz", name: "Quiz", minPlayers: 2, maxPlayers: 12 },
+  { id: "cards", name: "Lumio Cartas", minPlayers: 2, maxPlayers: 8 },
 ] as const;
 export type GameType = typeof gameRegistry[number]["id"];
 export const quizCategories = { general: "Geral", science: "Ciências", math: "Matemática" } as const;
@@ -19,11 +21,11 @@ export const quizActionSchema = z.discriminatedUnion("type", [
   z.object({ ...base, type: z.literal("configure"), questionCount: z.union([z.literal(5), z.literal(10), z.literal(15), z.literal(20)]), category: z.enum(["general", "science", "math"]), difficulty: z.enum(["mixed", "easy", "medium", "hard"]) }).strict(),
   z.object({ ...base, type: z.literal("answer"), option: z.number().int().min(0).max(3) }).strict(),
 ]);
-export const endGameSchema = z.object({ type: z.literal("end"), gameType: z.enum(["draw", "quiz"]), roomId: id, sessionId: id, roundId: id, revision: z.number().int().nonnegative() }).strict();
+export const endGameSchema = z.object({ type: z.literal("end"), gameType: z.enum(["draw", "quiz", "cards"]), roomId: id, sessionId: id, roundId: id, revision: z.number().int().nonnegative() }).strict();
 export type QuizAction = z.infer<typeof quizActionSchema>;
 export const inspectGameSchema = z.object({ type: z.literal("inspect"), roomId: id }).strict();
 export const drawEnvelopeSchema = z.object({ gameType: z.literal("draw"), roomId: id, action: gameActionSchema }).strict().refine((value) => value.roomId === value.action.roomId, "Party divergente.");
-export type PartyGameAction = GameAction | z.infer<typeof drawEnvelopeSchema> | QuizAction | z.infer<typeof endGameSchema> | z.infer<typeof inspectGameSchema>;
+export type PartyGameAction = GameAction | z.infer<typeof drawEnvelopeSchema> | QuizAction | CardAction | z.infer<typeof endGameSchema> | z.infer<typeof inspectGameSchema>;
 export interface QuizPlayer { id: string; displayName: string; color: string; avatar?: string; score: number; correctCount: number; online: boolean }
 export interface QuizSnapshot {
   gameType: "quiz"; roomId: string; sessionId: string; roundId: string; revision: number;
@@ -35,5 +37,5 @@ export interface QuizSnapshot {
   reveal?: { correctIndex: number; distribution: number[]; ownPoints: number; ownCorrect: boolean };
   winnerIds: string[]; resultReason?: "completed" | "insufficient_players";
 }
-export type PartyGameSnapshot = (DrawSnapshot & { gameType: "draw" }) | QuizSnapshot;
-export type PartyGameState = (DrawState & { gameType: "draw" }) | QuizSnapshot;
+export type PartyGameSnapshot = (DrawSnapshot & { gameType: "draw" }) | QuizSnapshot | CardSnapshot;
+export type PartyGameState = (DrawState & { gameType: "draw" }) | QuizSnapshot | CardSnapshot;

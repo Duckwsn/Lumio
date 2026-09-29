@@ -117,7 +117,7 @@ const games = new PartyGames((roomId, delta, forceFull) => {
     else {
       const full = forceFull || peer.data.gameBoardStamp !== stamp;
       const state = games.snapshot(roomId, viewer.id, Boolean(full));
-      if (full || !state || state.gameType === "quiz") peer.emit("game:snapshot", state);
+      if (full || !state || state.gameType !== "draw") peer.emit("game:snapshot", state);
       else { const { strokes: _strokes, ...metadata } = state; peer.emit("game:state", metadata); }
     }
     peer.data.gameBoardStamp = stamp;

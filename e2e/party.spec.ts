@@ -5,9 +5,100 @@ import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { io } from "socket.io-client";
 import { drawWordBanks } from "../apps/server/src/drawWords";
 import { quizQuestions } from "../apps/server/src/quizQuestions";
+
+test("G5 three authenticated browsers: private cards, full match, six widths, wild, last card and rematch", async ({ browser, request }) => {
+  test.setTimeout(180000);
+  const origin = `http://127.0.0.1:${webPort}`, api = `http://127.0.0.1:${apiPort}`;
+  const sessions = [];
+  for (const displayName of ["Cards Ana", "Cards Bia", "Cards Caio"]) {
+    const email = `cards-${crypto.randomUUID()}@example.test`, password = "local-e2e-password-123";
+    expect((await request.post(`${api}/api/auth/signup`, { data: { displayName, email, password } })).status()).toBe(201);
+    const link = JSON.parse(fs.readFileSync(path.join(directory, "mail.jsonl"), "utf8").trim().split("\n").at(-1)!).text.match(/https?:\/\/\S+/)[0];
+    expect((await request.post(`${api}/api/auth/verification/confirm`, { data: { token: new URL(link).hash.slice(7) } })).status()).toBe(204);
+    sessions.push(await (await request.post(`${api}/api/auth/login`, { data: { email, password } })).json());
+  }
+  const headers = { Authorization: `Bearer ${sessions[0].token}` };
+  const { house } = await (await request.post(`${api}/api/houses`, { headers, data: { name: "G5 Friends" } })).json();
+  const { invite } = await (await request.post(`${api}/api/houses/${house.id}/invites`, { headers, data: { expiresInHours: 1, maxUses: 3 } })).json();
+  for (const s of sessions.slice(1)) expect((await request.post(`${api}/api/invites/${invite.token}/accept`, { headers: { Authorization: `Bearer ${s.token}` } })).status()).toBe(200);
+  const contexts = await Promise.all(sessions.map((_, i) => browser.newContext(i === 1 ? { viewport: { width: 1280, height: 900 } } : { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true })));
+  const errors: string[] = [];
+  try {
+    for (let i = 0; i < 3; i++) await contexts[i].addInitScript((s) => localStorage.setItem("lumio.session.v1", JSON.stringify(s)), sessions[i]);
+    const [a, b, c] = await Promise.all(contexts.map((ctx) => ctx.newPage()));
+    for (const [i, page] of [a, b, c].entries()) {
+      page.on("pageerror", (error) => errors.push(error.message));
+      await page.goto(`${origin}/house/${house.id}`); await page.getByRole("button", { name: "Jogos", exact: true }).click();
+      await expect(page.locator(".game-catalog>button")).toHaveCount(3);
+      if (i < 2) await page.screenshot({ path: `test-results/g5-hub-${i === 1 ? "desktop" : "mobile"}.png` });
+      await page.getByRole("button", { name: /Lumio Cartas 2/ }).click(); await page.getByRole("button", { name: "Participar", exact: true }).click();
+    }
+    await expect(a.locator(".card-players li")).toHaveCount(3);
+    await a.screenshot({ path: "test-results/g5-lobby-mobile.png" }); await b.screenshot({ path: "test-results/g5-lobby-desktop.png" });
+    const chat = a.locator(".mobile-party-chat").getByRole("textbox"); await chat.fill("rascunho Cartas G5");
+    const chatNode = await a.locator(".mobile-party-chat").elementHandle(), tableNode = await a.locator(".card-game").elementHandle();
+    await a.getByRole("button", { name: "Iniciar partida", exact: true }).click();
+    for (const page of [a, b, c]) await expect(page.locator(".card-hand .lumio-card")).toHaveCount(7);
+    await b.screenshot({ path: "test-results/g5-table-desktop.png" }); await a.screenshot({ path: "test-results/g5-own-turn.png" });
+    for (const width of [320, 360, 375, 390, 412, 430]) {
+      await a.setViewportSize({ width, height: 844 });
+      expect(await a.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      expect(await a.locator(".card-hand").evaluate((node) => node.scrollWidth > node.clientWidth)).toBe(true);
+      const box = await a.locator(".card-hand .lumio-card").first().boundingBox(); expect(box!.width).toBeGreaterThanOrEqual(44); expect(box!.height).toBeGreaterThanOrEqual(44);
+      if ([320, 390, 430].includes(width)) await a.screenshot({ path: `test-results/g5-table-${width}.png` });
+    }
+    await a.setViewportSize({ width: 390, height: 844 });
+    for (const name of ["Pessoas da Party", "Fila da Party"]) { await a.getByRole("button", { name, exact: true }).tap(); await expect(a.locator(".party-drawer")).toBeVisible(); await a.getByRole("button", { name: "Recolher painel da Party", exact: true }).tap(); await expect(a.locator(".party-drawer")).toHaveCount(0); expect(await tableNode!.evaluate((node) => node === document.querySelector(".card-game"))).toBe(true); }
+    const play = async (page: typeof a, label: string) => {
+      const card = page.getByRole("button", { name: label, exact: true }); await expect(card).toBeEnabled();
+      if (page === b) await card.click(); else await card.tap(); await expect(card).toHaveAttribute("aria-pressed", "true");
+      await page.getByRole("button", { name: "Jogar selecionada", exact: true }).click();
+      await expect(card).toHaveCount(0);
+    };
+    await play(a, "Menta 1"); await a.screenshot({ path: "test-results/g5-other-turn.png" });
+    await b.reload(); await b.getByRole("button", { name: "Jogos", exact: true }).click(); await b.getByRole("button", { name: /Lumio Cartas 2/ }).click(); await expect(b.locator(".card-hand .lumio-card")).toHaveCount(7);
+    await play(b, "Menta Virar"); await expect(a.locator(".card-table-status")).toContainText("Sentido inverso"); await a.screenshot({ path: "test-results/g5-reverse.png" });
+    await play(a, "Menta Comprar 2"); await expect(c.locator(".card-hand .lumio-card")).toHaveCount(9); await c.screenshot({ path: "test-results/g5-draw-two.png" });
+    await b.getByRole("button", { name: "Comprar 1", exact: true }).click();
+    const wild = async (label: string, color: string) => {
+      await a.getByRole("button", { name: label, exact: true }).tap(); await a.getByRole("button", { name: "Jogar selecionada", exact: true }).click();
+      await expect(a.getByRole("group", { name: "Escolher cor", exact: true })).toBeVisible(); await a.screenshot({ path: "test-results/g5-wild-picker.png" });
+      await a.getByRole("group", { name: "Escolher cor", exact: true }).getByRole("button", { name: color }).click();
+      await expect(a.getByRole("group", { name: "Escolher cor", exact: true })).toHaveCount(0);
+    };
+    await wild("Mudar +4", "Menta"); await expect(c.locator(".card-hand .lumio-card")).toHaveCount(13);
+    for (const width of [320, 360, 375, 390, 412, 430]) {
+      await c.setViewportSize({ width, height: 844 });
+      expect(await c.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      const hand = c.locator(".card-hand"), box = await hand.boundingBox(); expect(box!.x).toBeGreaterThanOrEqual(0); expect(box!.x + box!.width).toBeLessThanOrEqual(width);
+      await hand.evaluate((node) => { node.scrollLeft = node.scrollWidth; });
+      const last = await hand.locator("button").last().boundingBox(); expect(last!.x + last!.width).toBeLessThanOrEqual(box!.x + box!.width + 1);
+      if (width === 320) await c.screenshot({ path: "test-results/g5-many-cards-scrolled-320.png" });
+      await hand.evaluate((node) => { node.scrollLeft = 0; });
+    }
+    await c.setViewportSize({ width: 390, height: 844 }); await c.screenshot({ path: "test-results/g5-many-cards.png" });
+    await b.getByRole("button", { name: "Comprar 1", exact: true }).click(); await wild("Mudar cor", "Maré"); await a.screenshot({ path: "test-results/g5-few-cards.png" });
+    await c.getByRole("button", { name: "Comprar 1", exact: true }).click(); await expect(c.getByRole("button", { name: "Manter e passar", exact: true })).toBeVisible(); await c.screenshot({ path: "test-results/g5-drawn-choice.png" }); await play(c, "Maré 4");
+    await play(b, "Maré 1"); await play(a, "Maré 6"); await play(c, "Maré 0"); await play(b, "Maré 2");
+    await a.getByRole("checkbox", { name: /Última!/ }).check(); await play(a, "Maré Pular"); await expect(a.locator(".card-players")).toContainText("Última!"); await a.screenshot({ path: "test-results/g5-last-card.png" });
+    await play(b, "Maré 3"); await play(a, "Maré 7"); await expect(a.locator(".card-game")).toHaveAttribute("data-phase", "RESULT");
+    await expect(a.locator(".quiz-finale")).toContainText("Cards Ana"); await a.screenshot({ path: "test-results/g5-result.png" });
+    expect(await chatNode!.evaluate((node) => node === document.querySelector(".mobile-party-chat"))).toBe(true); await expect(chat).toHaveValue("rascunho Cartas G5");
+    await a.getByRole("button", { name: "Jogar novamente", exact: true }).click(); await expect(a.locator(".card-game")).toHaveAttribute("data-phase", "LOBBY");
+    await a.getByRole("button", { name: "Iniciar partida", exact: true }).click(); await expect(a.locator(".card-hand .lumio-card")).toHaveCount(7);
+    await a.setViewportSize({ width: 844, height: 390 }); await a.getByRole("button", { name: "Tela cheia de Jogos", exact: true }).click(); await a.screenshot({ path: "test-results/g5-landscape-fullscreen.png" });
+    expect(await a.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    const confirmBox = await a.getByRole("button", { name: "Jogar selecionada", exact: true }).boundingBox(); expect(confirmBox!.y + confirmBox!.height).toBeLessThanOrEqual(390);
+    await a.getByRole("button", { name: "Sair da tela cheia de Jogos", exact: true }).click();
+    await a.setViewportSize({ width: 390, height: 844 }); await a.getByRole("button", { name: "Voltar aos jogos", exact: true }).click();
+    await a.getByRole("button", { name: /Quiz 2/ }).click(); await expect(a.getByRole("button", { name: "Retornar à partida" })).toBeVisible(); await a.getByRole("button", { name: "Retornar à partida" }).click();
+    await expect(a.locator(".card-hand .lumio-card")).toHaveCount(7); expect(errors).toEqual([]);
+  } finally { await Promise.all(contexts.map((ctx) => ctx.close())); }
+});
 
 test("G4 three authenticated clients: safe Quiz, lock/reconnect, navigation, six widths, result and rematch", async ({ browser, request }) => {
   test.setTimeout(180000);
@@ -409,7 +500,7 @@ test.beforeAll(async () => {
   apiPort = await freePort();
   webPort = await freePort();
   const origin = `http://127.0.0.1:${webPort}`;
-  server = spawn(process.execPath, ["--import", "tsx", "src/index.ts"], {
+  server = spawn(process.execPath, ["--import", "tsx", "--import", pathToFileURL(path.join(root, "e2e/fixtures/cardDeckLoader.mjs")).href, "src/index.ts"], {
     cwd: serverRoot,
     env: { ...process.env, PORT: String(apiPort), NODE_ENV: "development", PERSISTENCE_MODE: "file", AUTH_STORE_FILE: path.join(directory, "auth.json"), EMAIL_PROVIDER: "dev-file", EMAIL_DEV_OUTBOX_FILE: path.join(directory, "mail.jsonl"), APP_PUBLIC_URL: origin, CLIENT_ORIGIN: origin, RTC_STUN_URLS: "", RTC_TURN_URLS: "", RTC_TURN_USERNAME: "", RTC_TURN_CREDENTIAL: "", YOUTUBE_API_KEY: "", GOOGLE_CLIENT_ID: "", GOOGLE_CLIENT_SECRET: "", GOOGLE_TOKEN_ENCRYPTION_KEY: "" },
     stdio: ["ignore", "pipe", "pipe"],

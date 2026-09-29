@@ -1,6 +1,7 @@
 import { z } from "zod";
 export * from "./drawGame.js";
 export * from "./partyGames.js";
+export * from "./cardGame.js";
 
 export const roleSchema = z.enum(["OWNER", "HOST", "DJ", "ADMIN", "MODERATOR", "MEMBER", "GUEST"]);
 export type Role = z.infer<typeof roleSchema>;

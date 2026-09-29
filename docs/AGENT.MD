@@ -210,5 +210,13 @@ Uma tarefa está pronta quando:
 - PartyGames roteia runtimes específicos e reserva uma sessão por roomId, inclusive lobby/resultado. Navegar Media/Hub/jogo não envia leave/end; trocar tipo exige encerramento autorizado confirmado. Não criar Party/socket/Chat/Call paralelos.
 - Use gameType explícito nas projeções e ações novas; Draw usa envelope com roomId externo igual ao interno. Payload Draw legado estrito é compatibilidade, não modelo para jogos futuros.
 - Quiz mantém deck, correctIndex e respostas/pontos provisórios somente no servidor. QUESTION projeta só ownAnswer da própria identidade e contagens agregadas; score/correctness/distribuição só em REVEAL. Nunca reutilizar chat:message/guess para votar.
+
+## Party Games G5 / Lumio Cartas
+
+- Registry tem três jogos reais: Draw, Quiz, Cards. CardGameRuntime mantém regras próprias dentro da exclusão de uma sessão por Party; não criar SDK, sockets ou Party paralelos.
+- Cards: 96 instâncias com IDs opacos; conservação compra + descarte + mãos = 96, sem duplicação. Deck, outras mãos e decisões privadas nunca são públicos. Projete myHand/legalCardIds/myPending só para a identidade autenticada participante; fanout individual obrigatório.
+- Servidor valida session/round/revision exatos, fase, turno, deadline, ownership, legalidade e cor. Última! acompanha a jogada atomicamente; efeito final precede winner. Sem stacking/challenge; compra jogável exige decisão explícita, timeout não joga automaticamente.
+- Reconexão preserva mão própria/deadline, não repete jogada. Desconexão não recicla mão; leave explícito recicla e revoga participação. Timer local não publica ticks. Mão mobile tem scroll local/toque/confirmar e fullscreen em paisagem, sem remontar Chat/Call/Media.
+- QA determinístico permanece em harness local descartável, sem flags/endpoints de debug em produção. Leia `POST_1_0_G5_LUMIO_CARD_GAME_REPORT.md` para regras, evidências e limites de QA real.
 - Configure/start/rematch/end validam autoridade e revisão exata. Answer permite revisão não-futura apenas da mesma session/round, uma vez por ativo online, antes do deadline; cliente não determina acerto/pontos. Reconnect conserva lock, espectadores/offline não bloqueiam early finish.
 - Banco PT-BR estável é privado; seleção sem repetição na partida, ordem de quatro alternativas única para todos. Não importar banco no frontend. Timer visual não envia eventos por segundo. Consulte `POST_1_0_G4_PARTY_GAMES_EXPANSION_QUIZ_REPORT.md` para fórmula, limites e QA manual.

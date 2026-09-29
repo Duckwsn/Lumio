@@ -1237,3 +1237,36 @@ svg { flex:none; }
   .mobile-party .main-stage:has(.quiz-game) .game-layer { height:100%; overflow-y:auto; }
   .mobile-party .quiz-config { padding:8px; gap:8px; }.mobile-party .quiz-config label { font-size:13px; }
 }
+
+/* G5: geometric cards, compact public table and private, horizontally scrollable hand. */
+.cards-entry { display:flex; flex-direction:column; align-items:center; gap:6px; padding:18px 20px; border:1px solid var(--border-strong); border-radius:12px; background:var(--surface-2); color:var(--text); text-align:center; }
+.cards-entry:hover { border-color:var(--primary); }.cards-entry span { color:var(--text-soft); font-size:13px; }.cards-entry strong { font-size:18px; }
+.game-catalog { grid-template-columns:repeat(3,minmax(0,1fr)); max-width:900px; }
+.card-game { width:100%; max-width:960px; min-width:0; margin:0 auto; padding:8px 12px; display:flex; flex-direction:column; gap:10px; overflow-y:auto; }
+.card-game>* { flex-shrink:0; }.card-heading { display:flex; align-items:start; justify-content:space-between; gap:10px; }.card-heading h2 { font-size:22px; }.card-heading p { color:var(--primary); font-size:14px; }.card-heading time { font-size:22px; font-weight:700; color:var(--primary); }
+.card-players { display:flex; gap:6px; flex-wrap:wrap; list-style:none; padding:0; margin:0; }.card-players li { display:flex; align-items:center; gap:6px; border:1px solid var(--border-strong); border-radius:10px; padding:6px 8px; min-width:0; }.card-players li.is-current { border-color:var(--primary); background:var(--surface-3); }.card-players strong { font-size:13px; overflow-wrap:anywhere; }.card-players small { display:block; color:var(--text-soft); font-size:11px; }
+.card-table { display:flex; justify-content:center; align-items:center; gap:20px; padding:8px; border-radius:12px; background:var(--surface-2); }.card-table-status { display:flex; flex-direction:column; gap:8px; font-size:14px; }.card-table-status small { color:var(--text-soft); }.card-table-status button { min-height:44px; }
+.lumio-card { --card-accent:#a5d9c1; display:flex; flex-direction:column; align-items:center; justify-content:space-between; flex:0 0 82px; min-width:82px; height:116px; padding:8px 5px; border-radius:10px; border:1px solid var(--border-strong); border-top:5px solid var(--card-accent); background:var(--surface-2); color:var(--text); text-align:center; }
+.lumio-card.mint,.card-color-picker .mint { --card-accent:#a5d9c1; }.lumio-card.tide,.card-color-picker .tide { --card-accent:#8bb9df; }.lumio-card.amber,.card-color-picker .amber { --card-accent:#e1bc78; }.lumio-card.plum,.card-color-picker .plum { --card-accent:#c8a3d2; }.lumio-card.wild { --card-accent:#e2e4df; }
+.lumio-card small { font-size:11px; color:var(--card-accent); white-space:nowrap; }.lumio-card strong { font-size:30px; line-height:1; }.lumio-card>span { font-size:10px; }.lumio-card:disabled { opacity:.75; cursor:default; }.lumio-card.is-legal { border-color:var(--card-accent); }.lumio-card[aria-pressed=true] { outline:2px solid var(--primary); outline-offset:2px; background:var(--surface-3); }
+.card-hand-area { min-width:0; }.card-hand-title { display:flex; justify-content:space-between; flex-wrap:wrap; gap:4px; font-size:13px; }.card-hand-title small { color:var(--text-soft); }.card-hand { display:flex; gap:8px; padding:8px 4px; min-width:0; overflow-x:auto; overscroll-behavior-x:contain; scroll-snap-type:x proximity; }.card-hand .lumio-card { scroll-snap-align:start; }.card-hand-actions { display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding-top:4px; }.card-hand-actions button,.card-lobby-actions button { min-height:44px; }.card-hand-actions label { display:flex; align-items:center; gap:6px; min-height:44px; font-size:13px; }.card-hand-actions input { width:22px; height:22px; accent-color:var(--primary); }.card-hand-actions small { font-size:11px; }
+.card-color-picker { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:6px; }.card-color-picker strong { grid-column:1/-1; font-size:13px; }.card-color-picker button { min-height:44px; padding:8px 4px; border:1px solid var(--card-accent); color:var(--card-accent); font-size:13px; background:var(--surface-2); }
+.card-feed { list-style:none; margin:0; padding:0; font-size:12px; color:var(--text-soft); }.card-feed li { overflow-wrap:anywhere; }.card-lobby-actions { display:flex; gap:8px; flex-wrap:wrap; }.card-rules { font-size:14px; line-height:1.5; color:var(--text-soft); }
+@media(max-width:900px) {
+  .mobile-party .game-catalog { grid-template-columns:repeat(3,minmax(0,1fr)); gap:6px; }.mobile-party .game-catalog button { min-height:130px; padding:6px 3px; }.mobile-party .game-catalog strong { font-size:13px; }.mobile-party .game-catalog span { font-size:11px; }.mobile-party .game-catalog .draw-game-icon { width:60px; height:50px; }
+  .mobile-party.game-mode:has(.card-game) .party-content { flex:0 1 72%; min-height:280px; }.mobile-party .card-game { padding:4px; gap:6px; }.mobile-party .card-heading h2 { font-size:19px; }.mobile-party .card-players { flex-wrap:nowrap; overflow-x:auto; }.mobile-party .card-players li { flex-shrink:0; padding:4px 6px; }.mobile-party .card-players .quiz-avatar { width:24px; height:24px; }.mobile-party .card-table { gap:12px; padding:6px; }.mobile-party .card-table-status { gap:5px; font-size:12px; }.mobile-party .lumio-card { flex-basis:70px; min-width:70px; height:98px; padding:6px 4px; }.mobile-party .lumio-card strong { font-size:25px; }.mobile-party .card-hand { gap:6px; padding-top:6px; }.mobile-party .card-hand-actions button { font-size:12px; padding:8px; }.mobile-party .card-rules { font-size:12px; }
+}
+.lumio-card { transition:background-color 120ms,outline-color 120ms; }
+@media(orientation:landscape) and (max-height:500px) {
+  .main-stage:is(:fullscreen,.game-fallback-fullscreen) .card-game[data-phase=PLAYING] { display:grid; grid-template-columns:minmax(240px,.9fr) minmax(0,1.1fr); gap:4px 12px; padding:2px 4px; }
+  .main-stage:is(:fullscreen,.game-fallback-fullscreen) .card-heading { grid-column:1/-1; }
+  .main-stage:is(:fullscreen,.game-fallback-fullscreen) .card-players { grid-column:1; grid-row:2; overflow-x:auto; flex-wrap:nowrap; }
+  .main-stage:is(:fullscreen,.game-fallback-fullscreen) .card-players li { flex-shrink:0; }
+  .main-stage:is(:fullscreen,.game-fallback-fullscreen) .card-table { grid-column:1; grid-row:3; }
+  .main-stage:is(:fullscreen,.game-fallback-fullscreen) .card-hand-area { grid-column:2; grid-row:2/5; }
+  .main-stage:is(:fullscreen,.game-fallback-fullscreen) .card-feed { grid-column:1; grid-row:4; }
+  .main-stage:is(:fullscreen,.game-fallback-fullscreen) .card-color-picker { grid-column:2; grid-row:5; }
+  .main-stage:is(:fullscreen,.game-fallback-fullscreen) .card-lobby-actions { grid-column:1; grid-row:5; }
+  .main-stage:is(:fullscreen,.game-fallback-fullscreen) .game-session-tools { margin-top:0; }
+}
+@media(prefers-reduced-motion:reduce) { .lumio-card { transition:none; } }
