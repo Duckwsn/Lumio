@@ -1,10 +1,14 @@
 import { z } from "zod";
 export const drawColors = ["#26332c", "#faf8ef", "#69a982", "#cf615c", "#dbac54", "#658cc0", "#a181b1"] as const;
+export const drawTargets = [50, 100, 150, 200] as const;
+export const drawThemes = { general: "Geral", animals: "Animais", food: "Comidas", nature: "Natureza", places: "Lugares", daily: "Cotidiano" } as const;
+export type DrawTheme = keyof typeof drawThemes;
 const id = z.string().min(1).max(100);
 const point = z.object({ x: z.number().finite().min(0).max(1), y: z.number().finite().min(0).max(1) }).strict();
 const base = { roomId: id, sessionId: id, roundId: id, revision: z.number().int().nonnegative() };
 export const gameActionSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("open"), roomId: id }).strict(),
+  z.object({ ...base, type: z.literal("configure"), targetScore: z.union([z.literal(50), z.literal(100), z.literal(150), z.literal(200)]), theme: z.enum(["general", "animals", "food", "nature", "places", "daily"]) }).strict(),
   ...["sync", "join", "leave", "start", "rematch", "undo", "clear"].map((type) => z.object({ ...base, type: z.literal(type as "sync" | "join" | "leave" | "start" | "rematch" | "undo" | "clear") }).strict()),
   z.object({ ...base, type: z.literal("choose"), option: z.number().int().min(0).max(2) }).strict(),
   z.object({ ...base, type: z.literal("guess"), text: z.string().trim().min(1).max(80) }).strict(),
@@ -17,7 +21,9 @@ export interface DrawPlayer { id: string; displayName: string; color: string; av
 export type DrawPhase = "LOBBY" | "CHOOSING_WORD" | "DRAWING" | "ROUND_RESULT" | "GAME_RESULT";
 export interface DrawSnapshot {
   sessionId: string; roomId: string; revision: number; boardRevision: number; roundId: string; phase: DrawPhase;
-  hostId: string; players: DrawPlayer[]; order: string[]; drawerId: string | null; round: number; totalRounds: number;
+  hostId: string; players: DrawPlayer[]; order: string[]; drawerId: string | null; round: number;
+  targetScore: number; theme: DrawTheme; winnerIds: string[]; resultReason?: "target" | "insufficient_players";
+  nextDrawerId?: string;
   startedAt: number; endsAt: number; serverNow: number; maskedWord: string; revealedWord?: string;
   strokes: DrawStroke[]; feed: { id: number; text: string; createdAt?: number }[];
   /** Public, authoritative points earned in the current round. Never guess text. */

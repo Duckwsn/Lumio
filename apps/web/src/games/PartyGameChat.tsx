@@ -12,6 +12,14 @@ interface ChatContext {
 }
 const Context = createContext<ChatContext | null>(null);
 export const usePartyGameChat = () => useContext(Context);
+export function gamePresentationRole(game: Pick<DrawState, "phase" | "players" | "drawerId"> | null, selected: boolean, userId: string) {
+  if (!selected || !game || !["CHOOSING_WORD", "DRAWING"].includes(game.phase)) return "neutral";
+  return game.drawerId === userId && game.players.some((p) => p.id === userId && p.online) ? "drawer" : "guesser";
+}
+export function PartyGameWorkspace({ children, userId, className }: { children: ReactNode; userId: string; className: string }) {
+  const chat = usePartyGameChat();
+  return <div className={className} data-game-role={gamePresentationRole(chat?.game ?? null, chat?.selected ?? false, userId)}>{children}</div>;
+}
 export function canGuess(game: Pick<DrawState, "phase" | "players" | "drawerId"> | null, userId: string) {
   const me = game?.players.find((player) => player.id === userId);
   return Boolean(game?.phase === "DRAWING" && game.drawerId !== userId && me?.online && !me.guessed);

@@ -150,3 +150,11 @@ Só encerre o processo depois de confirmar que ele pertence ao projeto.
 - Guess mode depende de apresentação selecionada, DRAWING, participante online não-drawer e sem acerto. Envia `game:action` com type guess e ack; conversa continua em `chat:message`. Não converter o acerto em mensagem contendo a palavra.
 - Feed do jogo aparece no histórico visual do Chat, mas continua efêmero/bounded e fora da autoridade/persistência de chat. `roundPoints` é calculado no servidor.
 - Leia o relatório G2 antes de alterar modal integrado, atalhos, layout com teclado ou composer fullscreen. Não fazer build concorrente com QA no Vite do mesmo checkout.
+
+## Draw Game V3 / G3
+
+- As regras G3 substituem o limite fixo anterior: configuração target/theme autoritativa só no lobby; cursor circular bounded; resultado por meta após resolver a rodada. Empate compartilha vitória, não usa socket/latência como tiebreak.
+- Pontos são pequenos: 4–10 por acerto pela fórmula documentada; drawer +2 até 6/rodada. Revanche conserva sessão/tema/meta e volta ao lobby com pontos/board/feed zerados.
+- Temas/banco local e usedWords são privados do servidor; escolhas seguem tema e não repetem palavra usada até esgotar. Nunca torne secret/choices públicos para calcular layout.
+- Workspace deriva papel de metadados públicos. Chat mobile continua montado ao ficar hidden para drawer; viewer recebe histórico/composer maiores, fullscreen reutiliza composer G2. Não remonte Chat/player/call por tema/score/papel.
+- Consulte `POST_1_0_G3_DRAW_GAME_V3_REPORT.md` para fórmula, presets/simulação, limites de viewport e roteiro humano. Não mudar banco/Auth/OAuth/infraestrutura como parte do jogo.

@@ -24,7 +24,7 @@ test("session, explicit participation, host, minimum, stable order and leave", (
   assert.equal(f.act(0, "start").ok, false);
   assert.equal(f.act(1, "join").ok, true); assert.equal(f.act(1, "start").ok, false);
   assert.equal(f.act(0, "start").ok, true);
-  assert.deepEqual(f.snap().order, ["0", "1"]); assert.equal(f.snap().totalRounds, 4);
+  assert.deepEqual(f.snap().order, ["0", "1"]); assert.equal(f.snap().targetScore, 100);
   assert.equal(f.act(3, "join").ok, false); assert.equal(f.snap(3).players.length, 2);
   assert.equal(f.act(0, "leave").ok, true); assert.equal(f.snap().hostId, "1"); assert.equal(f.snap().phase, "ROUND_RESULT");
 });
@@ -53,14 +53,14 @@ test("guess normalization, wrong guesses, scoring, duplicate safety and early re
   assert.equal(f.act(1, "guess", { text: "palpite obviamente errado" }).ok, true);
   assert.ok(f.snap(2).feed.some((entry) => entry.text.includes("palpite obviamente errado")));
   assert.equal(f.act(1, "guess", { text: ` ${normalizeGuess(word).toUpperCase()} ` }).ok, true);
-  assert.equal(f.snap().players[1].score, 200); assert.equal(f.snap().players[0].score, 40);
-  assert.deepEqual(f.snap().roundPoints, { "1": 200, "0": 40 });
+  assert.equal(f.snap().players[1].score, 10); assert.equal(f.snap().players[0].score, 2);
+  assert.deepEqual(f.snap().roundPoints, { "1": 10, "0": 2 });
   assert.equal(typeof f.snap().feed.at(-1)?.createdAt, "number");
   assert.equal(f.snap().phase, "DRAWING"); assert.ok(!JSON.stringify(f.snap(2)).includes(word));
-  assert.equal(f.act(1, "guess", { text: word }).ok, false); assert.equal(f.snap().players[1].score, 200);
+  assert.equal(f.act(1, "guess", { text: word }).ok, false); assert.equal(f.snap().players[1].score, 10);
   assert.equal(f.act(2, "guess", { text: word }).ok, true); assert.equal(f.snap().phase, "ROUND_RESULT");
-  assert.equal(f.snap(2).revealedWord, word); assert.equal(f.snap().players[0].score, 80);
-  assert.deepEqual(f.snap().roundPoints, { "1": 200, "2": 200, "0": 80 });
+  assert.equal(f.snap(2).revealedWord, word); assert.equal(f.snap().players[0].score, 4);
+  assert.deepEqual(f.snap().roundPoints, { "1": 10, "2": 9, "0": 4 });
   f.advance(100); assert.deepEqual(f.snap().roundPoints, {});
 });
 test("validated drawing, incremental reconstruction, undo, clear and stale operations", () => {
@@ -100,14 +100,16 @@ test("disconnect grace restores board; expiry skips drawer and transfers coordin
   f.runtime.presence("party", "0", false); f.advance(5000); assert.equal(f.snap().hostId, "1");
   assert.equal(f.snap().phase, "ROUND_RESULT"); f.advance(100); assert.equal(f.snap().drawerId, "1");
 });
-test("complete two cycles, final ranking, rematch and independent Party cleanup", () => {
+test("continuous rotations without points never end at two cycles; rematch lobby and cleanup", () => {
   const f = fixture(); f.act(0, "start"); const order: string[] = [];
   for (let round = 0; round < 6; round++) {
     order.push(f.snap().drawerId!); f.advance(100); f.advance(1000); f.advance(100);
   }
-  assert.deepEqual(order, ["0", "1", "2", "0", "1", "2"]); assert.equal(f.snap().phase, "GAME_RESULT");
+  assert.deepEqual(order, ["0", "1", "2", "0", "1", "2"]); assert.equal(f.snap().phase, "CHOOSING_WORD");
+  f.runtime.leave("party", "2"); f.runtime.leave("party", "1"); f.advance(100); f.advance(1000); f.advance(100);
+  assert.equal(f.snap().phase, "GAME_RESULT"); f.advance(1000); assert.equal(f.act(1, "join").ok, true);
   const sessionId = f.snap().sessionId; assert.equal(f.act(0, "rematch").ok, true);
-  assert.equal(f.snap().sessionId, sessionId); assert.equal(f.snap().round, 1); assert.equal(f.snap().phase, "CHOOSING_WORD");
+  assert.equal(f.snap().sessionId, sessionId); assert.equal(f.snap().round, 0); assert.equal(f.snap().phase, "LOBBY");
   assert.equal(f.act(1, "sync", { sessionId: "old-session" }).ok, false);
   f.runtime.delete("party"); assert.equal(f.runtime.snapshot("party", "0"), null);
   const g = fixture();
@@ -118,9 +120,12 @@ test("complete two cycles, final ranking, rematch and independent Party cleanup"
   g.act(0, "start");
   for (let round = 0; round < 23; round++) { g.advance(100); g.advance(1000); g.advance(100); }
   g.advance(100); g.runtime.leave("party", "0"); g.advance(1000); g.advance(100);
-  assert.equal(g.snap().phase, "GAME_RESULT"); assert.equal(g.snap().players.length, 12);
+  assert.equal(g.snap().phase, "CHOOSING_WORD"); assert.equal(g.snap().players.length, 12);
+  for (const player of g.snap().players.slice(2)) g.runtime.leave("party", player.id);
+  g.advance(100); g.advance(1000); g.advance(100);
+  assert.equal(g.snap().phase, "GAME_RESULT");
   assert.equal(g.act(3, "join").ok, true, "Departed score records must not consume next-game slots");
-  assert.equal(g.act(1, "rematch").ok, true); assert.equal(g.snap().players.length, 12);
+  assert.equal(g.act(1, "rematch").ok, true); assert.equal(g.snap().players.length, 2);
 });
 test("abandoned coordinator, rate limits and idle cleanup", () => {
   const f = fixture(0); f.runtime.presence("party", "0", false); f.advance(5000); f.act(1, "join"); assert.equal(f.snap().hostId, "1");

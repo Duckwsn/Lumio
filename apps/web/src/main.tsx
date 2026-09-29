@@ -11,7 +11,11 @@ const publicLanding = window.location.pathname === "/" && !localStorage.getItem(
 registerPwa();
 installPwaReloadHandler();
 if (window.visualViewport) {
-  const syncViewport = () => document.documentElement.style.setProperty("--visual-height", `${window.visualViewport!.height}px`);
+  const syncViewport = () => {
+    const height = window.visualViewport!.height;
+    document.documentElement.style.setProperty("--visual-height", `${height}px`);
+    document.documentElement.toggleAttribute("data-compact-viewport", height < 600);
+  };
   syncViewport();
   window.visualViewport.addEventListener("resize", syncViewport);
   window.visualViewport.addEventListener("scroll", syncViewport);

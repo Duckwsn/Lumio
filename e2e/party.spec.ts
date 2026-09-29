@@ -6,6 +6,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { io } from "socket.io-client";
+import { drawWordBanks } from "../apps/server/src/drawWords";
 
 test("G2 three-user Draw Game: integrated chat, privacy, shortcuts, score, mobile and fullscreen", async ({ browser, request }) => {
   test.setTimeout(180000);
@@ -83,7 +84,7 @@ test("G2 three-user Draw Game: integrated chat, privacy, shortcuts, score, mobil
     await expect.poll(() => board(b)).not.toBe(drawn);
     await a.keyboard.press("Control+z"); await expect.poll(() => board(b)).toBe(drawn);
     await b.getByRole("textbox", { name: "Seu palpite" }).focus(); await b.keyboard.press("Control+z"); expect(await board(b)).toBe(drawn);
-    await a.getByRole("textbox", { name: "Mensagem", exact: true }).focus(); await a.keyboard.press("Control+z"); expect(await board(b)).toBe(drawn);
+    await expect(a.locator(".mobile-party-chat")).toBeHidden();
     await a.getByRole("button", { name: "Pincel", exact: true }).click(); await canvas.scrollIntoViewIfNeeded();
     const redo = (await canvas.boundingBox())!;
     await a.mouse.move(redo.x + redo.width * .6, redo.y + redo.height * .2); await a.mouse.down(); await a.mouse.move(redo.x + redo.width * .6, redo.y + redo.height * .7, { steps: 4 }); await a.mouse.up();
@@ -102,12 +103,14 @@ test("G2 three-user Draw Game: integrated chat, privacy, shortcuts, score, mobil
       expect(undo!.height).toBeGreaterThanOrEqual(44); expect(undo!.y + undo!.height).toBeLessThanOrEqual(844);
       expect(await canvas.evaluate((node) => getComputedStyle(node).touchAction)).toBe("none");
       expect(await a.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-      await expect(a.getByRole("textbox", { name: "Mensagem" })).toBeVisible();
-      for (const name of ["Pessoas da Party", "Fila da Party"]) { await a.getByRole("button", { name, exact: true }).click(); await a.getByRole("button", { name: "Fechar painel", exact: true }).click(); }
+      await expect(a.locator(".mobile-party-chat")).toBeHidden();
       expect(await board(a)).toBe(drawn);
       await a.screenshot({ path: `test-results/g2-mobile-${width}.png` });
     }
-    await a.getByRole("textbox", { name: "Mensagem" }).fill("Chat independente do jogo"); await a.getByRole("button", { name: "Enviar mensagem", exact: true }).click();
+    await b.getByRole("button", { name: "Conversar", exact: true }).click();
+    await b.getByRole("textbox", { name: "Mensagem" }).fill("Chat independente do jogo"); await b.getByRole("button", { name: "Enviar mensagem", exact: true }).click();
+    await b.getByRole("textbox", { name: "Mensagem" }).fill("rascunho normal preservado");
+    await b.getByRole("button", { name: "Palpitar", exact: true }).click();
     await expect(c.getByText("Chat independente do jogo", { exact: true })).toBeVisible();
     await a.getByRole("button", { name: "Tela cheia de Jogos", exact: true }).click(); await expect(a.locator(".mobile-party-chat")).toBeHidden();
     expect(await board(a)).toBe(drawn);
@@ -126,7 +129,8 @@ test("G2 three-user Draw Game: integrated chat, privacy, shortcuts, score, mobil
     await b.getByRole("textbox", { name: "Seu palpite" }).fill(word); await b.getByRole("button", { name: "Enviar palpite", exact: true }).click();
     await expect(b.getByText("Você acertou!", { exact: true })).toBeVisible(); await expect(c.locator(".draw-word")).not.toContainText(word);
     await expect(c.locator(".game-chat-event")).not.toContainText([word]);
-    await expect(a.getByText("+40 pelos acertos no seu desenho", { exact: true })).toBeVisible();
+    await expect(a.locator(".draw-clock small").first()).toContainText("2/100");
+    await expect(a.locator(".draw-award")).toHaveText("+2 pelo desenho");
     await expect(b.getByRole("list", { name: "Placar do jogo" }).locator("li").first()).toContainText("Draw Bia");
     await expect(b.getByRole("list", { name: "Placar do jogo" }).locator("li").first().locator(".draw-score-gain")).toBeVisible();
     await expect(b.getByRole("textbox", { name: "Mensagem", exact: true })).toHaveValue("rascunho normal preservado");
@@ -159,6 +163,122 @@ test("G2 three-user Draw Game: integrated chat, privacy, shortcuts, score, mobil
     await expect(a.getByText("Partida concluída", { exact: true })).toBeVisible({ timeout: 10000 });
     await a.screenshot({ path: "test-results/g2-game-result.png" });
     expect(errors).toEqual([]);
+  } finally { await Promise.all(contexts.map((context) => context.close())); }
+});
+
+test("G3 configurable target match: mobile roles preserve Chat, geometry, rotation, victory and rematch", async ({ browser, request }) => {
+  test.setTimeout(180000);
+  const origin = `http://127.0.0.1:${webPort}`, api = `http://127.0.0.1:${apiPort}`;
+  const sessions = [];
+  for (const displayName of ["G3 Ana", "G3 Bia", "G3 Caio"]) {
+    const email = `g3-${crypto.randomUUID()}@example.test`, password = "local-e2e-password-123";
+    expect((await request.post(`${api}/api/auth/signup`, { data: { displayName, email, password } })).status()).toBe(201);
+    const link = JSON.parse(fs.readFileSync(path.join(directory, "mail.jsonl"), "utf8").trim().split("\n").at(-1)!).text.match(/https?:\/\/\S+/)[0];
+    expect((await request.post(`${api}/api/auth/verification/confirm`, { data: { token: new URL(link).hash.slice(7) } })).status()).toBe(204);
+    sessions.push(await (await request.post(`${api}/api/auth/login`, { data: { email, password } })).json());
+  }
+  const headers = { Authorization: `Bearer ${sessions[0].token}` };
+  const { house } = await (await request.post(`${api}/api/houses`, { headers, data: { name: "G3 Friends" } })).json();
+  const { invite } = await (await request.post(`${api}/api/houses/${house.id}/invites`, { headers, data: { expiresInHours: 1, maxUses: 3 } })).json();
+  for (const s of sessions.slice(1)) expect((await request.post(`${api}/api/invites/${invite.token}/accept`, { headers: { Authorization: `Bearer ${s.token}` } })).status()).toBe(200);
+  const contexts = await Promise.all(sessions.map(() => browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true })));
+  try {
+    for (let i = 0; i < 3; i++) await contexts[i].addInitScript((s) => localStorage.setItem("lumio.session.v1", JSON.stringify(s)), sessions[i]);
+    const pages = await Promise.all(contexts.map((context) => context.newPage())), [a, b, c] = pages;
+    const errors: string[] = []; pages.forEach((page) => page.on("pageerror", (error) => errors.push(error.message)));
+    for (const page of pages) {
+      await page.goto(`${origin}/house/${house.id}`); await page.getByRole("button", { name: "Jogos", exact: true }).click();
+      await page.getByRole("button", { name: /Desenhe e Adivinhe/ }).click(); await page.getByRole("button", { name: "Participar", exact: true }).click();
+    }
+    await expect(a.getByRole("list", { name: "Placar do jogo" }).locator("li")).toHaveCount(3);
+    await a.getByRole("group", { name: "Meta de pontos" }).getByRole("button", { name: "50", exact: true }).click();
+    await a.getByLabel("Tema", { exact: true }).selectOption("animals");
+    for (const page of pages) { await expect(page.getByLabel("Tema", { exact: true })).toHaveValue("animals"); await expect(page.locator(".draw-match-meta")).toHaveText("Animais · Meta 50"); }
+    await expect(b.getByLabel("Tema", { exact: true })).toBeDisabled();
+    await a.screenshot({ path: "test-results/g3-lobby-mobile.png" });
+    const startBox = (await a.getByRole("button", { name: "Iniciar partida", exact: true }).boundingBox())!;
+    expect(startBox.y + startBox.height).toBeLessThanOrEqual(844);
+    await a.setViewportSize({ width: 1280, height: 900 }); await a.screenshot({ path: "test-results/g3-lobby-desktop.png" });
+    await a.setViewportSize({ width: 390, height: 844 });
+    await b.getByRole("textbox", { name: "Mensagem", exact: true }).fill("rascunho antes de desenhar G3");
+    await b.evaluate(() => { (window as any).g3ChatNode = document.querySelector(".mobile-party-chat"); });
+    await a.getByRole("button", { name: "Iniciar partida", exact: true }).click();
+    const drawerHeights: Record<number, number> = {}, guesserHeights: Record<number, number> = {};
+    const send = async (page: typeof a, text: string) => { await page.getByRole("textbox", { name: "Seu palpite", exact: true }).fill(text); await page.getByRole("button", { name: "Enviar palpite", exact: true }).click(); };
+    for (let round = 1; round <= 18; round++) {
+      const drawer = pages[(round - 1) % 3];
+      await expect(drawer.locator(".draw-choices button").first()).toBeVisible({ timeout: 10000 });
+      if (round === 1) await drawer.screenshot({ path: "test-results/g3-theme-choice.png" });
+      const word = (await drawer.locator(".draw-choices button").first().textContent())!;
+      expect(drawWordBanks.animals).toContain(word);
+      await drawer.locator(".draw-choices button").first().click();
+      await expect(drawer.locator(".party-workspace")).toHaveAttribute("data-game-role", "drawer");
+      await expect(drawer.locator(".mobile-party-chat")).toBeHidden();
+      await expect(drawer.locator(".draw-word")).toHaveText(word);
+      const guessers = pages.filter((page) => page !== drawer);
+      for (const page of guessers) { await expect(page.locator(".draw-word")).not.toContainText(word); await expect(page.locator(".party-workspace")).toHaveAttribute("data-game-role", "guesser"); }
+      if (round === 1) {
+        for (const width of [320, 360, 375, 390, 412, 430]) {
+          for (const page of [a, b]) await page.setViewportSize({ width, height: 844 });
+          const db = (await a.locator(".draw-board canvas").boundingBox())!, gb = (await b.locator(".draw-board canvas").boundingBox())!;
+          drawerHeights[width] = db.height; guesserHeights[width] = gb.height;
+          expect(db.height).toBeGreaterThan(gb.height * 1.08);
+          expect(Math.abs(db.width / db.height - 4 / 3)).toBeLessThan(.02);
+          const messages = (await b.locator(".mobile-party-chat .messages").boundingBox())!;
+          expect(messages.height).toBeGreaterThan(190);
+          expect((await b.getByRole("textbox", { name: "Seu palpite" }).boundingBox())!.y + 44).toBeLessThanOrEqual(844);
+          for (const page of [a, b]) expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+          await expect(a.getByRole("button", { name: "Desfazer", exact: true })).toBeVisible();
+          await expect(a.getByLabel("Espessura", { exact: true })).toBeVisible();
+          await a.screenshot({ path: `test-results/g3-drawer-${width}.png` }); await b.screenshot({ path: `test-results/g3-guesser-${width}.png` });
+        }
+        for (const page of [a, b]) await page.setViewportSize({ width: 390, height: 844 });
+        await b.setViewportSize({ width: 390, height: 500 });
+        await b.getByRole("textbox", { name: "Seu palpite" }).focus();
+        expect((await b.locator(".mobile-party-chat .messages").boundingBox())!.height).toBeGreaterThan(65);
+        const composer = (await b.getByRole("textbox", { name: "Seu palpite" }).boundingBox())!; expect(composer.y + composer.height).toBeLessThanOrEqual(500);
+        const shortBoard = (await b.locator(".draw-board canvas").boundingBox())!, shortStage = (await b.locator(".main-stage").boundingBox())!;
+        expect(shortBoard.y + shortBoard.height).toBeLessThanOrEqual(shortStage.y + shortStage.height);
+        await b.screenshot({ path: "test-results/g3-guesser-keyboard.png" }); await b.setViewportSize({ width: 390, height: 844 });
+        await a.setViewportSize({ width: 844, height: 390 }); await a.getByRole("button", { name: "Tela cheia de Jogos", exact: true }).click();
+        await a.screenshot({ path: "test-results/g3-drawer-landscape.png" });
+        await a.getByRole("button", { name: "Sair da tela cheia de Jogos", exact: true }).click(); await a.setViewportSize({ width: 390, height: 844 });
+      }
+      if (round === 2) {
+        expect(await b.evaluate(() => (window as any).g3ChatNode === document.querySelector(".mobile-party-chat"))).toBe(true);
+        await c.getByRole("button", { name: "Conversar", exact: true }).click();
+        await c.getByRole("textbox", { name: "Mensagem", exact: true }).fill("mensagem recebida enquanto Bia desenha");
+        await c.getByRole("button", { name: "Enviar mensagem", exact: true }).click();
+        await c.getByRole("button", { name: "Palpitar", exact: true }).click();
+      }
+      for (const page of guessers) await send(page, word);
+      await expect(drawer.locator(".draw-word")).toHaveText(`Era: ${word}`);
+      if (round === 2) {
+        await expect(b.locator(".mobile-party-chat")).toBeVisible();
+        await expect(b.getByRole("textbox", { name: "Mensagem", exact: true })).toHaveValue("rascunho antes de desenhar G3");
+        await expect(b.getByText("mensagem recebida enquanto Bia desenha", { exact: true })).toBeVisible();
+        expect(await b.evaluate(() => (window as any).g3ChatNode === document.querySelector(".mobile-party-chat"))).toBe(true);
+        await b.screenshot({ path: "test-results/g3-round-result.png" });
+      }
+      if (round === 3) {
+        await expect(b.locator(".party-workspace")).toHaveAttribute("data-game-role", "neutral");
+        await b.screenshot({ path: "test-results/g3-returned-chat.png" });
+      }
+      const targetReached = await a.locator(".draw-scoreboard strong").evaluateAll((nodes) => nodes.some((node) => Number(node.textContent!.split("/")[0]) >= 50));
+      if (round >= 6) await a.screenshot({ path: "test-results/g3-score-near-target.png" });
+      if (targetReached) {
+        await expect(a.locator(".draw-finale")).toContainText("Meta 50 alcançada", { timeout: 10000 });
+        await a.screenshot({ path: "test-results/g3-game-result.png" });
+        await a.getByRole("button", { name: "Jogar novamente", exact: true }).click();
+        await expect(a.getByRole("button", { name: "Iniciar partida", exact: true })).toBeVisible();
+        for (const page of pages) { await expect(page.getByLabel("Tema", { exact: true })).toHaveValue("animals"); await expect(page.locator(".draw-scoreboard strong").first()).toHaveText("0/50"); }
+        await a.getByRole("group", { name: "Meta de pontos" }).getByRole("button", { name: "100", exact: true }).click();
+        await expect(c.locator(".draw-match-meta")).toHaveText("Animais · Meta 100");
+        expect(round).toBeGreaterThan(6); break;
+      }
+      if (round === 18) throw new Error("Target match did not finish");
+    }
+    console.log("G3 canvas heights", { drawerHeights, guesserHeights }); expect(errors).toEqual([]);
   } finally { await Promise.all(contexts.map((context) => context.close())); }
 });
 

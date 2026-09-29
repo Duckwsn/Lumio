@@ -1142,3 +1142,56 @@ svg { flex:none; }
   .mobile-party .main-stage.is-game:fullscreen:has(.draw-game):has(.game-media-visible),.mobile-party .main-stage.game-fallback-fullscreen:has(.draw-game):has(.game-media-visible) { grid-template-columns:minmax(0,1fr) 200px; grid-template-rows:minmax(0,1fr); }
   .mobile-party .main-stage:fullscreen .game-media-visible,.mobile-party .main-stage.game-fallback-fullscreen .game-media-visible { grid-area:1/2; }
 }
+
+/* G3: the same mounted Chat/board adapt to role; configuration is session state. */
+.draw-match-meta { display:block; font-size:11px; color:var(--primary); margin-top:3px; }
+.draw-clock .draw-award { color:var(--primary); }
+.draw-match-config { border:0; padding:16px 0 4px; margin:0; display:flex; flex-wrap:wrap; gap:12px; align-items:center; }
+.draw-match-config legend { font-size:13px; color:var(--text-soft); padding-top:12px; }
+.draw-match-config [role=group] { display:flex; gap:6px; }
+.draw-match-config button { min-width:44px; min-height:44px; border-radius:8px; background:var(--surface-3); color:var(--text-soft); }
+.draw-match-config button[aria-pressed=true] { outline:2px solid var(--primary); outline-offset:-2px; color:var(--primary); }
+.draw-match-config label { display:flex; align-items:center; gap:10px; font-size:13px; }
+.draw-match-config select { min-height:44px; border:1px solid var(--border); border-radius:8px; color:var(--text); background:var(--surface-3); padding:6px 10px; }
+.draw-match-config:disabled button,.draw-match-config:disabled select { opacity:.7; cursor:default; }
+@media(max-width:900px) and (max-height:600px) and (orientation:portrait) {
+  .mobile-party .party-workspace[data-game-role=guesser] .draw-heading h2 { display:none; }
+}
+@media(max-width:900px) {
+  .mobile-party .party-workspace[data-game-role=drawer] { display:flex; flex-direction:column; }
+  .mobile-party.game-mode:has(.draw-game):has(.draw-match-config) .party-content { flex:0 1 68%; }
+  .mobile-party.game-mode .party-workspace[data-game-role=drawer] .party-content { flex:1; min-height:0; width:100%; height:100%; }
+  .mobile-party.game-mode .party-workspace[data-game-role=guesser] .party-content { flex:0 1 clamp(160px,calc(var(--visual-height,100dvh) * .74 - 180px),380px); min-height:0; }
+  .mobile-party .party-workspace[data-game-role=guesser] .mobile-party-chat { flex:1 1 0; min-height:180px; }
+  .mobile-party .party-workspace[data-game-role=guesser] .main-stage:not(:fullscreen):not(.game-fallback-fullscreen) .draw-board { max-width:min(100%,calc(var(--visual-height,100dvh) * .23 * 4 / 3)); }
+  .mobile-party .party-workspace[data-game-role=guesser] .main-stage:not(:fullscreen):not(.game-fallback-fullscreen) .draw-bottom { display:none; }
+  .mobile-party .party-workspace[data-game-role=drawer] .draw-bottom { display:none; }
+  .mobile-party .party-workspace[data-game-role=drawer] .draw-board { max-width:800px; }
+  .mobile-party .party-workspace[data-game-role=drawer] .draw-toolbar { padding:4px 0; }
+  .mobile-party .party-workspace[data-game-role=drawer] .draw-toolbar .draw-history span { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); }
+  .mobile-party .party-workspace[data-game-role=drawer] .draw-toolbar label { margin-left:auto; }
+  .mobile-party .party-workspace[data-game-role=drawer] .draw-toolbar .draw-colors { gap:0; }
+  .mobile-party .party-workspace[data-game-role=drawer] .draw-colors button { flex:1 0 44px; min-width:44px; border:3px solid var(--surface-2); border-radius:10px; }
+  .mobile-party .party-workspace[data-game-role]:not([data-game-role=neutral]) .draw-heading h2 { font-size:15px; }
+  .mobile-party .party-workspace[data-game-role]:not([data-game-role=neutral]) .draw-word { min-height:28px; }
+  .mobile-party .draw-scoreboard strong small { display:inline; }
+  .mobile-party.game-mode .party-workspace[data-game-role=guesser]:has(.game-media-visible) .party-content { flex-basis:calc(200px + var(--visual-height,100dvh) * .27); }
+  .mobile-party .party-workspace[data-game-role=guesser] .main-stage.is-game:has(.draw-game):has(.game-media-visible) { grid-template-rows:minmax(0,1fr) 200px; }
+}
+@media(max-width:900px) and (orientation:portrait) {
+  html[data-compact-viewport] .mobile-party .party-workspace[data-game-role=guesser]:has(.chat-form:focus-within) .main-stage:not(:fullscreen):not(.game-fallback-fullscreen) .game-hub>header { display:none; }
+  html[data-compact-viewport] .mobile-party .party-workspace[data-game-role=guesser]:has(.chat-form:focus-within) .main-stage:not(:fullscreen):not(.game-fallback-fullscreen) .draw-heading h2 { display:none; }
+  html[data-compact-viewport] .mobile-party .party-workspace[data-game-role=guesser]:has(.chat-form:focus-within) .main-stage:not(:fullscreen):not(.game-fallback-fullscreen) .draw-board { max-width:min(100%,calc(var(--visual-height,100dvh) * .18 * 4 / 3)); }
+  html[data-compact-viewport] .mobile-party .party-workspace[data-game-role=guesser]:has(.chat-form:focus-within) .draw-game { padding:4px 0; gap:4px; }
+}
+@media(max-width:900px) and (orientation:landscape) {
+  .mobile-party .party-workspace[data-game-role=guesser] .party-content { flex:initial; height:100%; }
+  .mobile-party .party-workspace[data-game-role=guesser] .main-stage:not(:fullscreen):not(.game-fallback-fullscreen) .draw-board { max-width:min(100%,calc((var(--visual-height,100dvh) - 180px) * 4 / 3)); }
+  .mobile-party .party-workspace[data-game-role=drawer] .main-stage:not(:fullscreen):not(.game-fallback-fullscreen) .draw-board { max-width:min(100%,calc((var(--visual-height,100dvh) - 180px) * 4 / 3)); }
+  .mobile-party .party-workspace[data-game-role=drawer] .draw-game { display:grid; grid-template-columns:minmax(0,1fr) minmax(170px,.45fr); gap:4px 10px; }
+  .mobile-party .party-workspace[data-game-role=drawer] .draw-heading { grid-area:1/2; }
+  .mobile-party .party-workspace[data-game-role=drawer] .draw-word { grid-area:1/1; }
+  .mobile-party .party-workspace[data-game-role=drawer] .draw-board { display:contents; }
+  .mobile-party .party-workspace[data-game-role=drawer] .draw-board canvas { grid-area:2/1; width:min(100%,calc((var(--visual-height,100dvh) - 150px) * 4 / 3)); justify-self:center; }
+  .mobile-party .party-workspace[data-game-role=drawer] .draw-toolbar { grid-area:2/2; align-self:start; }
+}

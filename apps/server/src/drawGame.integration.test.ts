@@ -50,6 +50,9 @@ test("three authenticated real sockets: private choices, drawing, scoring, advan
   await until(() => states.every(Boolean));
   for (let i = 0; i < 3; i++) assert.equal((await send(i, "join")).ok, true);
   await until(() => states.every((s) => s?.players.length === 3));
+  assert.equal((await send(1, "configure", { targetScore: 50, theme: "animals" })).ok, false);
+  assert.equal((await send(0, "configure", { targetScore: 50, theme: "animals" })).ok, true);
+  await until(() => states.every((s) => s?.targetScore === 50 && s.theme === "animals"));
   assert.equal((await send(1, "start")).ok, false); assert.equal((await send(0, "start")).ok, true);
   await until(() => states.every((s) => s?.phase === "CHOOSING_WORD"));
   assert.equal(states[0]!.choices!.length, 3);
@@ -66,9 +69,9 @@ test("three authenticated real sockets: private choices, drawing, scoring, advan
   assert.deepEqual(chats[2], [], "Wrong guesses use game metadata, not Party chat broadcasts");
   assert.equal((await send(1, "guess", { text: secret })).ok, true);
   await until(() => states[2]!.players[1].guessed);
-  assert.ok(states[2]!.players[1].score >= 100); assert.equal(states[2]!.phase, "DRAWING");
+  assert.ok(states[2]!.players[1].score >= 6 && states[2]!.players[1].score <= 10); assert.equal(states[2]!.phase, "DRAWING");
   const metadata = traffic[2].at(-1) as DrawState;
-  assert.equal(metadata.roundPoints?.[sessions[0].user.id], 40);
+  assert.equal(metadata.roundPoints?.[sessions[0].user.id], 2);
   assert.deepEqual(chats[2], [], "A correct guess must never be echoed as a chat message");
   assert.equal("strokes" in metadata, false, "A guess must not retransmit the whole board");
   context.diagnostic(`local guess→remote state ${Math.round(performance.now() - start)}ms; 2-point delta ${strokePayloadBytes} bytes; no board in guess metadata (loopback, not WAN)`);

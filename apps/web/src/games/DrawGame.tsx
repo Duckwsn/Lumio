@@ -4,6 +4,7 @@ import type { DrawSnapshot, DrawState, GameAction, GameAck, ServerToClientEvents
 import { DrawCanvas } from "./DrawCanvas";
 import { DrawScoreboard } from "./DrawScoreboard";
 import { usePartyGameChat } from "./PartyGameChat";
+import { drawTargets, drawThemes } from "@lumio/shared";
 
 export function DrawGame({ socket, roomId, userId, children, onGames, onMedia }: { socket: Socket<ServerToClientEvents, ClientToServerEvents>; roomId: string; userId: string; children?: ReactNode; onGames?: () => void; onMedia?: () => void }) {
   const [state, setState] = useState<DrawSnapshot | null>(null), [error, setError] = useState(""), [time, setTime] = useState(Date.now());
@@ -41,16 +42,17 @@ export function DrawGame({ socket, roomId, userId, children, onGames, onMedia }:
   const base = { roomId, sessionId: state.sessionId, roundId: state.roundId, revision: state.revision };
   const playing = state.phase !== "LOBBY" && state.phase !== "GAME_RESULT", choosing = drawer && state.phase === "CHOOSING_WORD";
   const drawerName = state.players.find((p) => p.id === state.drawerId)?.displayName ?? "Desenhista";
-  const nextDrawer = Array.from({ length: Math.max(0, state.totalRounds - state.round) }, (_, offset) => state.order[(state.round + offset) % state.order.length]).find((id) => state.players.some((p) => p.id === id && p.online));
+  const nextDrawer = state.nextDrawerId;
   const topScore = Math.max(0, ...state.players.map((p) => p.score));
-  const winners = state.players.filter((p) => p.score === topScore).map((p) => p.displayName).join(" e ");
+  const winners = state.players.filter((p) => state.winnerIds.includes(p.id)).map((p) => p.displayName).join(" e ");
   return <section className={`draw-game ${drawer ? "is-drawer" : "is-guesser"}`} aria-label="Desenhe e Adivinhe">
-    <header className="draw-heading"><div><h2 ref={heading} tabIndex={-1}>Desenhe e Adivinhe</h2><p role="status">{state.phase === "LOBBY" ? `${state.players.filter((p) => p.online).length}/12 jogadores · duas voltas` : state.phase === "GAME_RESULT" ? "Partida concluída" : `Rodada ${state.round}/${state.totalRounds} · ${drawerName} ${state.phase === "CHOOSING_WORD" ? "escolhe" : "desenha"}`}</p></div>{playing ? <div className="draw-clock"><time className={remaining <= 10 ? "is-ending" : ""} aria-label="Tempo restante">{Math.floor(remaining / 60)}:{String(remaining % 60).padStart(2, "0")}</time>{me ? <small>{me.score} pts · #{1 + state.players.filter((p) => p.score > me.score).length}</small> : null}</div> : null}</header>
+    <header className="draw-heading"><div><h2 ref={heading} tabIndex={-1}>Desenhe e Adivinhe</h2><p role="status">{state.phase === "LOBBY" ? `${state.players.filter((p) => p.online).length}/12 jogadores` : state.phase === "GAME_RESULT" ? "Partida concluída" : `Rodada ${state.round} · ${drawerName} ${state.phase === "CHOOSING_WORD" ? "escolhe" : "desenha"}`}</p><span className="draw-match-meta">{drawThemes[state.theme]} · Meta {state.targetScore}</span></div>{playing ? <div className="draw-clock"><time className={remaining <= 10 ? "is-ending" : ""} aria-label="Tempo restante">{Math.floor(remaining / 60)}:{String(remaining % 60).padStart(2, "0")}</time>{me ? <small>{me.score}/{state.targetScore} · #{1 + state.players.filter((p) => p.score > me.score).length}</small> : null}{(state.roundPoints?.[userId] ?? 0) > 0 ? <small className="draw-award">+{state.roundPoints?.[userId]} {drawer ? "pelo desenho" : "pelo acerto"}</small> : null}</div> : null}</header>
     {error ? <p className="draw-error" role="alert">{error}</p> : null}
     <div className="draw-content" {...(choosing ? { inert: "" } : {})}>
     {!playing ? <div className="draw-lobby">
-      {state.phase === "GAME_RESULT" ? <div className="draw-finale"><span>Fim de partida</span><h3>{topScore ? `${winners} · vitória!` : "Até a próxima rodada!"}</h3><p>{topScore} pontos</p></div> : null}
+      {state.phase === "GAME_RESULT" ? <div className="draw-finale"><span>{state.resultReason === "target" ? `Meta ${state.targetScore} alcançada` : "Partida encerrada · faltam jogadores"}</span><h3>{winners ? `${winners} · ${state.winnerIds.length > 1 ? "vitória compartilhada!" : "vitória!"}` : "Até a próxima partida!"}</h3><p>{topScore} pontos</p></div> : null}
       <DrawScoreboard state={state} userId={userId} />
+      {state.phase === "LOBBY" ? <fieldset className="draw-match-config" disabled={!host || !me?.online}><legend>Partida</legend><div role="group" aria-label="Meta de pontos">{drawTargets.map((target) => <button key={target} type="button" aria-pressed={state.targetScore === target} onClick={() => act({ ...base, type: "configure", targetScore: target, theme: state.theme })}>{target}</button>)}</div><label>Tema<select aria-label="Tema" value={state.theme} onChange={(event) => act({ ...base, type: "configure", targetScore: state.targetScore as 50 | 100 | 150 | 200, theme: event.target.value as typeof state.theme })}>{Object.entries(drawThemes).map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select></label></fieldset> : null}
       <p>{host ? "Você coordena." : `Coordena: ${state.players.find((p) => p.id === state.hostId)?.displayName ?? "criador da sessão"}.`} {state.players.filter((p) => p.online).length < 2 ? "Mínimo de 2 jogadores." : ""}</p>
       <div className="draw-lobby-actions">{!me?.online ? <button onClick={() => act({ ...base, type: "join" })}>Participar</button> : <button onClick={() => act({ ...base, type: "leave" })}>Sair do jogo</button>}
       {host ? <button className="primary-button" disabled={!me?.online || state.players.filter((p) => p.online).length < 2} onClick={() => act({ ...base, type: state.phase === "GAME_RESULT" ? "rematch" : "start" })}>{state.phase === "GAME_RESULT" ? "Jogar novamente" : "Iniciar partida"}</button> : <span>Aguardando o coordenador.</span>}
@@ -61,8 +63,8 @@ export function DrawGame({ socket, roomId, userId, children, onGames, onMedia }:
       <div className="draw-bottom">
         {state.phase === "ROUND_RESULT" ? <div className="draw-round-result" role="status"><strong>Rodada encerrada</strong><ul>{state.players.filter((p) => p.guessed).map((p) => <li key={p.id}>{p.displayName} acertou · +{state.roundPoints?.[p.id] ?? 0}</li>)}</ul><p>{nextDrawer ? `A seguir: ${state.players.find((p) => p.id === nextDrawer)?.displayName}` : "A seguir: resultado final"}</p></div> : <p className="draw-context">{drawer ? "Desenhe sem escrever a palavra." : me?.guessed ? "Você acertou!" : me?.online ? "Palpite pelo chat da Party." : "Observando · você entra na próxima partida."}</p>}
         <DrawScoreboard state={state} userId={userId} />
-        {children ? <div className="game-fullscreen-composer" aria-label="Chat da Party em tela cheia">{children}</div> : null}
-        <details className="draw-order"><summary>Ordem de desenho · duas voltas</summary><ol>{state.order.map((id) => <li key={id}>{state.players.find((p) => p.id === id)?.displayName ?? "Ausente"}</li>)}</ol></details>
+        {children && !drawer ? <div className="game-fullscreen-composer" aria-label="Chat da Party em tela cheia">{children}</div> : null}
+        <details className="draw-order"><summary>Ordem de desenho · circular</summary><ol>{state.order.map((id) => <li key={id}>{state.players.find((p) => p.id === id)?.displayName ?? "Ausente"}</li>)}</ol></details>
         {me?.online ? <button className="draw-leave" onClick={() => act({ ...base, type: "leave" })}>Sair do jogo</button> : null}
       </div>
     </>}

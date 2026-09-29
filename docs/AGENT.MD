@@ -195,3 +195,12 @@ Uma tarefa está pronta quando:
 - Contexto social do jogo recebe somente metadados públicos, sem board/choices/secretWord. Feed visual aparece no Chat; protocolo de jogo permanece separado.
 - Ctrl/Cmd+Z e botão Desfazer usam o mesmo undo autoritativo. Ignore edição de texto, overlays, repeat, redo e fase/usuário inelegíveis. Nunca faça undo só local.
 - `roundPoints` e timestamps do feed são calculados no runtime, não inferidos do palpite no cliente. Preserve projeções individuais, limites, batching e o único engine/RTC. Consulte `POST_1_0_G2_PARTY_GAMES_EXPERIENCE_V2_REPORT.md`.
+
+## Draw Game G3
+
+- G3 substitui duas voltas por targetScore (50/100/150/200), default 100/Geral. Só coordenador participante online configura no LOBBY, com revisão exata. Não reduzir validação a disabled do frontend.
+- Rotação é circular sem total fixo; skip de ausentes é bounded e não aumenta a contagem de rodadas jogadas. Vitória é verificada após ROUND_RESULT; maior score vence, empate compartilha vitória. `winnerIds` vem do servidor.
+- Score por acerto: 6 + floor(4 * fração_restante) - min(2, acertos_anteriores); drawer +2 com cap 6/rodada. Rematch volta ao lobby da mesma sessão, conserva configuração/ativos e zera partida.
+- Banco local categorizado/usedWords é privado. Ofereça somente palavras inéditas até esgotar; então recicla pool. Não enviar banco, cursor ou histórico de palavras ao contexto social.
+- No mobile, Chat do drawer é hidden, nunca desmontado por papel. Guesser recebe canvas menor/lista maior; drafts/identidade/socket/RTC/provider preservados. VisualViewport curto compacta navegação apenas durante foco do composer, sem UA hacks.
+- Leia `POST_1_0_G3_DRAW_GAME_V3_REPORT.md` e calibre alterações com `scripts/draw-match-calibration.ts`. Evidências Chromium/fixtures não equivalem a providers, WAN ou aparelhos reais.
