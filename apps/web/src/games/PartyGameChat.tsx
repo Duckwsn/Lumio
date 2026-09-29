@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import type { Socket } from "socket.io-client";
-import type { DrawSnapshot, DrawState, ClientToServerEvents, ServerToClientEvents } from "@lumio/shared";
+import type { DrawSnapshot, DrawState, PartyGameSnapshot, PartyGameState, ClientToServerEvents, ServerToClientEvents } from "@lumio/shared";
 
 type PublicGame = Omit<DrawState, "choices" | "secretWord">;
 type Mode = "chat" | "guess";
@@ -37,9 +37,9 @@ export function PartyGameChatProvider({ socket, roomId, userId, onSelect, childr
   useEffect(() => { if (selected) selection.current(); }, [selected]);
   useEffect(() => {
     if (!socket) return;
-    const receive = (snapshot: DrawSnapshot | DrawState | null) => {
+    const receive = (snapshot: PartyGameSnapshot | PartyGameState | null) => {
       if (snapshot && snapshot.roomId !== roomId) return;
-      if (!snapshot) { setGame(null); return; }
+      if (!snapshot || snapshot.gameType !== "draw") { setGame(null); return; }
       // Explicit omission: private projection and board never enter the social context.
       const { choices: _choices, secretWord: _secret, ...metadata } = snapshot;
       const { strokes: _strokes, ...publicGame } = metadata as DrawSnapshot;
@@ -57,7 +57,7 @@ export function PartyGameChatProvider({ socket, roomId, userId, onSelect, childr
     if (!eligible || !game || !socket?.connected || sending.current) return false;
     sending.current = true; setBusy(true); setError("");
     try {
-      const ack = await socket.timeout(5000).emitWithAck("game:action", { type: "guess", roomId, sessionId: game.sessionId, roundId: game.roundId, revision: game.revision, text });
+      const ack = await socket.timeout(5000).emitWithAck("game:action", { gameType: "draw", roomId, action: { type: "guess", roomId, sessionId: game.sessionId, roundId: game.roundId, revision: game.revision, text } });
       if (!ack.ok) setError(ack.message ?? "Palpite indisponível.");
       return ack.ok;
     } catch { setError("Servidor não respondeu. Seu palpite não foi confirmado."); return false; }

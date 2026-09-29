@@ -158,3 +158,10 @@ Só encerre o processo depois de confirmar que ele pertence ao projeto.
 - Temas/banco local e usedWords são privados do servidor; escolhas seguem tema e não repetem palavra usada até esgotar. Nunca torne secret/choices públicos para calcular layout.
 - Workspace deriva papel de metadados públicos. Chat mobile continua montado ao ficar hidden para drawer; viewer recebe histórico/composer maiores, fullscreen reutiliza composer G2. Não remonte Chat/player/call por tema/score/papel.
 - Consulte `POST_1_0_G3_DRAW_GAME_V3_REPORT.md` para fórmula, presets/simulação, limites de viewport e roteiro humano. Não mudar banco/Auth/OAuth/infraestrutura como parte do jogo.
+
+## Multi-game G4 / Quiz
+
+- PartyGames é apenas roteamento/exclusão de sessões; DrawGameRuntime e QuizGameRuntime mantêm regras e projeções próprias. Uma sessão por Party; presentation Media/Hub não termina o jogo. Encerramento pelo coordenador exige confirmação e revisão exata.
+- Snapshot/state têm gameType; Draw frontend envia envelope estrito roomId/action, Quiz envia ações próprias. Filtros de tipo impedem Quiz de entrar no contexto Chat/Guess Draw. Shared registry contém somente os dois jogos reais; imports de jogos são lazy.
+- Quiz QUESTION nunca inclui correção, distribuição, pontos provisórios ou resposta de outro usuário. Backend preserva ownAnswer/lock no reconnect e aplica score só ao Reveal. Banco/deck privado, deadline e early finish autoritativos; offline/spectator não seguram o relógio.
+- Preserve Chat/Call/MediaStage/engine e componentes persistentes ao navegar, rematch ou abrir Pessoas/Fila. Fullscreen Quiz prioriza alternativas, sem composer paralelo. QA em Chromium/loopback não prova Android/iOS, Google ou WAN; leia `POST_1_0_G4_PARTY_GAMES_EXPANSION_QUIZ_REPORT.md`.

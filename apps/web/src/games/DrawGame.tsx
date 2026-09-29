@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { Socket } from "socket.io-client";
-import type { DrawSnapshot, DrawState, GameAction, GameAck, ServerToClientEvents, ClientToServerEvents } from "@lumio/shared";
+import type { DrawSnapshot, PartyGameSnapshot, PartyGameState, GameAction, GameAck, ServerToClientEvents, ClientToServerEvents } from "@lumio/shared";
 import { DrawCanvas } from "./DrawCanvas";
 import { DrawScoreboard } from "./DrawScoreboard";
 import { usePartyGameChat } from "./PartyGameChat";
@@ -18,8 +18,9 @@ export function DrawGame({ socket, roomId, userId, children, onGames, onMedia }:
     else if (state?.drawerId === userId && state.phase === "DRAWING") document.querySelector<HTMLCanvasElement>(".draw-board canvas")?.focus();
   }, [state?.phase, state?.roundId, userId]);
   useEffect(() => {
-    const open = () => { if (socket.connected && !latest.current) void socket.timeout(5000).emitWithAck("game:action", { type: "open", roomId }).then((ack) => { if (!ack.ok) setError(ack.message ?? "Jogo indisponível."); else setError(""); }).catch(() => setError("Servidor não respondeu. Volte aos Jogos para tentar novamente.")); };
-    const receive = (snapshot: DrawSnapshot | null) => {
+    const open = () => { if (socket.connected && !latest.current) void socket.timeout(5000).emitWithAck("game:action", { gameType: "draw", roomId, action: { type: "open", roomId } }).then((ack) => { if (!ack.ok) setError(ack.message ?? "Jogo indisponível."); else setError(""); }).catch(() => setError("Servidor não respondeu. Volte aos Jogos para tentar novamente.")); };
+    const receive = (snapshot: PartyGameSnapshot | null) => {
+      if (snapshot && snapshot.gameType !== "draw") return;
       if (snapshot && snapshot.roomId !== roomId) return;
       const old = latest.current;
       if (snapshot && old && snapshot.sessionId === old.sessionId && (snapshot.revision < old.revision || snapshot.revision === old.revision && snapshot.boardRevision < old.boardRevision)) return;
@@ -27,14 +28,14 @@ export function DrawGame({ socket, roomId, userId, children, onGames, onMedia }:
       if (!snapshot && old) setError("A sessão terminou. Volte aos Jogos para abrir uma nova partida.");
     };
     const disconnected = () => { latest.current = null; setState(null); setError("Reconectando à Party…"); };
-    const receiveState = (metadata: DrawState) => { const old = latest.current; if (old && old.sessionId === metadata.sessionId && old.roundId === metadata.roundId) receive({ ...metadata, strokes: old.strokes }); else open(); };
+    const receiveState = (metadata: PartyGameState) => { if (metadata.gameType !== "draw") return; const old = latest.current; if (old && old.sessionId === metadata.sessionId && old.roundId === metadata.roundId) receive({ ...metadata, strokes: old.strokes }); else open(); };
     socket.on("game:snapshot", receive); socket.on("game:state", receiveState); socket.on("room:snapshot", open); socket.on("disconnect", disconnected); open();
     const timer = window.setInterval(() => setTime(Date.now()), 250);
     return () => { window.clearInterval(timer); socket.off("game:snapshot", receive); socket.off("game:state", receiveState); socket.off("room:snapshot", open); socket.off("disconnect", disconnected); };
   }, [socket, roomId]);
   const act = (action: GameAction, callback?: (ack: GameAck) => void) => {
     if (!socket.connected) { setError("Aguarde a conexão com a Party."); callback?.({ ok: false }); return; }
-    void socket.timeout(5000).emitWithAck("game:action", action).then((ack) => { if (!ack.ok) setError(ack.message ?? "Não foi possível executar a ação."); else setError(""); callback?.(ack); }).catch(() => { setError("Servidor não respondeu. Tente novamente."); callback?.({ ok: false }); });
+    void socket.timeout(5000).emitWithAck("game:action", { gameType: "draw", roomId, action }).then((ack) => { if (!ack.ok) setError(ack.message ?? "Não foi possível executar a ação."); else setError(""); callback?.(ack); }).catch(() => { setError("Servidor não respondeu. Tente novamente."); callback?.({ ok: false }); });
   };
   if (!state) return <div className="draw-loading" role="status">{error || "Abrindo Desenhe e Adivinhe…"}</div>;
   const me = state.players.find((p) => p.id === userId), host = state.hostId === userId, drawer = state.drawerId === userId;

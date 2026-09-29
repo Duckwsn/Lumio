@@ -51,7 +51,7 @@ import { PrismaDriveVault } from "./prismaDriveVault.js";
 import { PrismaMediaRepository } from "./prismaMediaRepository.js";
 import { validateProductionEnvironment } from "./productionConfig.js";
 import { bootFailureFields, type BootStage } from "./bootDiagnostics.js";
-import { DrawGameRuntime } from "./drawGame.js";
+import { PartyGames } from "./partyGames.js";
 
 // npm workspaces execute this package with apps/server as the working directory.
 // Resolve the project-level environment file from this module so dev and dist agree.
@@ -107,7 +107,7 @@ const persistMediaForResponse = async (roomId: string, response: express.Respons
 const emailService = new EmailService();
 const googleIdentity = new GoogleIdentityService();
 const youtube = new YouTubeDataService();
-const games = new DrawGameRuntime((roomId, delta, forceFull) => {
+const games = new PartyGames((roomId, delta, forceFull) => {
   const house = social.getByRoom(roomId);
   for (const peer of io.sockets.sockets.values()) {
     const viewer = peer.data.user as User;
@@ -117,7 +117,7 @@ const games = new DrawGameRuntime((roomId, delta, forceFull) => {
     else {
       const full = forceFull || peer.data.gameBoardStamp !== stamp;
       const state = games.snapshot(roomId, viewer.id, Boolean(full));
-      if (full || !state) peer.emit("game:snapshot", state);
+      if (full || !state || state.gameType === "quiz") peer.emit("game:snapshot", state);
       else { const { strokes: _strokes, ...metadata } = state; peer.emit("game:state", metadata); }
     }
     peer.data.gameBoardStamp = stamp;

@@ -46,9 +46,10 @@ test("game presentation keeps the existing YouTube surface visible instead of ba
   assert.equal((html.match(/<iframe/g) ?? []).length, 1);
   assert.equal(html.includes("Iniciar jogo"), false);
 });
-test("Game Hub shows one real game with original vector identity and concise accessible copy", () => {
+test("Game Hub shows two real games with original vector identity and concise accessible copy", () => {
   const html = renderToStaticMarkup(createElement(GameHub, { onBack: () => undefined, onFullscreen: () => undefined, fullscreen: false }));
   assert.equal((html.match(/class="draw-entry"/g) ?? []).length, 1);
+  assert.equal((html.match(/class="quiz-entry"/g) ?? []).length, 1);
   assert.match(html, /draw-game-icon/); assert.match(html, /2–12 jogadores/);
   for (const text of ["Em breve", "Na mesma Party", "Desenhe, adivinhe e ria"]) assert.equal(html.includes(text), false);
 });

@@ -7,6 +7,101 @@ import os from "node:os";
 import path from "node:path";
 import { io } from "socket.io-client";
 import { drawWordBanks } from "../apps/server/src/drawWords";
+import { quizQuestions } from "../apps/server/src/quizQuestions";
+
+test("G4 three authenticated clients: safe Quiz, lock/reconnect, navigation, six widths, result and rematch", async ({ browser, request }) => {
+  test.setTimeout(180000);
+  const origin = `http://127.0.0.1:${webPort}`, api = `http://127.0.0.1:${apiPort}`;
+  const sessions = [];
+  for (const displayName of ["Quiz Ana", "Quiz Bia", "Quiz Caio"]) {
+    const email = `quiz-${crypto.randomUUID()}@example.test`, password = "local-e2e-password-123";
+    expect((await request.post(`${api}/api/auth/signup`, { data: { displayName, email, password } })).status()).toBe(201);
+    const link = JSON.parse(fs.readFileSync(path.join(directory, "mail.jsonl"), "utf8").trim().split("\n").at(-1)!).text.match(/https?:\/\/\S+/)[0];
+    expect((await request.post(`${api}/api/auth/verification/confirm`, { data: { token: new URL(link).hash.slice(7) } })).status()).toBe(204);
+    sessions.push(await (await request.post(`${api}/api/auth/login`, { data: { email, password } })).json());
+  }
+  const headers = { Authorization: `Bearer ${sessions[0].token}` };
+  const { house } = await (await request.post(`${api}/api/houses`, { headers, data: { name: "G4 Friends" } })).json();
+  const { invite } = await (await request.post(`${api}/api/houses/${house.id}/invites`, { headers, data: { expiresInHours: 1, maxUses: 3 } })).json();
+  for (const s of sessions.slice(1)) expect((await request.post(`${api}/api/invites/${invite.token}/accept`, { headers: { Authorization: `Bearer ${s.token}` } })).status()).toBe(200);
+  const contexts = await Promise.all(sessions.map((_, i) => browser.newContext(i === 1 ? { viewport: { width: 1280, height: 900 } } : { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true })));
+  const traffic: string[][] = [[], [], []], errors: string[] = [];
+  try {
+    for (let i = 0; i < 3; i++) await contexts[i].addInitScript((s) => localStorage.setItem("lumio.session.v1", JSON.stringify(s)), sessions[i]);
+    const [a, b, c] = await Promise.all(contexts.map((ctx) => ctx.newPage()));
+    for (const [i, page] of [a, b, c].entries()) {
+      page.on("pageerror", (e) => errors.push(e.message));
+      page.on("websocket", (ws) => ws.on("framereceived", (frame) => traffic[i].push(String(frame.payload))));
+      await page.goto(`${origin}/house/${house.id}`); await page.getByRole("button", { name: "Jogos", exact: true }).click();
+      await expect(page.getByRole("button", { name: /Desenhe e Adivinhe/ })).toBeVisible(); await expect(page.getByRole("button", { name: /Quiz 2/ })).toBeVisible();
+      await page.screenshot({ path: `test-results/g4-hub-${i === 1 ? "desktop" : "mobile"}.png` });
+      await page.getByRole("button", { name: /Quiz 2/ }).click(); await page.getByRole("button", { name: "Participar", exact: true }).click();
+    }
+    await expect(a.locator(".quiz-scoreboard li")).toHaveCount(3);
+    await a.getByRole("button", { name: "5", exact: true }).click(); await expect(c.getByRole("button", { name: "5", exact: true })).toHaveAttribute("aria-pressed", "true");
+    await a.getByLabel("Categoria").selectOption("math"); await expect(c.getByLabel("Categoria")).toHaveValue("math");
+    await a.getByLabel("Dificuldade").selectOption("easy"); await expect(c.getByLabel("Dificuldade")).toHaveValue("easy");
+    await expect(b.getByLabel("Categoria")).toBeDisabled();
+    await a.screenshot({ path: "test-results/g4-lobby-mobile.png" }); await b.screenshot({ path: "test-results/g4-lobby-desktop.png" });
+    const quizNode = await a.locator(".quiz-game").elementHandle();
+    for (const name of ["Pessoas da Party", "Fila da Party"]) { await a.getByRole("button", { name, exact: true }).click(); await expect(a.locator(".party-drawer")).toBeVisible(); await a.getByRole("button", { name: "Recolher painel da Party", exact: true }).click(); await expect(a.locator(".party-drawer")).toHaveCount(0); expect(await quizNode!.evaluate((node) => node === document.querySelector(".quiz-game"))).toBe(true); }
+    const chatNode = await a.locator(".mobile-party-chat").elementHandle();
+    await a.locator(".mobile-party-chat").getByRole("textbox").fill("rascunho Quiz G4");
+    await a.getByRole("button", { name: "Iniciar partida", exact: true }).click();
+    const prompts = new Set<string>();
+    for (let round = 1; round <= 5; round++) {
+      await expect(a.locator(".quiz-game")).toHaveAttribute("data-phase", "QUESTION"); await expect(a.locator(".quiz-heading")).toContainText(`Pergunta ${round} de 5`);
+      const prompt = (await a.locator(".quiz-question").textContent())!; prompts.add(prompt);
+      const question = quizQuestions.find((q) => q.prompt === prompt)!;
+      if (round === 1) {
+        await b.screenshot({ path: "test-results/g4-question-desktop.png" });
+        for (const width of [320, 360, 375, 390, 412, 430]) {
+          await a.setViewportSize({ width, height: 844 }); await expect(a.locator(".quiz-answers button")).toHaveCount(4);
+          expect(await a.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+          for (const option of await a.locator(".quiz-answers button").all()) expect((await option.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+          if ([320, 390, 430].includes(width)) await a.screenshot({ path: `test-results/g4-question-${width}.png` });
+        }
+        await a.setViewportSize({ width: 390, height: 844 });
+      }
+      const option = (await a.locator(".quiz-answers button>span:nth-child(2)").allTextContents()).indexOf(question.answers[question.correctIndex]); expect(option).toBeGreaterThanOrEqual(0);
+      await a.locator(".quiz-answers button").nth(option).click(); await expect(a.locator(".quiz-answer-status")).toContainText("Resposta enviada");
+      await expect(a.locator(".quiz-answers button").nth((option + 1) % 4)).toBeDisabled();
+      if (round === 1) {
+        await a.screenshot({ path: "test-results/g4-answer-locked.png" });
+        for (const payloads of traffic.slice(1)) for (const payload of payloads) expect(payload).not.toMatch(/"correctIndex"|"ownCorrect"|"ownPoints"|"distribution"|"explanation"/);
+        await a.getByRole("button", { name: "Voltar aos jogos", exact: true }).click(); await expect(a.getByRole("heading", { name: "O que vamos jogar?" })).toBeVisible();
+        await a.getByRole("button", { name: /Desenhe e Adivinhe/ }).click(); await expect(a.getByRole("button", { name: "Retornar à partida" })).toBeVisible(); await a.getByRole("button", { name: "Retornar à partida" }).click();
+        await expect(a.locator(".quiz-answer-status")).toContainText("Resposta enviada");
+      }
+      if (round === 2) {
+        await b.locator(".quiz-answers button").nth(option).click();
+        await expect(b.locator(".quiz-answer-status")).toContainText("Resposta enviada");
+        await b.reload(); await b.getByRole("button", { name: "Jogos", exact: true }).click(); await b.getByRole("button", { name: /Quiz 2/ }).click();
+        await expect(b.locator(".quiz-game")).toHaveAttribute("data-phase", "QUESTION");
+        await expect(b.locator(".quiz-answer-status")).toContainText("Resposta enviada");
+        for (const answer of await b.locator(".quiz-answers button").all()) await expect(answer).toBeDisabled();
+        await a.getByRole("button", { name: "Tela cheia de Jogos", exact: true }).click(); await a.screenshot({ path: "test-results/g4-fullscreen.png" }); await a.getByRole("button", { name: "Sair da tela cheia de Jogos", exact: true }).click();
+      }
+      if (round !== 2) await b.locator(".quiz-answers button").nth(option).click();
+      await c.locator(".quiz-answers button").nth(option).click();
+      await expect(a.locator(".quiz-game")).toHaveAttribute("data-phase", "REVEAL"); await expect(a.locator(".quiz-answer-status")).toContainText("Você acertou");
+      await expect(a.locator(".quiz-answers .correct")).toContainText("3 respostas");
+      if (round === 1) { await a.screenshot({ path: "test-results/g4-reveal-distribution-score.png" }); await a.locator(".quiz-scoreboard").scrollIntoViewIfNeeded(); await a.screenshot({ path: "test-results/g4-score.png" }); }
+      if (round < 5) await expect(a.locator(".quiz-heading")).toContainText(`Pergunta ${round + 1} de 5`, { timeout: 10000 });
+    }
+    await expect(a.locator(".quiz-game")).toHaveAttribute("data-phase", "RESULT", { timeout: 10000 }); expect(prompts.size).toBe(5);
+    await a.screenshot({ path: "test-results/g4-result.png" }); expect(await chatNode!.evaluate((node) => node === document.querySelector(".mobile-party-chat"))).toBe(true);
+    await expect(a.locator(".mobile-party-chat").getByRole("textbox")).toHaveValue("rascunho Quiz G4");
+    await a.getByRole("button", { name: "Jogar novamente", exact: true }).click(); await expect(a.locator(".quiz-game")).toHaveAttribute("data-phase", "LOBBY");
+    await expect(a.getByLabel("Categoria")).toHaveValue("math"); await expect(a.locator(".quiz-scoreboard strong")).toHaveText(["0", "0", "0"]);
+    await a.getByRole("button", { name: "Voltar aos jogos", exact: true }).click(); await a.getByRole("button", { name: "Encerrar sessão de jogo", exact: true }).click(); await a.getByRole("button", { name: "Confirmar encerramento", exact: true }).click();
+    await expect(a.getByRole("button", { name: "Confirmar encerramento", exact: true })).toHaveCount(0);
+    await a.getByRole("button", { name: /Desenhe e Adivinhe/ }).click(); await a.getByRole("button", { name: "Participar", exact: true }).click(); await a.screenshot({ path: "test-results/g4-draw-navigation-mobile.png" });
+    await a.getByRole("button", { name: "Voltar aos jogos", exact: true }).click(); await a.getByRole("button", { name: "Voltar à mídia", exact: true }).click(); await a.getByRole("button", { name: "Jogos", exact: true }).click(); await a.getByRole("button", { name: /Desenhe e Adivinhe/ }).click(); await expect(a.getByRole("button", { name: "Sair do jogo", exact: true })).toBeVisible();
+    await b.getByRole("button", { name: "Voltar aos jogos", exact: true }).click(); await b.getByRole("button", { name: /Desenhe e Adivinhe/ }).click(); await b.screenshot({ path: "test-results/g4-draw-navigation-desktop.png" });
+    expect(errors).toEqual([]);
+  } finally { await Promise.all(contexts.map((ctx) => ctx.close())); }
+});
 
 test("G2 three-user Draw Game: integrated chat, privacy, shortcuts, score, mobile and fullscreen", async ({ browser, request }) => {
   test.setTimeout(180000);

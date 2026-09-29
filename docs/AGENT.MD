@@ -204,3 +204,11 @@ Uma tarefa está pronta quando:
 - Banco local categorizado/usedWords é privado. Ofereça somente palavras inéditas até esgotar; então recicla pool. Não enviar banco, cursor ou histórico de palavras ao contexto social.
 - No mobile, Chat do drawer é hidden, nunca desmontado por papel. Guesser recebe canvas menor/lista maior; drafts/identidade/socket/RTC/provider preservados. VisualViewport curto compacta navegação apenas durante foco do composer, sem UA hacks.
 - Leia `POST_1_0_G3_DRAW_GAME_V3_REPORT.md` e calibre alterações com `scripts/draw-match-calibration.ts`. Evidências Chromium/fixtures não equivalem a providers, WAN ou aparelhos reais.
+
+## Party Games G4 / Quiz
+
+- PartyGames roteia runtimes específicos e reserva uma sessão por roomId, inclusive lobby/resultado. Navegar Media/Hub/jogo não envia leave/end; trocar tipo exige encerramento autorizado confirmado. Não criar Party/socket/Chat/Call paralelos.
+- Use gameType explícito nas projeções e ações novas; Draw usa envelope com roomId externo igual ao interno. Payload Draw legado estrito é compatibilidade, não modelo para jogos futuros.
+- Quiz mantém deck, correctIndex e respostas/pontos provisórios somente no servidor. QUESTION projeta só ownAnswer da própria identidade e contagens agregadas; score/correctness/distribuição só em REVEAL. Nunca reutilizar chat:message/guess para votar.
+- Configure/start/rematch/end validam autoridade e revisão exata. Answer permite revisão não-futura apenas da mesma session/round, uma vez por ativo online, antes do deadline; cliente não determina acerto/pontos. Reconnect conserva lock, espectadores/offline não bloqueiam early finish.
+- Banco PT-BR estável é privado; seleção sem repetição na partida, ordem de quatro alternativas única para todos. Não importar banco no frontend. Timer visual não envia eventos por segundo. Consulte `POST_1_0_G4_PARTY_GAMES_EXPANSION_QUIZ_REPORT.md` para fórmula, limites e QA manual.

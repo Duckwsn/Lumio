@@ -1,5 +1,6 @@
 import { z } from "zod";
 export * from "./drawGame.js";
+export * from "./partyGames.js";
 
 export const roleSchema = z.enum(["OWNER", "HOST", "DJ", "ADMIN", "MODERATOR", "MEMBER", "GUEST"]);
 export type Role = z.infer<typeof roleSchema>;
@@ -291,8 +292,8 @@ export const voiceSignalSchema = z.object({ roomId: z.string().max(100), targetU
 export interface VoicePeer { user: User; socketId: string }
 
 export interface ServerToClientEvents {
-  "game:snapshot": (snapshot: import("./drawGame.js").DrawSnapshot | null) => void;
-  "game:state": (state: import("./drawGame.js").DrawState) => void;
+  "game:snapshot": (snapshot: import("./partyGames.js").PartyGameSnapshot | null) => void;
+  "game:state": (state: import("./partyGames.js").PartyGameState) => void;
   "game:draw": (delta: import("./drawGame.js").DrawDelta) => void;
   "home:update": (houses: HouseSummary[]) => void;
   "profile:update": (user: User) => void;
@@ -318,7 +319,7 @@ export interface ServerToClientEvents {
 }
 
 export interface ClientToServerEvents {
-  "game:action": (input: import("./drawGame.js").GameAction, respond: (result: import("./drawGame.js").GameAck) => void) => void;
+  "game:action": (input: import("./partyGames.js").PartyGameAction, respond: (result: import("./drawGame.js").GameAck) => void) => void;
   "room:join": (input: z.infer<typeof joinRoomInputSchema>) => void;
   "room:leave": (roomId: string) => void;
   "media:play": (input: z.infer<typeof mediaCommandSchema>) => void;
