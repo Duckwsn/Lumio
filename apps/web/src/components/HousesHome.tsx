@@ -1,30 +1,34 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { ArrowRight, Gamepad2, Link2, Plus, Monitor, Play, Users } from "lucide-react";
 import { houseRolePermissions, type HouseDetails, type HouseSummary, type User } from "@lumio/shared";
 import { Avatar } from "./Avatar";
 import { LumioLogo } from "./LumioLogo";
 import { Dialog, HouseSettingsDialog, InviteDialog } from "./SocialDialogs";
+import { memberPresenceLabel, memberPreviewName } from "../presence";
 
-export function HomePage({ user, houses, error, onRetry, onOpenHouse, onCreate, onInvite, onAccount, onLogout, apiUrl = "", token = "", connected = true }: {
+export function HomePage({ user, houses, error, onRetry, onOpenHouse, onCreate, onInvite, onAccount, onLogout, apiUrl = "", token = "", connected = true, liveHouse = null, connectionEpoch = 0 }: {
   user: User; houses: HouseSummary[]; error?: string; onRetry: () => void;
   onOpenHouse: (house: HouseSummary) => void; onCreate: (name: string) => Promise<void>;
-  onInvite: (value: string) => boolean; onAccount: () => void; onLogout: () => void; apiUrl?: string; token?: string; connected?: boolean;
+  onInvite: (value: string) => boolean; onAccount: () => void; onLogout: () => void; apiUrl?: string; token?: string; connected?: boolean; liveHouse?: HouseDetails | null; connectionEpoch?: number;
 }) {
   const [form, setForm] = useState<"create" | "invite" | null>(null);
   const [value, setValue] = useState(""); const [formError, setFormError] = useState(""); const [busy, setBusy] = useState(false);
   const [panel, setPanel] = useState<{ id: string; kind: "house" | "invite" } | null>(null);
   const [details, setDetails] = useState<HouseDetails | null>(null);
   const [panelError, setPanelError] = useState(""); const [attempt, setAttempt] = useState(0);
+  const latestHouse = useRef<HouseDetails | null>(null);
   const selected = houses.find((h) => h.id === panel?.id);
+  useEffect(() => { if (panel && liveHouse?.id === panel.id) { latestHouse.current = liveHouse; setDetails(liveHouse); } }, [liveHouse, panel?.id]);
   useEffect(() => { document.title = "Suas Casas — Lumio"; }, []);
   useEffect(() => {
-    if (!panel || !selected) { setDetails(null); return; }
+    if (!panel || !selected) { latestHouse.current = null; setDetails(null); return; }
     const controller = new AbortController(); setPanelError("");
+    latestHouse.current = null;
     void fetch(`${apiUrl}/api/houses/${encodeURIComponent(panel.id)}`, { headers: { Authorization: `Bearer ${token}` }, signal: controller.signal })
-      .then(async (response) => { if (!response.ok) throw new Error(); const data = await response.json() as { house: HouseDetails }; if (!controller.signal.aborted) setDetails(data.house); })
+      .then(async (response) => { if (!response.ok) throw new Error(); const data = await response.json() as { house: HouseDetails }; if (!controller.signal.aborted) setDetails(latestHouse.current?.id === panel.id ? latestHouse.current : data.house); })
       .catch(() => { if (!controller.signal.aborted) setPanelError("Não foi possível carregar a Casa."); });
     return () => controller.abort();
-  }, [panel?.id, selected, apiUrl, token, attempt]);
+  }, [panel?.id, selected?.id, apiUrl, token, attempt, connectionEpoch]);
   const openPanel = (house: HouseSummary, kind: "house" | "invite") => { setDetails(null); setPanelError(""); setPanel({ id: house.id, kind }); };
   const openForm = (next: "create" | "invite") => { setValue(""); setFormError(""); setForm(next); };
   const submit = async (event: FormEvent) => {
@@ -44,7 +48,7 @@ export function HomePage({ user, houses, error, onRetry, onOpenHouse, onCreate, 
         const Icon = activity?.type === "game" ? Gamepad2 : activity?.type === "screen" ? Monitor : Play;
         return <article className={`house-card-v2 ${active ? "occupied" : ""}`} key={house.id} aria-label={house.name}>
           <header><Avatar name={house.name} src={house.avatar} color="#78a98c" className="house-card-avatar" /><div><h2 title={house.name}>{house.name}</h2><p>{house.onlineCount} {house.onlineCount === 1 ? "membro online" : "membros online"}</p></div></header>
-          <div className="house-member-preview" aria-label="Pessoas da Casa">{house.memberPreview?.map((member) => <span key={member.id} title={`${member.displayName} · ${member.inParty ? "Na Party" : member.presence === "OFFLINE" ? "Offline" : "Online"}`}><Avatar name={member.displayName} src={member.avatar} color={member.color} /><small>{member.displayName.split(" ")[0]}</small><span className="sr-only">{member.inParty ? "Na Party" : member.presence === "OFFLINE" ? "Offline" : "Online"}</span></span>)}{house.memberCount > 3 ? <span className="house-more-members" aria-label={`Mais ${house.memberCount - 3} membros`}>+{house.memberCount - 3}</span> : null}</div>
+          <div className="house-member-preview" aria-label="Pessoas da Casa">{house.memberPreview?.map((member) => <span key={member.id} title={`${member.displayName} · ${memberPresenceLabel(member)}`}><Avatar name={member.displayName} src={member.avatar} color={member.color} /><small>{memberPreviewName(member.displayName)}</small><span className="sr-only">{memberPresenceLabel(member)}</span></span>)}{house.memberCount > 3 ? <span className="house-more-members" aria-label={`Mais ${house.memberCount - 3} membros`}>+{house.memberCount - 3}</span> : null}</div>
           <div className="house-party-summary"><strong>{active ? `${house.partyCount} ${house.partyCount === 1 ? "pessoa" : "pessoas"} na Party` : "Ninguém na Party agora"}</strong>{active ? <p title={activity?.label}><Icon aria-hidden="true" />{activity?.label ?? "Na Party"}</p> : <p>Abra a Party para reunir a Casa.</p>}</div>
           <button className={active ? "entry-primary" : "quiet-button house-open-idle"} onClick={() => onOpenHouse(house)} aria-label={`${active ? "Entrar na Party" : "Abrir Party"} · ${house.name}`}>{active ? "Entrar na Party" : "Abrir Party"}<ArrowRight /></button>
           <footer><button onClick={() => openPanel(house, "house")}><Users />Casa e membros</button>{houseRolePermissions[house.role].includes("INVITE_CREATE") ? <button onClick={() => openPanel(house, "invite")}><Link2 />Convidar pessoas</button> : null}</footer>

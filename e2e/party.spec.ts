@@ -44,6 +44,17 @@ test("S1 Houses: Home observes two Party browsers, three games, six widths, deta
     await Promise.all([a.goto(`${origin}/house/${house.id}`), b.goto(`${origin}/house/${house.id}`)]);
     await expect(home.locator(".house-party-summary")).toContainText("2 pessoas na Party");
     await home.screenshot({ path: "artifacts/s1/s1-house-active.png" });
+    await home.getByRole("button", { name: "Casa e membros", exact: true }).click();
+    await home.getByRole("button", { name: "Membros", exact: true }).click();
+    await expect(home.locator(".settings-members li").filter({ hasText: "Bia" }).locator(".member-presence")).toHaveText("Na Party");
+    await expect(home.locator(".settings-members li").filter({ hasText: "Caio" }).locator(".member-presence")).toHaveText("Online");
+    const secondAnaTab = await contexts[0].newPage();
+    await secondAnaTab.goto(`${origin}/house/${house.id}`);
+    await expect(secondAnaTab.getByRole("button", { name: /Abrir pessoas, 2 na Party/ })).toBeVisible();
+    await expect(home.locator(".house-details-presence")).toContainText("2 na Party");
+    await secondAnaTab.close();
+    await expect(home.locator(".house-details-presence")).toContainText("2 na Party");
+    await home.keyboard.press("Escape");
     expect(await home.evaluate(() => (window as any).__captures)).toBe(0);
     expect(await home.locator("iframe,video,audio,.party-app,.game-hub").count()).toBe(0);
     for (const [game, label] of [["draw", "Desenhe e Adivinhe"], ["quiz", "Quiz"], ["cards", "Lumio Cartas"]]) {

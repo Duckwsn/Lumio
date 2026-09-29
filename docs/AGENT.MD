@@ -158,6 +158,13 @@ Uma tarefa está pronta quando:
 - Mudanças de mídia relevantes para Home emitem resumo, mas seek/playhead, strokes, timer, cartas, typing e speaking não. Deduplicate payload por socket. Em reconnect, indique que o último resumo está desatualizado até receber projeção nova; restart não restaura game/share efêmeros.
 - O card recebe somente até três membros públicos e rótulo público de atividade. Não transportar secretWord/answers/hands, tokens, tickets, grants, URLs de stream ou metadados privados. Sem migration/presence persistida por heartbeat. Veja `POST_1_0_S1_HOUSES_V2_REPORT.md`.
 
+## Presence V2
+
+- `ONLINE` e `IDLE` significam conexão autenticada viva; `inParty` é um eixo separado, agregado por identidade na Party daquela Casa. Nenhum deles prova atenção, consumo de mídia ou participação em jogo. Não derive presença individual de Call, mic, Game, media ou `document.hidden`.
+- Uma conta pode ter vários sockets. Só a saída da última conexão após cinco segundos marca offline; reconexão cancela o timer antigo. Logout explícito da última sessão encurta esse prazo. O transporte Socket.IO já fornece liveness, sem heartbeat customizado.
+- `GroupMember.lastSeenAt` representa o último trânsito efetivo da conta para offline, projetado nos vínculos de Casa; não atualize em join, fala, heartbeat ou alteração de atividade. `home:update` e `house:update` continuam filtrados por membership. Home não entra na Party/Call.
+- Preserve o socket Home único, sem presença global pública, dispositivo/IP/localização, status rico inventado ou migration para presença efêmera. Veja `POST_1_0_S2_PRESENCE_V2_REPORT.md`.
+
 ## Media Experience V3
 
 - Use `QueueItem.id` para distinguir ocorrências repetidas da mesma mídia. `provider + providerMediaId` identifica a mídia canônica, não a posição na fila.

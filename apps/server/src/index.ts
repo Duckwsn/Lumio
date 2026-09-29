@@ -457,7 +457,22 @@ app.post("/api/auth/logout", async (request, response) => {
   const token = getAuthToken(request);
   const user = token ? auth.resolveSession(token)?.user : undefined;
   if (user) googleDrive.revokeViewer(user.id);
-  if (token) { auth.revokeSession(token); if (user) try { await saveAuth(user.id); } catch { return response.status(503).json({ message: "Saída indisponível no momento." }); } for (const peer of io.sockets.sockets.values()) if (peer.handshake.auth?.token === token) peer.disconnect(true); }
+  if (token) {
+    auth.revokeSession(token);
+    if (user) try { await saveAuth(user.id); } catch { return response.status(503).json({ message: "Saída indisponível no momento." }); }
+    for (const peer of io.sockets.sockets.values()) if (peer.handshake.auth?.token === token) peer.disconnect(true);
+    if (user && !activeUserSockets.has(user.id)) {
+      const pending = accountOfflineTimers.get(user.id);
+      if (pending) { clearTimeout(pending); accountOfflineTimers.delete(user.id); refreshAccountPresence(user.id, "OFFLINE"); void persistLastSeen(user.id).catch(() => log("warn", "last_seen_write_failed", { userId: user.id })); }
+      for (const house of social.listForUser(user.id)) {
+        const key = `${house.primaryRoomId}:${user.id}`, partyTimer = offlineTimers.get(key);
+        if (!partyTimer || (roomConnections.get(house.primaryRoomId)?.get(user.id)?.size ?? 0) > 0) continue;
+        clearTimeout(partyTimer); offlineTimers.delete(key); store.removeMember(house.primaryRoomId, user.id);
+        social.setPresence(house.id, user.id, "OFFLINE", { inParty: false, inCall: false, speaking: false, screenSharing: false });
+        emitSnapshot(house.primaryRoomId); emitHouse(house.id);
+      }
+    }
+  }
   return response.status(204).end();
 });
 
@@ -465,7 +480,7 @@ app.get("/api/houses", (request, response) => { const user = requireUser(request
 app.post("/api/houses", async (request, response) => {
   const user = requireUser(request, response); if (!user) return;
   const parsed = z.object({ name: z.string().trim().min(2).max(48) }).safeParse(request.body); if (!parsed.success) return response.status(400).json({ message: "Informe um nome para a Casa." });
-  const house = social.createHouse(user, parsed.data.name); try { await saveHouse(house.id); } catch { return response.status(503).json({ message: "Casa indisponível no momento." }); } store.addHouseRoom({ houseId: house.id, houseName: house.name, roomId: house.primaryRoomId }); emitHouse(house.id);
+  const house = social.createHouse(user, parsed.data.name); try { await saveHouse(house.id); } catch { return response.status(503).json({ message: "Casa indisponível no momento." }); } store.addHouseRoom({ houseId: house.id, houseName: house.name, roomId: house.primaryRoomId }); if (activeUserSockets.has(user.id)) social.setPresence(house.id, user.id, "ONLINE"); emitHouse(house.id);
   return response.status(201).json({ house: social.details(house.id, user.id) });
 });
 app.get("/api/houses/:houseId", (request, response) => { const user = requireUser(request, response); if (!user) return; if (deletingHouses.has(request.params.houseId)) return response.status(404).json({ message: "Casa não encontrada." }); const house = social.details(request.params.houseId, user.id); return house ? response.json({ house }) : response.status(404).json({ message: "Casa não encontrada." }); });
@@ -521,7 +536,7 @@ app.patch("/api/profile", async (request, response) => {
   social.updateProfile(user, { ...parsed.data, avatar: parsed.data.avatar || undefined }); auth.saveProfile(user.id); try { await saveAuth(user.id); } catch { return response.status(503).json({ message: "Perfil indisponível no momento." }); } for (const house of social.listForUser(user.id)) { emitHouse(house.id); emitSnapshot(house.primaryRoomId); } for (const peer of io.sockets.sockets.values()) if ((peer.data.user as User | undefined)?.id === user.id) peer.emit("profile:update", user); return response.json({ user });
 });
 app.get("/api/invites/:token", (request, response) => { if (!authRateLimit(request, response, "invite-entry")) return; const invite = social.getInvite(request.params.token); if (invite && deletingHouses.has(invite.houseId)) return response.json({ status: "INVALID", isMember: false }); const state = social.inspectInvite(request.params.token); const user = getUser(request); const isMember = Boolean(user && invite && social.isMember(invite.houseId, user.id)); return response.json({ ...state, ...(isMember ? { houseName: social.getHouse(invite!.houseId)?.name } : {}), houseId: isMember ? invite?.houseId : state.status === "VALID" ? state.houseId : undefined, isMember }); });
-app.post("/api/invites/:token/accept", async (request, response) => { if (!authRateLimit(request, response, "invite-entry")) return; const user = requireUser(request, response); if (!user) return; const invite = social.getInvite(request.params.token); if (invite && deletingHouses.has(invite.houseId)) return response.status(410).json({ status: "INVALID" }); const result = social.acceptInvite(request.params.token, user); if (!result.ok) return response.status(410).json(result); try { await saveHouse(result.houseId); } catch { return response.status(503).json({ message: "Convite indisponível no momento." }); } emitHouse(result.houseId); return response.json(result); });
+app.post("/api/invites/:token/accept", async (request, response) => { if (!authRateLimit(request, response, "invite-entry")) return; const user = requireUser(request, response); if (!user) return; const invite = social.getInvite(request.params.token); if (invite && deletingHouses.has(invite.houseId)) return response.status(410).json({ status: "INVALID" }); const result = social.acceptInvite(request.params.token, user); if (!result.ok) return response.status(410).json(result); try { await saveHouse(result.houseId); } catch { return response.status(503).json({ message: "Convite indisponível no momento." }); } if (activeUserSockets.has(user.id)) social.setPresence(result.houseId, user.id, "ONLINE"); emitHouse(result.houseId); return response.json(result); });
 app.post("/api/houses/:houseId/invites", async (request, response) => {
   const user = requireHousePermission(request, response, "INVITE_CREATE"); if (!user) return;
   const parsed = z.object({ expiresInHours: z.union([z.literal(1), z.literal(24), z.literal(168)]), maxUses: z.number().int().min(1).max(100).default(1), role: houseRoleSchema.optional() }).safeParse(request.body); if (!parsed.success) return response.status(400).json({ message: "Configuração de convite inválida." });
@@ -762,7 +777,7 @@ const roomConnections = new Map<string, Map<string, Set<string>>>();
 const offlineTimers = new Map<string, NodeJS.Timeout>();
 const activeUserSockets = new Map<string, Set<string>>();
 const accountOfflineTimers = new Map<string, NodeJS.Timeout>();
-const refreshAccountPresence = (userId: string, status: "ONLINE" | "IDLE" | "OFFLINE") => { social.setPresenceForUser(userId, status); for (const house of social.listForUser(userId)) emitHouse(house.id); };
+const refreshAccountPresence = (userId: string, status: "ONLINE" | "IDLE" | "OFFLINE") => { for (const houseId of social.setPresenceForUser(userId, status)) emitHouse(houseId); };
 const persistLastSeen = async (userId: string) => {
   if (!db) return;
   const at = new Date();
@@ -1152,7 +1167,7 @@ io.on("connection", (socket) => {
     log("info", "socket_disconnected", { userId: user.id, connectionId: socket.id, roomId: joinedRoomId ?? "none", activeSockets: io.engine.clientsCount });
     homeStateBySocket.delete(socket.id);
     const userSockets = activeUserSockets.get(user.id); userSockets?.delete(socket.id);
-    if (!userSockets?.size) { activeUserSockets.delete(user.id); const prior = accountOfflineTimers.get(user.id); if (prior) clearTimeout(prior); accountOfflineTimers.set(user.id, setTimeout(() => { if (activeUserSockets.has(user.id)) return; refreshAccountPresence(user.id, "OFFLINE"); void persistLastSeen(user.id).catch(() => log("warn", "last_seen_write_failed", { userId: user.id })); accountOfflineTimers.delete(user.id); }, 5_000)); }
+    if (!userSockets?.size) { activeUserSockets.delete(user.id); const prior = accountOfflineTimers.get(user.id); if (prior) clearTimeout(prior); const timer = setTimeout(() => { if (accountOfflineTimers.get(user.id) !== timer) return; accountOfflineTimers.delete(user.id); if (activeUserSockets.has(user.id)) return; refreshAccountPresence(user.id, "OFFLINE"); void persistLastSeen(user.id).catch(() => log("warn", "last_seen_write_failed", { userId: user.id })); }, 5_000); accountOfflineTimers.set(user.id, timer); }
     if (socket.data.deletedHouseRoomId === joinedRoomId) return;
     if (!joinedRoomId) return;
     const roomId = joinedRoomId; leaveCall(roomId, user, socket.id);
@@ -1160,7 +1175,7 @@ io.on("connection", (socket) => {
     if (wasSharing) { screenOwnerSockets.delete(roomId); store.stopScreenShare(roomId, user.id); io.to(roomId).emit("screen:state", null); if (house) { social.setPresence(house.id, user.id, "ONLINE", { screenSharing: false }); emitHouse(house.id); } }
     const remaining = unregisterConnection(roomId, user.id, socket.id); if (remaining) return;
     games.presence(roomId, user.id, false);
-    const key = `${roomId}:${user.id}`; offlineTimers.set(key, setTimeout(() => { if ((roomConnections.get(roomId)?.get(user.id)?.size ?? 0) > 0) return; store.removeMember(roomId, user.id); if (house) { social.setPresence(house.id, user.id, activeUserSockets.has(user.id) ? "ONLINE" : "OFFLINE", { inParty: false, inCall: false, speaking: false, screenSharing: false }); emitHouse(house.id); } emitSnapshot(roomId); offlineTimers.delete(key); }, 5_000));
+    const key = `${roomId}:${user.id}`; const priorPartyTimer = offlineTimers.get(key); if (priorPartyTimer) clearTimeout(priorPartyTimer); const timer = setTimeout(() => { if (offlineTimers.get(key) !== timer) return; offlineTimers.delete(key); if ((roomConnections.get(roomId)?.get(user.id)?.size ?? 0) > 0) return; store.removeMember(roomId, user.id); if (house && social.isMember(house.id, user.id)) { social.setPresence(house.id, user.id, activeUserSockets.has(user.id) ? "ONLINE" : "OFFLINE", { inParty: false, inCall: false, speaking: false, screenSharing: false }); emitHouse(house.id); } emitSnapshot(roomId); }, 5_000); offlineTimers.set(key, timer);
   });
 });
 

@@ -106,3 +106,23 @@ test("account presence does not clear Party, Call, or screen share flags", () =>
   assert.equal(presence.presence, "IDLE");
   assert.equal(presence.inParty, true); assert.equal(presence.inCall, true); assert.equal(presence.speaking, true); assert.equal(presence.screenSharing, true);
 });
+
+test("S2 lastSeen is per membership and changes only on effective offline transition", () => {
+  const store = new SocialStore(); const first = store.createHouse(host, "Primeira"); const second = store.createHouse(host, "Segunda");
+  const original = store.details(first.id, host.id)!.members[0].lastSeenAt;
+  const secondOriginal = store.details(second.id, host.id)!.members[0].lastSeenAt;
+  assert.deepEqual(store.setPresenceForUser(host.id, "ONLINE").sort(), [first.id, second.id].sort());
+  store.setPresence(first.id, host.id, "ONLINE", { inParty: true });
+  store.setPresenceForUser(host.id, "IDLE");
+  assert.equal(store.details(first.id, host.id)!.members[0].lastSeenAt, original);
+  assert.equal(store.details(second.id, host.id)!.members[0].lastSeenAt, secondOriginal);
+  assert.deepEqual(store.setPresenceForUser(host.id, "OFFLINE").sort(), [first.id, second.id].sort());
+  const seen = store.details(first.id, host.id)!.members[0].lastSeenAt;
+  assert.equal(store.details(second.id, host.id)!.members[0].lastSeenAt, seen);
+  assert.deepEqual(store.setPresenceForUser(host.id, "OFFLINE"), []);
+  store.setPresence(first.id, host.id, "OFFLINE", { inParty: false });
+  assert.equal(store.details(first.id, host.id)!.members[0].lastSeenAt, seen, "Party grace cleanup does not rewrite lastSeen");
+  store.setPresenceForUser(host.id, "ONLINE");
+  assert.equal(store.details(first.id, host.id)!.members[0].lastSeenAt, seen);
+  assert.equal(store.summary(first, host.id).partyCount, 0);
+});

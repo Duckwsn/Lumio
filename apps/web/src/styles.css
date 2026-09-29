@@ -1341,6 +1341,9 @@ html[data-compact-viewport] .mobile-party.game-mode:has(.chat-form:focus-within)
 .settings-members select { max-width:150px; }
 .social-dialog .settings-members .avatar { width:36px; height:36px; flex:none; }
 .social-dialog .settings-members small,.social-dialog .role-badge { font-size:12px; }
+.social-dialog .settings-members .member-presence { color:var(--text-soft); font-size:12px; line-height:1.4; }
+.social-dialog .settings-members .member-presence-party { color:#a5d9b8; }
+.social-dialog .settings-members .member-presence-offline { color:var(--text-soft); }
 .social-dialog .settings-tabs button { min-height:44px; font-size:13px; }
 .houses-v2 .home-account>div { min-width:0; }
 .houses-v2 .home-presence-pending { color:var(--text-soft); font-size:14px; line-height:1.5; margin-bottom:20px; }
@@ -1354,4 +1357,8 @@ html[data-compact-viewport] .mobile-party.game-mode:has(.chat-form:focus-within)
   .social-dialog .settings-members li { flex-wrap:wrap; }
   .social-dialog .settings-members li>div { flex:1; min-width:140px; }
   .social-dialog .settings-tabs { flex-wrap:wrap; }
+}
+@media (max-width:480px) {
+  .social-dialog .settings-members li:has(> select)>div { flex:1 1 calc(100% - 48px); }
+  .social-dialog .settings-members li:has(> select)>.icon-button { min-width:44px; min-height:44px; }
 }

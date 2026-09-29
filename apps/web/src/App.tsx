@@ -79,6 +79,9 @@ export function App() {
   const [homeConnected, setHomeConnected] = useState(false);
   useEffect(() => { if (!homeNotice) return; const timer = window.setTimeout(() => setHomeNotice(""), 4_000); return () => window.clearTimeout(timer); }, [homeNotice]);
   const [houses, setHouses] = useState<HouseSummary[]>([]);
+  const [homeHouseUpdate, setHomeHouseUpdate] = useState<HouseDetails | null>(null);
+  const [homeConnectionEpoch, setHomeConnectionEpoch] = useState(0);
+  const homeHouseSignature = useRef(new Map<string, string>());
   const [house, setHouse] = useState<HouseDetails | null>(null);
   const [snapshot, setSnapshot] = useState<RoomSnapshot | null>(null);
   const [socket, setSocket] = useState<TypedSocket | null>(null);
@@ -220,7 +223,13 @@ export function App() {
     if (authStatus !== "authenticated" || routeHouseId || inviteToken || (pathname !== "/app" && pathname !== "/") || !session) return;
     const homeSocket: TypedSocket = io(SOCKET_URL, socketOptions(session.token));
     setHomeConnected(false);
-    homeSocket.on("home:update", (next) => { houseRequestVersion.current += 1; setHouses(next); setHousesError(""); setHomeConnected(true); });
+    homeSocket.on("connect", () => { homeHouseSignature.current.clear(); setHomeConnectionEpoch((value) => value + 1); });
+    homeSocket.on("home:update", (next) => { const ids = new Set(next.map((house) => house.id)); for (const id of homeHouseSignature.current.keys()) if (!ids.has(id)) homeHouseSignature.current.delete(id); houseRequestVersion.current += 1; setHouses(next); setHousesError(""); setHomeConnected(true); });
+    homeSocket.on("house:update", (next) => {
+      const signature = JSON.stringify({ ...next, members: next.members.map((member) => ({ user: member.user, role: member.role, presence: member.presence, inParty: member.inParty, joinedAt: member.joinedAt, lastSeenAt: member.lastSeenAt })) });
+      if (homeHouseSignature.current.get(next.id) === signature) return;
+      homeHouseSignature.current.set(next.id, signature); setHomeHouseUpdate(next);
+    });
     homeSocket.on("disconnect", () => setHomeConnected(false));
     homeSocket.on("connect_error", () => setHomeConnected(false));
     homeSocket.on("profile:update", (user) => setSession((current) => { if (!current || current.user.id !== user.id) return current; const updated = { ...current, user }; localStorage.setItem(SESSION_KEY, JSON.stringify(updated)); return updated; }));
@@ -765,7 +774,7 @@ export function App() {
   }
   if (inviteToken) return <InvitePage apiUrl={API_URL} token={inviteToken} session={session} navigate={navigate} onAccepted={acceptedInvite} />;
   if (pathname === "/account") return <Suspense fallback={<BootstrapPage onRetry={() => undefined} />}><AccountPage apiUrl={API_URL} token={session.token} onBack={() => navigate("/app")} /></Suspense>;
-  if (!routeHouseId) return <><HomePage connected={homeConnected} apiUrl={API_URL} token={session.token} user={session.user} houses={houses} error={housesError} onRetry={() => void refreshHouses()} onOpenHouse={openHouse} onCreate={createHomeHouse} onInvite={openInviteInput} onAccount={() => navigate("/account")} onLogout={logout} />{homeNotice ? <div className="home-notice" role="status">{homeNotice}</div> : null}</>;
+  if (!routeHouseId) return <><HomePage connected={homeConnected} liveHouse={homeHouseUpdate} connectionEpoch={homeConnectionEpoch} apiUrl={API_URL} token={session.token} user={session.user} houses={houses} error={housesError} onRetry={() => void refreshHouses()} onOpenHouse={openHouse} onCreate={createHomeHouse} onInvite={openInviteInput} onAccount={() => navigate("/account")} onLogout={logout} />{homeNotice ? <div className="home-notice" role="status">{homeNotice}</div> : null}</>;
   if (!houses.some((item) => item.id === routeHouseId)) return <main className="loading-screen"><LumioLogo /><h1>Casa indisponível</h1><p>Você não faz parte desta Casa.</p><button onClick={() => navigate("/app")}>Voltar para suas Casas</button></main>;
   if (!snapshot || snapshot.id !== selectedHouse?.primaryRoomId) return <LoadingScreen user={session.user} connectionState={connectionState} error={entryError} onBack={() => navigate("/app")} />;
 

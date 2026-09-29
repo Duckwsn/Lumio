@@ -8,6 +8,19 @@ import { HomePage } from "./components/EntryExperience";
 import { parseInviteInput } from "./inviteInput.js";
 import { MainStage } from "./components/MainStage";
 import { GameHub } from "./components/GameHub";
+import { memberPresenceLabel, memberPreviewName, sortHouseMembers } from "./presence";
+
+test("S2 labels online/Party/last seen independently and keeps stable member order", () => {
+  const now = Date.parse("2026-09-29T18:00:00.000Z");
+  const member = (id: string, presence: "ONLINE" | "OFFLINE", inParty: boolean, minutes: number) => ({ user: { id, displayName: id, color: "#fff" }, role: "MEMBER" as const, presence, inParty, lastSeenAt: new Date(now - minutes * 60_000).toISOString(), joinedAt: `2026-09-29T00:0${id.length}:00Z`, inCall: false, speaking: false, screenSharing: false });
+  const offline = member("old", "OFFLINE", false, 120), online = member("new", "ONLINE", false, 100), party = member("party", "ONLINE", true, 90);
+  assert.equal(memberPresenceLabel(party, now), "Na Party"); assert.equal(memberPresenceLabel(online, now), "Online");
+  assert.equal(memberPresenceLabel(offline, now), "Visto há 2 h");
+  assert.equal(memberPresenceLabel(member("recent", "OFFLINE", false, 2), now), "Visto recentemente");
+  assert.deepEqual(sortHouseMembers([offline, online, party]).map((entry) => entry.user.id), ["party", "new", "old"]);
+  assert.equal(memberPreviewName("G1 Visual Bia"), "G1 B.");
+  assert.equal(memberPreviewName("Ana"), "Ana");
+});
 
 test("post-login destination rejects cross-origin and protocol-relative redirects", () => {
   const origin = "https://lumio.example.test";

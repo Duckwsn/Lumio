@@ -9,6 +9,7 @@ const freePort = () => new Promise((resolve) => { const server = net.createServe
 async function stop() { sockets.forEach((socket) => socket.disconnect()); children.forEach((child) => child.kill()); await new Promise((resolve) => setTimeout(resolve, 500)); fs.rmSync(directory, { recursive: true, force: true }); process.exit(); }
 process.on("SIGINT", stop); process.on("SIGTERM", stop);
 async function main() {
+  const presenceFixture = process.argv.includes("--presence");
   const apiPort = await freePort(), webPort = await freePort();
   const api = `http://127.0.0.1:${apiPort}`, origin = `http://127.0.0.1:${webPort}`;
   const outbox = path.join(directory, "mail.jsonl");
@@ -19,7 +20,7 @@ async function main() {
   await wait(origin);
   const request = (route, token, body) => fetch(api + route, { method: "POST", headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: JSON.stringify(body) });
   const sessions = [];
-  for (const displayName of ["G1 Visual Host", "G1 Visual Bia", "G1 Visual Caio"]) {
+  for (const displayName of ["G1 Visual Host", "G1 Visual Bia", "G1 Visual Caio", ...(presenceFixture ? ["Visitante Com Nome Muito Longo"] : [])]) {
     const email = displayName.replaceAll(" ", "").toLowerCase() + "@example.test", password = "local-visual-draw-123";
     if ((await request("/api/auth/signup", undefined, { displayName, email, password })).status !== 201) throw new Error("QA signup failed");
     const link = JSON.parse(fs.readFileSync(outbox, "utf8").trim().split("\n").at(-1)).text.match(/https?:\/\/\S+/)[0];
@@ -27,9 +28,10 @@ async function main() {
     sessions.push(await (await request("/api/auth/login", undefined, { email, password })).json());
   }
   const { house } = await (await request("/api/houses", sessions[0].token, { name: "G1 Visual QA" })).json();
-  const { invite } = await (await request(`/api/houses/${house.id}/invites`, sessions[0].token, { maxUses: 3, expiresInHours: 1 })).json();
+  const { invite } = await (await request(`/api/houses/${house.id}/invites`, sessions[0].token, { maxUses: sessions.length, expiresInHours: 1 })).json();
   for (const session of sessions.slice(1)) {
     await request(`/api/invites/${invite.token}/accept`, session.token, {});
+    if (presenceFixture && session === sessions.at(-1)) continue;
     const socket = io(api, { transports: ["websocket"], auth: { token: session.token }, extraHeaders: { Origin: origin } }); sockets.push(socket);
     socket.on("connect", () => socket.emit("room:join", { roomId: house.primaryRoomId, user: session.user }));
     socket.on("game:snapshot", (state) => { if (state?.phase === "LOBBY" && !state.players.some((player) => player.id === session.user.id)) socket.emit("game:action", { type: "join", roomId: state.roomId, sessionId: state.sessionId, roundId: state.roundId, revision: state.revision }, () => {}); });

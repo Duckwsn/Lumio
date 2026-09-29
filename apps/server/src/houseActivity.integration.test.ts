@@ -8,7 +8,7 @@ import path from "node:path";
 import { io, type Socket } from "socket.io-client";
 import type { GameAck, HouseSummary, PartyGameSnapshot, RoomSnapshot, User } from "@lumio/shared";
 
-test("S1 authenticated Home observers: multi-House isolation, all games, share, reconnect, revocation and cleanup", { timeout: 60000 }, async (context) => {
+test("S1/S2 authenticated Home observers: multi-House isolation, presence, games, reconnect and cleanup", { timeout: 90000 }, async (context) => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "lumio-houses-s1-"));
   const port = await new Promise<number>((resolve) => { const server = net.createServer(); server.listen(0, "127.0.0.1", () => { const port = (server.address() as net.AddressInfo).port; server.close(() => resolve(port)); }); });
   const outbox = path.join(directory, "mail.jsonl"), origin = "http://127.0.0.1:5173", api = `http://127.0.0.1:${port}`;
@@ -41,8 +41,26 @@ test("S1 authenticated Home observers: multi-House isolation, all games, share, 
     await until(() => socket.connected && summaries[i].length > 0); return socket;
   };
   for (let i = 0; i < 4; i++) await connect(i);
+  const liveHouse = (await (await request("/api/houses", sessions[0].token, { name: "Casa Ao Vivo" })).json()).house;
+  assert.equal(liveHouse.onlineCount, 1, "creating a House while connected projects the founder online");
+  const liveInvite = (await (await request(`/api/houses/${liveHouse.id}/invites`, sessions[0].token, { maxUses: 2, expiresInHours: 1 })).json()).invite;
+  assert.equal((await request(`/api/invites/${liveInvite.code}/accept`, sessions[2].token)).status, 200);
+  await until(() => summaries[2].find((entry) => entry.id === liveHouse.id)?.onlineCount === 2);
+  assert.equal((await request(`/api/houses/${liveHouse.id}`, sessions[0].token, undefined, "DELETE")).status, 204);
+  await until(() => !summaries[2].some((entry) => entry.id === liveHouse.id));
   const current = () => summaries[2].find((h) => h.id === x.id)!;
   assert.equal(current().partyCount, 0); assert.equal(current().onlineCount, 3);
+  const beforeSeen = (await (await request(`/api/houses/${x.id}`, sessions[0].token, undefined, "GET")).json()).house.members.find((m: { user: User }) => m.user.id === sessions[2].user.id).lastSeenAt;
+  sockets[2].disconnect(); await new Promise((r) => setTimeout(r, 700));
+  assert.equal(summaries[0].find((h) => h.id === x.id)?.onlineCount, 3, "short disconnect stays online during grace");
+  await connect(2); await new Promise((r) => setTimeout(r, 5_200));
+  assert.equal(summaries[0].find((h) => h.id === x.id)?.onlineCount, 3, "stale account timer cannot defeat reconnect");
+  sockets[2].disconnect(); await until(() => summaries[0].find((h) => h.id === x.id)?.onlineCount === 2);
+  const afterSeen = (await (await request(`/api/houses/${x.id}`, sessions[0].token, undefined, "GET")).json()).house.members.find((m: { user: User }) => m.user.id === sessions[2].user.id).lastSeenAt;
+  assert.ok(Date.parse(afterSeen) > Date.parse(beforeSeen), "lastSeen advances on actual offline transition");
+  await connect(2); await until(() => current().onlineCount === 3);
+  const onlineSeen = (await (await request(`/api/houses/${x.id}`, sessions[0].token, undefined, "GET")).json()).house.members.find((m: { user: User }) => m.user.id === sessions[2].user.id).lastSeenAt;
+  assert.equal(onlineSeen, afterSeen, "reconnect does not overwrite lastSeen");
   assert.deepEqual(summaries[0].map((h) => h.id).sort(), [x.id, y.id].sort()); assert.deepEqual(summaries[3].map((h) => h.id), [y.id]);
   assert.equal((await request(`/api/houses/${x.id}`, sessions[3].token, undefined, "GET")).status, 404);
   const denied = new Promise<void>((resolve) => sockets[3].once("server:error", () => resolve()));
@@ -51,6 +69,13 @@ test("S1 authenticated Home observers: multi-House isolation, all games, share, 
   let room: RoomSnapshot | null = null;
   sockets[0].on("room:snapshot", (s) => { room = s; });
   for (let i = 0; i < 2; i++) { const joined = new Promise<void>((r) => sockets[i].once("room:snapshot", () => r())); sockets[i].emit("room:join", { roomId: x.primaryRoomId, user: sessions[i].user }); await joined; await until(() => current().partyCount === i + 1); }
+  const secondTab = io(api, { transports: ["websocket"], auth: { token: sessions[0].token }, extraHeaders: { Origin: origin } }); sockets.push(secondTab);
+  await until(() => secondTab.connected); assert.equal(current().onlineCount, 3, "second tab is not another person");
+  const secondJoined = new Promise<void>((resolve) => secondTab.once("room:snapshot", () => resolve()));
+  secondTab.emit("room:join", { roomId: x.primaryRoomId, user: sessions[0].user }); await secondJoined;
+  assert.equal(current().partyCount, 2, "two Party tabs count as one person");
+  secondTab.disconnect(); await new Promise((r) => setTimeout(r, 5_200));
+  assert.equal(current().onlineCount, 3); assert.equal(current().partyCount, 2, "first Party tab keeps account and Party presence");
   const before = JSON.stringify({ media: room!.currentMedia, queue: room!.queue });
   sockets[2].disconnect(); await connect(2); assert.equal(current().partyCount, 2);
   assert.equal(JSON.stringify({ media: room!.currentMedia, queue: room!.queue }), before);
@@ -93,7 +118,13 @@ test("S1 authenticated Home observers: multi-House isolation, all games, share, 
   assert.equal((await sockets[0].timeout(3000).emitWithAck("media:change", { roomId: x.primaryRoomId, item: badTitle })).ok, true);
   await until(() => current().nowPlaying?.title === "mídia");
   assert.doesNotMatch(JSON.stringify(current()), /private\.example|token=secret/);
-  assert.doesNotMatch(JSON.stringify(traffic), /secretWord|choices|correctAnswer|correctIndex|ownAnswer|myHand|legalCardIds|deck|pending|accessToken|ticket|grant|streamUrl|email/);
+  assert.doesNotMatch(JSON.stringify(traffic), /secretWord|choices|correctAnswer|correctIndex|ownAnswer|myHand|legalCardIds|deck|pending|accessToken|ticket|grant|streamUrl|email|socketId|sessionId|userAgent|device|ipAddress|oauth/i);
+  const publicDetails = await (await request(`/api/houses/${x.id}`, sessions[2].token, undefined, "GET")).json();
+  assert.doesNotMatch(JSON.stringify(publicDetails.house.members), /email|socketId|userAgent|device|ipAddress|oauth|accessToken/i);
+  const logoutStarted = Date.now();
+  assert.equal((await request("/api/auth/logout", sessions[1].token, {})).status, 204);
+  await until(() => current().partyCount === 1 && current().onlineCount === 2);
+  assert.ok(Date.now() - logoutStarted < 4_000, "explicit logout clears the last session and Party without waiting for grace");
   assert.equal((await request(`/api/houses/${x.id}/members/${sessions[2].user.id}`, sessions[0].token, undefined, "DELETE")).status, 204);
   await until(() => summaries[2].length === 0); assert.equal((await request(`/api/houses/${x.id}`, sessions[2].token, undefined, "GET")).status, 404);
   sockets[0].disconnect(); sockets[1].disconnect(); await until(() => summaries[0].length > 0 && summaries[3][0].partyCount === 0);

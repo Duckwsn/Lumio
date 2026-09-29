@@ -98,15 +98,19 @@ export class SocialStore {
     return user;
   }
   setPresenceForUser(userId: string, presence: PresenceStatus) {
+    const changed: string[] = [];
+    const lastSeenAt = presence === "OFFLINE" ? new Date().toISOString() : undefined;
     for (const house of this.houses.values()) {
       const member = house.members.get(userId);
-      if (member) { member.presence = presence; member.lastSeenAt = new Date().toISOString(); }
+      if (member && member.presence !== presence) { member.presence = presence; if (lastSeenAt) member.lastSeenAt = lastSeenAt; changed.push(house.id); }
     }
+    return changed;
   }
   updateHouse(houseId: string, name: string, avatar?: string) { const h = this.houses.get(houseId); if (!h) return null; h.name = name.trim(); h.avatar = avatar; return h; }
   setPresence(houseId: string, userId: string, presence: PresenceStatus, patch: Partial<Pick<HouseMember, "inParty" | "inCall" | "speaking" | "screenSharing">> = {}) {
     const member = this.houses.get(houseId)?.members.get(userId); if (!member) return null;
-    Object.assign(member, patch); member.presence = presence; member.lastSeenAt = new Date().toISOString(); return member;
+    const becameOffline = member.presence !== "OFFLINE" && presence === "OFFLINE";
+    Object.assign(member, patch); member.presence = presence; if (becameOffline) member.lastSeenAt = new Date().toISOString(); return member;
   }
 
   createInvite(houseId: string, actor: User, input: { expiresInHours: 1 | 24 | 168; maxUses: number; role?: HouseRole }) {
