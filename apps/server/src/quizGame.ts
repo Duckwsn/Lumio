@@ -105,8 +105,8 @@ export class QuizGameRuntime {
   }
   presence(roomId: string, userId: string, online: boolean) {
     const s = this.sessions.get(roomId); if (!s) return;
-    const p = s.public.players.find((player) => player.id === userId); if (!p || !s.active.has(userId)) return;
-    p.online = online; if (online) s.offline.delete(userId); else s.offline.set(userId, this.now() + 5000);
+    const p = s.public.players.find((player) => player.id === userId); if ((!p || !s.active.has(userId)) && s.public.hostId !== userId) return;
+    if (p) p.online = online; if (online) s.offline.delete(userId); else s.offline.set(userId, this.now() + 5000);
     s.public.revision++; this.early(s); this.notify(roomId);
   }
   tick() {

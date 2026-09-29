@@ -151,6 +151,13 @@ Uma tarefa está pronta quando:
 - Presença online da conta, presença na Party e presença na Call são eixos distintos. Múltiplas abas e grace period de cinco segundos evitam flapping.
 - Google Identity autentica a conta Lumio e não concede acesso ao Google Drive. Consulte `docs/SOCIAL_ARCHITECTURE.md`.
 
+## Houses V2 / resumo de atividade
+
+- Home continua usando apenas o socket autenticado leve e GET/refresh; nunca faz `room:join`, Call ou captura de dispositivo para mostrar atividade. `HouseSummary.partyActivity` é projeção pública no servidor, não snapshot de Game/Room/Drive.
+- Party ativa significa pelo menos uma identidade com `inParty`; online na Casa é eixo separado. Resumo: share ativo > jogo em fase de partida > mídia tocando > Party ocupada. Lobby/resultado não equivalem a jogo em andamento; “Partida X ativa” não afirma que todos veem o jogo, pois MainStage é local.
+- Mudanças de mídia relevantes para Home emitem resumo, mas seek/playhead, strokes, timer, cartas, typing e speaking não. Deduplicate payload por socket. Em reconnect, indique que o último resumo está desatualizado até receber projeção nova; restart não restaura game/share efêmeros.
+- O card recebe somente até três membros públicos e rótulo público de atividade. Não transportar secretWord/answers/hands, tokens, tickets, grants, URLs de stream ou metadados privados. Sem migration/presence persistida por heartbeat. Veja `POST_1_0_S1_HOUSES_V2_REPORT.md`.
+
 ## Media Experience V3
 
 - Use `QueueItem.id` para distinguir ocorrências repetidas da mesma mídia. `provider + providerMediaId` identifica a mídia canônica, não a posição na fila.
@@ -218,5 +225,10 @@ Uma tarefa está pronta quando:
 - Servidor valida session/round/revision exatos, fase, turno, deadline, ownership, legalidade e cor. Última! acompanha a jogada atomicamente; efeito final precede winner. Sem stacking/challenge; compra jogável exige decisão explícita, timeout não joga automaticamente.
 - Reconexão preserva mão própria/deadline, não repete jogada. Desconexão não recicla mão; leave explícito recicla e revoga participação. Timer local não publica ticks. Mão mobile tem scroll local/toque/confirmar e fullscreen em paisagem, sem remontar Chat/Call/Media.
 - QA determinístico permanece em harness local descartável, sem flags/endpoints de debug em produção. Leia `POST_1_0_G5_LUMIO_CARD_GAME_REPORT.md` para regras, evidências e limites de QA real.
+
+## Party Games G6 / reconexão
+
+- Uma queda breve conserva a última projeção autorizada na superfície do jogo e os metadados públicos de papel/rodada no Chat; ações e palpites aguardam a projeção autenticada recuperada. Não repetir mutações após timeout de ack. Retornar ao Hub/Mídia não envia leave/end.
+- Bloqueio de clique não deve serializar lotes de desenho nem impedir sync de recuperação. Foco de escolha de palavra/cor ocorre após controles serem habilitados. Coordenador que abriu o lobby sem participar também entra na tolerância existente de desconexão e pode transferir coordenação após ela.
 - Configure/start/rematch/end validam autoridade e revisão exata. Answer permite revisão não-futura apenas da mesma session/round, uma vez por ativo online, antes do deadline; cliente não determina acerto/pontos. Reconnect conserva lock, espectadores/offline não bloqueiam early finish.
 - Banco PT-BR estável é privado; seleção sem repetição na partida, ordem de quatro alternativas única para todos. Não importar banco no frontend. Timer visual não envia eventos por segundo. Consulte `POST_1_0_G4_PARTY_GAMES_EXPANSION_QUIZ_REPORT.md` para fórmula, limites e QA manual.

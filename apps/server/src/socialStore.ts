@@ -72,7 +72,9 @@ export class SocialStore {
 
   listForUser(userId: string): HouseSummary[] { return [...this.houses.values()].filter((h) => h.members.has(userId)).map((h) => this.summary(h, userId)); }
   summary(house: HouseRecord, userId: string): HouseSummary {
-    return { id: house.id, name: house.name, initials: initials(house.name), avatar: house.avatar, role: house.members.get(userId)?.role ?? "MEMBER", memberCount: house.members.size, onlineCount: [...house.members.values()].filter((m) => m.presence !== "OFFLINE").length, partyCount: [...house.members.values()].filter((m) => m.inParty).length, primaryRoomId: house.primaryRoomId };
+    const members = [...house.members.values()];
+    const memberPreview = members.sort((a, b) => Number(b.inParty) - Number(a.inParty) || Number(b.presence !== "OFFLINE") - Number(a.presence !== "OFFLINE") || a.joinedAt.localeCompare(b.joinedAt)).slice(0, 3).map((m) => ({ id: m.user.id, displayName: m.user.displayName, avatar: m.user.avatar, color: m.user.color, presence: m.presence, inParty: m.inParty }));
+    return { id: house.id, name: house.name, initials: initials(house.name), avatar: house.avatar, role: house.members.get(userId)?.role ?? "MEMBER", memberCount: house.members.size, onlineCount: members.filter((m) => m.presence !== "OFFLINE").length, partyCount: members.filter((m) => m.inParty).length, primaryRoomId: house.primaryRoomId, memberPreview };
   }
   details(houseId: string, userId: string): HouseDetails | null {
     const house = this.houses.get(houseId); const membership = house?.members.get(userId); if (!house || !membership) return null;

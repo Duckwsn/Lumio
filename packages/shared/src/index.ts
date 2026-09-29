@@ -57,10 +57,22 @@ export const houseMemberSchema = z.object({
 });
 export type HouseMember = z.infer<typeof houseMemberSchema>;
 
+export const housePartyActivitySchema = z.object({
+  type: z.enum(["idle", "party", "media", "game", "screen"]),
+  label: z.string().max(180),
+  gameType: z.enum(["draw", "quiz", "cards"]).optional(),
+}).strict();
+export type HousePartyActivity = z.infer<typeof housePartyActivitySchema>;
+
 export const houseSummarySchema = z.object({
   id: z.string(), name: z.string(), initials: z.string(), avatar: z.string().optional(),
   role: houseRoleSchema, memberCount: z.number(), onlineCount: z.number(), partyCount: z.number(), primaryRoomId: z.string(),
   nowPlaying: z.object({ title: z.string(), provider: mediaProviderSchema }).nullable().optional(),
+  partyActivity: housePartyActivitySchema.optional(),
+  memberPreview: z.array(z.object({
+    id: z.string(), displayName: z.string(), avatar: z.string().optional(), color: z.string(),
+    presence: presenceStatusSchema, inParty: z.boolean(),
+  }).strict()).max(3).optional(),
 });
 export type HouseSummary = z.infer<typeof houseSummarySchema>;
 

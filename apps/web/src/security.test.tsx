@@ -46,6 +46,16 @@ test("game presentation keeps the existing YouTube surface visible instead of ba
   assert.equal((html.match(/<iframe/g) ?? []).length, 1);
   assert.equal(html.includes("Iniciar jogo"), false);
 });
+
+test("S1 Home distinguishes Party occupancy, online members and escaped activity", () => {
+  const house: HouseSummary = { id: "x", name: "Casa X", initials: "CX", role: "MEMBER", memberCount: 4, onlineCount: 3, partyCount: 2, primaryRoomId: "r", partyActivity: { type: "game", gameType: "quiz", label: "Partida de Quiz ativa" }, memberPreview: [{ id: "a", displayName: "Ana", color: "#fff", presence: "ONLINE", inParty: true }] };
+  const props = { user: { id: "u", displayName: "User", color: "#fff" }, onRetry: () => undefined, onOpenHouse: () => undefined, onCreate: async () => undefined, onInvite: () => false, onAccount: () => undefined, onLogout: () => undefined };
+  const html = renderToStaticMarkup(createElement(HomePage, { ...props, houses: [house] }));
+  assert.match(html, /2 pessoas na Party/); assert.match(html, /3 membros online/); assert.match(html, /Partida de Quiz ativa/); assert.match(html, /Entrar na Party/); assert.match(html, /Casa e membros/); assert.doesNotMatch(html, /Convidar pessoas/);
+  const idle = renderToStaticMarkup(createElement(HomePage, { ...props, houses: [{ ...house, partyCount: 0 }] })); assert.match(idle, /Abrir Party/); assert.doesNotMatch(idle, /Partida de Quiz ativa/);
+  const empty = renderToStaticMarkup(createElement(HomePage, { ...props, houses: [], error: "Falhou" })); assert.match(empty, /Tentar novamente/); assert.doesNotMatch(empty, /Crie uma Casa ou entre/);
+  const stale = renderToStaticMarkup(createElement(HomePage, { ...props, houses: [house], connected: false })); assert.match(stale, /último estado recebido/);
+});
   test("Game Hub shows three real games with original vector identity and concise accessible copy", () => {
   const html = renderToStaticMarkup(createElement(GameHub, { onBack: () => undefined, onFullscreen: () => undefined, fullscreen: false }));
   assert.equal((html.match(/class="draw-entry"/g) ?? []).length, 1);

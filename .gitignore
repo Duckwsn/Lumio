@@ -9,6 +9,8 @@ dist
 coverage
 test-results/
 playwright-report/
+/artifacts/g6/
+/artifacts/s1/
 *.tsbuildinfo
 apps/server/prisma/dev.db
 *.db-journal

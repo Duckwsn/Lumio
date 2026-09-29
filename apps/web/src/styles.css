@@ -1270,3 +1270,88 @@ svg { flex:none; }
   .main-stage:is(:fullscreen,.game-fallback-fullscreen) .game-session-tools { margin-top:0; }
 }
 @media(prefers-reduced-motion:reduce) { .lumio-card { transition:none; } }
+
+/* G6: small shared feedback surfaces, not a parallel game layout system. */
+.game-active-session { display:flex; flex-shrink:0; align-items:center; justify-content:space-between; gap:8px; padding:10px; margin-top:8px; border:1px solid var(--border-strong); border-radius:10px; background:var(--surface-2); }
+.game-active-session>div { min-width:0; overflow-wrap:anywhere; }
+.game-active-session strong,.game-active-session small { display:block; }
+.game-active-session small { color:var(--text-soft); font-size:12px; }
+.game-active-session button { flex-shrink:0; padding:8px; }
+.game-connection-notice { padding:8px; border:1px solid var(--border-strong); border-radius:8px; color:var(--text-soft); background:var(--surface-2); font-size:12px; line-height:1.4; }
+.game-lobby-status { font-size:13px; line-height:1.5; }
+.card-heading.is-own-turn { padding:6px 8px; border-left:3px solid var(--primary); background:var(--surface-2); border-radius:6px; }
+.card-heading time { font-variant-numeric:tabular-nums; }
+.card-heading time.is-ending { color:#dbac54; }
+.card-hand-hint { display:none; color:var(--text-soft); font-size:11px; }
+.card-rules summary { cursor:pointer; min-height:44px; display:flex; align-items:center; }
+.card-rules p { margin:0 0 8px; }
+.game-hub button:focus-visible,.game-hub summary:focus-visible,.game-hub select:focus-visible { outline:2px solid var(--primary); outline-offset:2px; }
+.game-hub button { touch-action:manipulation; }
+.game-hub .primary-button { border-radius:8px; padding:8px 12px; background:var(--primary); color:#101b14; font-weight:700; }
+.game-hub .primary-button:disabled { opacity:.55; }
+@media(max-width:900px) { .mobile-party .card-hand-hint { display:block; } }
+.game-mode .party-main:has(>.party-notice) { grid-template-rows:58px auto minmax(0,1fr); }
+.game-mode .party-notice { position:static; transform:none; max-width:100%; margin:4px 12px; justify-content:center; box-shadow:none; }
+.game-mode .party-notice button { width:44px; min-height:44px; flex-shrink:0; }
+.draw-finale,.quiz-finale { padding:16px 0; text-align:center; border-bottom:1px solid var(--border); overflow-wrap:anywhere; }
+.draw-finale h3,.quiz-finale h3,h3.quiz-finale { color:var(--primary); font-size:clamp(20px,2.5vw,26px); line-height:1.3; margin:8px 0; }
+@media(max-width:900px) and (min-height:600px) and (orientation:portrait) {
+  .mobile-party.game-mode .party-main:has(>.party-notice) .party-workspace[data-game-role=guesser] .party-content { flex-basis:clamp(160px,calc(var(--visual-height,100dvh) * .74 - 240px),340px); }
+  .mobile-party.game-mode:has(.draw-game):has(.draw-finale) .party-content { flex-basis:68%; }
+  .mobile-party.game-mode:has(.quiz-game[data-phase=RESULT]) .party-content { flex-basis:72%; }
+}
+html[data-compact-viewport] .mobile-party.game-mode:has(.chat-form:focus-within) .party-notice:not(.error) { display:none; }
+@media(orientation:landscape) and (max-height:500px) {
+  .main-stage:is(:fullscreen,.game-fallback-fullscreen) .quiz-game { gap:6px; padding:4px; }
+  .main-stage:is(:fullscreen,.game-fallback-fullscreen) .quiz-answers { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .main-stage:is(:fullscreen,.game-fallback-fullscreen) .quiz-heading h2 { font-size:18px; }
+  .main-stage:is(:fullscreen,.game-fallback-fullscreen) .quiz-question { font-size:18px; margin:4px 0; }
+}
+.houses-v2 .home-content { max-width:1040px; }
+.houses-v2 .home-content>header h1 { font-size:clamp(28px,5vw,48px); line-height:1.15; }
+.houses-v2 .house-grid { grid-template-columns:repeat(2,minmax(0,1fr)); gap:20px; }
+.houses-v2 .house-grid.one-house { grid-template-columns:minmax(0,680px); }
+.house-card-v2 { display:flex; flex-direction:column; min-width:0; padding:24px; border:1px solid var(--border); border-radius:16px; background:var(--surface); }
+.house-card-v2.occupied { border-color:#476755; }
+.house-card-v2>header { display:flex; align-items:center; gap:14px; }
+.house-card-v2>header>div { min-width:0; }
+.house-card-v2 h2 { margin:0 0 5px; font-size:22px; overflow-wrap:anywhere; }
+.house-card-v2>header p { margin:0; font-size:13px; color:var(--text-soft); }
+.house-card-v2 .house-card-avatar { flex:none; overflow:hidden; }
+.house-card-v2 .house-card-avatar img { width:100%; height:100%; object-fit:cover; }
+.house-member-preview { display:flex; align-items:start; gap:18px; margin:24px 0 18px; min-height:60px; }
+.house-member-preview>span { display:flex; flex-direction:column; align-items:center; gap:6px; max-width:80px; min-width:0; }
+.house-member-preview .avatar { width:36px; height:36px; }
+.house-member-preview small { max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--text-soft); font-size:12px; }
+.house-member-preview .house-more-members { align-self:center; color:var(--text-soft); }
+.house-party-summary { flex:1; min-width:0; margin-bottom:20px; }
+.house-party-summary strong { font-size:17px; }
+.house-party-summary p { display:flex; align-items:start; gap:8px; margin:8px 0 0; color:var(--text-soft); font-size:14px; line-height:1.5; overflow-wrap:anywhere; }
+.house-party-summary svg { flex:none; width:18px; height:18px; margin-top:2px; }
+.house-card-v2>button { display:flex; justify-content:center; align-items:center; gap:10px; min-height:46px; width:100%; }
+.house-open-idle { border:1px solid var(--border-strong); }
+.house-card-v2>footer { display:flex; flex-wrap:wrap; gap:4px 16px; margin-top:14px; }
+.house-card-v2>footer button { display:flex; align-items:center; gap:6px; min-height:44px; padding:4px 0; background:transparent; color:var(--text-soft); font-size:13px; }
+.house-card-v2>footer svg { width:17px; height:17px; }
+.houses-v2 .home-account { min-width:0; max-width:55%; }
+.houses-v2 .home-account strong { display:block; max-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.houses-v2 button:focus-visible { outline:2px solid var(--primary); outline-offset:4px; }
+.social-dialog h2,.settings-members strong { overflow-wrap:anywhere; }
+.settings-members li>div { min-width:0; }
+.settings-members select { max-width:150px; }
+.social-dialog .settings-members .avatar { width:36px; height:36px; flex:none; }
+.social-dialog .settings-members small,.social-dialog .role-badge { font-size:12px; }
+.social-dialog .settings-tabs button { min-height:44px; font-size:13px; }
+.houses-v2 .home-account>div { min-width:0; }
+.houses-v2 .home-presence-pending { color:var(--text-soft); font-size:14px; line-height:1.5; margin-bottom:20px; }
+.house-details-presence { color:var(--text-soft); font-size:13px; line-height:1.5; }
+@media (max-width:760px) {
+  .houses-v2 .house-grid { grid-template-columns:minmax(0,1fr); }
+  .house-card-v2 { padding:18px; }
+  .house-card-v2 h2 { font-size:20px; }
+  .houses-v2 .home-content { margin-top:36px; padding-bottom:max(24px,env(safe-area-inset-bottom)); }
+  .houses-v2 .home-account strong { max-width:120px; }
+  .social-dialog .settings-members li { flex-wrap:wrap; }
+  .social-dialog .settings-members li>div { flex:1; min-width:140px; }
+  .social-dialog .settings-tabs { flex-wrap:wrap; }
+}

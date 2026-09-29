@@ -76,6 +76,7 @@ export function App() {
   const [bootstrapError, setBootstrapError] = useState("");
   const [housesError, setHousesError] = useState("");
   const [homeNotice, setHomeNotice] = useState("");
+  const [homeConnected, setHomeConnected] = useState(false);
   useEffect(() => { if (!homeNotice) return; const timer = window.setTimeout(() => setHomeNotice(""), 4_000); return () => window.clearTimeout(timer); }, [homeNotice]);
   const [houses, setHouses] = useState<HouseSummary[]>([]);
   const [house, setHouse] = useState<HouseDetails | null>(null);
@@ -218,7 +219,10 @@ export function App() {
   useEffect(() => {
     if (authStatus !== "authenticated" || routeHouseId || inviteToken || (pathname !== "/app" && pathname !== "/") || !session) return;
     const homeSocket: TypedSocket = io(SOCKET_URL, socketOptions(session.token));
-    homeSocket.on("home:update", (next) => { houseRequestVersion.current += 1; setHouses(next); });
+    setHomeConnected(false);
+    homeSocket.on("home:update", (next) => { houseRequestVersion.current += 1; setHouses(next); setHousesError(""); setHomeConnected(true); });
+    homeSocket.on("disconnect", () => setHomeConnected(false));
+    homeSocket.on("connect_error", () => setHomeConnected(false));
     homeSocket.on("profile:update", (user) => setSession((current) => { if (!current || current.user.id !== user.id) return current; const updated = { ...current, user }; localStorage.setItem(SESSION_KEY, JSON.stringify(updated)); return updated; }));
     return () => { homeSocket.disconnect(); };
   }, [authStatus, routeHouseId, inviteToken, pathname, session?.token]);
@@ -743,7 +747,7 @@ export function App() {
   } };
 
   const openHouse = (target: HouseSummary) => { houseRequestVersion.current += 1; setSnapshot(null); setHouse(null); setShowHouseSettings(false); setShowInvite(false); setShowMediaHub(false); setTypingUserIds([]); setUnreadChat(0); localStorage.setItem(HOUSE_KEY, target.id); navigate(`/house/${encodeURIComponent(target.id)}`); };
-  const createHomeHouse = async (name: string) => { if (!session) return; const response = await fetch(`${API_URL}/api/houses`, { method: "POST", headers: { Authorization: `Bearer ${session.token}`, "Content-Type": "application/json" }, body: JSON.stringify({ name }) }); if (!response.ok) { setHousesError((await response.json()).message ?? "Não foi possível criar a Casa."); return; } const data = await response.json() as { house: HouseDetails }; await refreshHouses(); openHouse(data.house); };
+  const createHomeHouse = async (name: string) => { if (!session) return; const response = await fetch(`${API_URL}/api/houses`, { method: "POST", headers: { Authorization: `Bearer ${session.token}`, "Content-Type": "application/json" }, body: JSON.stringify({ name }) }); if (!response.ok) { throw new Error((await response.json()).message ?? "Não foi possível criar a Casa."); } const data = await response.json() as { house: HouseDetails }; await refreshHouses(); openHouse(data.house); };
   const openInviteInput = (value: string) => {
     const identifier = parseInviteInput(value, window.location.origin);
     if (!identifier) return false;
@@ -761,7 +765,7 @@ export function App() {
   }
   if (inviteToken) return <InvitePage apiUrl={API_URL} token={inviteToken} session={session} navigate={navigate} onAccepted={acceptedInvite} />;
   if (pathname === "/account") return <Suspense fallback={<BootstrapPage onRetry={() => undefined} />}><AccountPage apiUrl={API_URL} token={session.token} onBack={() => navigate("/app")} /></Suspense>;
-  if (!routeHouseId) return <><HomePage user={session.user} houses={houses} error={housesError} onRetry={() => void refreshHouses()} onOpenHouse={openHouse} onCreate={createHomeHouse} onInvite={openInviteInput} onAccount={() => navigate("/account")} onLogout={logout} />{homeNotice ? <div className="home-notice" role="status">{homeNotice}</div> : null}</>;
+  if (!routeHouseId) return <><HomePage connected={homeConnected} apiUrl={API_URL} token={session.token} user={session.user} houses={houses} error={housesError} onRetry={() => void refreshHouses()} onOpenHouse={openHouse} onCreate={createHomeHouse} onInvite={openInviteInput} onAccount={() => navigate("/account")} onLogout={logout} />{homeNotice ? <div className="home-notice" role="status">{homeNotice}</div> : null}</>;
   if (!houses.some((item) => item.id === routeHouseId)) return <main className="loading-screen"><LumioLogo /><h1>Casa indisponível</h1><p>Você não faz parte desta Casa.</p><button onClick={() => navigate("/app")}>Voltar para suas Casas</button></main>;
   if (!snapshot || snapshot.id !== selectedHouse?.primaryRoomId) return <LoadingScreen user={session.user} connectionState={connectionState} error={entryError} onBack={() => navigate("/app")} />;
 

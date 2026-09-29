@@ -52,6 +52,7 @@ import { PrismaMediaRepository } from "./prismaMediaRepository.js";
 import { validateProductionEnvironment } from "./productionConfig.js";
 import { bootFailureFields, type BootStage } from "./bootDiagnostics.js";
 import { PartyGames } from "./partyGames.js";
+import { projectHouseActivity, safeMediaTitle } from "./houseActivity.js";
 
 // npm workspaces execute this package with apps/server as the working directory.
 // Resolve the project-level environment file from this module so dev and dist agree.
@@ -122,6 +123,7 @@ const games = new PartyGames((roomId, delta, forceFull) => {
     }
     peer.data.gameBoardStamp = stamp;
   }
+  if (house && !delta) emitHomeForHouse(house.id);
 });
 const gameTimer = setInterval(() => games.tick(), 250);
 gameTimer.unref();
@@ -449,7 +451,7 @@ app.get("/api/auth/session", (request, response) => {
   if (!user) return response.status(401).json({ message: "Sessão ausente." });
   return response.json({ user });
 });
-app.get("/api/bootstrap", (request, response) => { const user = requireUser(request, response); if (!user) return; const houses = social.listForUser(user.id).map((house) => { const media = store.getSnapshot(house.primaryRoomId)?.currentMedia; return { ...house, nowPlaying: media?.mediaId ? { title: media.title, provider: media.provider } : null }; }); return response.json({ user, houses }); });
+app.get("/api/bootstrap", (request, response) => { const user = requireUser(request, response); if (!user) return; return response.json({ user, houses: houseSummaries(user.id) }); });
 
 app.post("/api/auth/logout", async (request, response) => {
   const token = getAuthToken(request);
@@ -459,7 +461,7 @@ app.post("/api/auth/logout", async (request, response) => {
   return response.status(204).end();
 });
 
-app.get("/api/houses", (request, response) => { const user = requireUser(request, response); if (!user) return; const houses = social.listForUser(user.id).map((house) => { const media = store.getSnapshot(house.primaryRoomId)?.currentMedia; return { ...house, nowPlaying: media?.mediaId ? { title: media.title, provider: media.provider } : null }; }); return response.json({ houses }); });
+app.get("/api/houses", (request, response) => { const user = requireUser(request, response); if (!user) return; return response.json({ houses: houseSummaries(user.id) }); });
 app.post("/api/houses", async (request, response) => {
   const user = requireUser(request, response); if (!user) return;
   const parsed = z.object({ name: z.string().trim().min(2).max(48) }).safeParse(request.body); if (!parsed.success) return response.status(400).json({ message: "Informe um nome para a Casa." });
@@ -599,7 +601,7 @@ app.delete("/api/media-hub/:roomId/playlists/:playlistId", async (request, respo
 app.post("/api/media-hub/:roomId/playlists/:playlistId/items", async (request, response) => { const user = requireRoomPermission(request, response, String(request.params.roomId), "PLAYLIST_EDIT"); if (!user) return; const parsed = mediaItemSchema.safeParse(request.body.item); if (!parsed.success) return response.status(400).json({ message: "Mídia inválida." }); const playlist = store.addPlaylistItem(request.params.roomId, request.params.playlistId, user, parsed.data); if (!playlist) return response.status(404).json({ message: "Playlist não encontrada." }); if (!await persistMediaForResponse(request.params.roomId, response)) return; emitMediaHubUpdate(request.params.roomId, "playlist"); return response.status(201).json({ playlist }); });
 app.delete("/api/media-hub/:roomId/playlists/:playlistId/items/:itemId", async (request, response) => { const user = requireRoomPermission(request, response, String(request.params.roomId), "PLAYLIST_EDIT"); if (!user) return; const playlist = store.removePlaylistItem(request.params.roomId, request.params.playlistId, request.params.itemId); if (!playlist) return response.status(404).json({ message: "Playlist não encontrada." }); if (!await persistMediaForResponse(request.params.roomId, response)) return; emitMediaHubUpdate(request.params.roomId, "playlist"); return response.json({ playlist }); });
 app.put("/api/media-hub/:roomId/playlists/:playlistId/order", async (request, response) => { const user = requireRoomPermission(request, response, String(request.params.roomId), "PLAYLIST_EDIT"); if (!user) return; const parsed = z.object({ itemIds: z.array(z.string()).max(500), expectedUpdatedAt: z.string().datetime() }).safeParse(request.body); if (!parsed.success) return response.status(400).json({ message: "Ordem inválida." }); const playlist = store.reorderPlaylist(request.params.roomId, request.params.playlistId, parsed.data.itemIds, parsed.data.expectedUpdatedAt); if (!playlist) return response.status(409).json({ message: "A playlist mudou. Atualize e tente novamente.", playlist: store.getPlaylist(request.params.roomId, request.params.playlistId) }); if (!await persistMediaForResponse(request.params.roomId, response)) return; emitMediaHubUpdate(request.params.roomId, "playlist"); return response.json({ playlist }); });
-app.post("/api/media-hub/:roomId/playlists/:playlistId/queue", async (request, response) => { const user = requireRoomPermission(request, response, String(request.params.roomId), "MEDIA_ADD"); if (!user) return; const parsed = z.object({ mode: z.enum(["append", "next", "replace"]).default("append"), playNow: z.boolean().default(false), revision: z.number().int().nonnegative() }).safeParse(request.body); if (!parsed.success) return response.status(400).json({ message: "Opção de fila inválida." }); if ((parsed.data.playNow || parsed.data.mode === "replace") && !store.canControlMedia(request.params.roomId, user.id)) return response.status(403).json({ message: "Você não pode controlar a reprodução ou substituir a fila." }); const result = store.enqueuePlaylist(request.params.roomId, request.params.playlistId, user, parsed.data.mode, parsed.data.playNow, parsed.data.revision, (item) => mediaAvailableInRoom(request.params.roomId, item)); if (!result) return response.status(404).json({ message: "Playlist vazia ou não encontrada." }); if (result.conflict) return response.status(409).json({ message: "A fila mudou. Revise a ordem e tente novamente.", revision: result.revision }); if (!result.media && result.skipped && result.skipped === store.getPlaylist(request.params.roomId, request.params.playlistId)?.items?.length) return response.status(409).json({ message: "Todos os itens da playlist estão indisponíveis.", skipped: result.skipped }); if (!await persistMediaForResponse(request.params.roomId, response)) return; io.to(request.params.roomId).emit("queue:update", result.queue, result.revision); if (result.media) { io.to(request.params.roomId).emit("media:sync", result.media); emitMediaHubUpdate(request.params.roomId, "history"); } return response.json(result); });
+app.post("/api/media-hub/:roomId/playlists/:playlistId/queue", async (request, response) => { const user = requireRoomPermission(request, response, String(request.params.roomId), "MEDIA_ADD"); if (!user) return; const parsed = z.object({ mode: z.enum(["append", "next", "replace"]).default("append"), playNow: z.boolean().default(false), revision: z.number().int().nonnegative() }).safeParse(request.body); if (!parsed.success) return response.status(400).json({ message: "Opção de fila inválida." }); if ((parsed.data.playNow || parsed.data.mode === "replace") && !store.canControlMedia(request.params.roomId, user.id)) return response.status(403).json({ message: "Você não pode controlar a reprodução ou substituir a fila." }); const result = store.enqueuePlaylist(request.params.roomId, request.params.playlistId, user, parsed.data.mode, parsed.data.playNow, parsed.data.revision, (item) => mediaAvailableInRoom(request.params.roomId, item)); if (!result) return response.status(404).json({ message: "Playlist vazia ou não encontrada." }); if (result.conflict) return response.status(409).json({ message: "A fila mudou. Revise a ordem e tente novamente.", revision: result.revision }); if (!result.media && result.skipped && result.skipped === store.getPlaylist(request.params.roomId, request.params.playlistId)?.items?.length) return response.status(409).json({ message: "Todos os itens da playlist estão indisponíveis.", skipped: result.skipped }); if (!await persistMediaForResponse(request.params.roomId, response)) return; io.to(request.params.roomId).emit("queue:update", result.queue, result.revision); if (result.media) { io.to(request.params.roomId).emit("media:sync", result.media); emitMediaHubUpdate(request.params.roomId, "history"); emitActivityForRoom(request.params.roomId); } return response.json(result); });
 
 app.post("/api/media-hub/:roomId/progress", async (request, response) => {
   const user = requireRoomMember(request, response, String(request.params.roomId)); if (!user) return;
@@ -744,10 +746,16 @@ const emitSnapshot = (roomId: string) => {
   } else if (snapshot) io.to(roomId).emit("room:snapshot", snapshot);
   if (house) emitHomeForHouse(house.id);
 };
-const houseSummaries = (userId: string) => social.listForUser(userId).map((house) => { const media = store.getSnapshot(house.primaryRoomId)?.currentMedia; return { ...house, nowPlaying: media?.mediaId ? { title: media.title, provider: media.provider } : null }; });
+const houseSummaries = (userId: string) => social.listForUser(userId).map((house) => {
+  const room = store.getSnapshot(house.primaryRoomId), media = room?.currentMedia;
+  const game = games.snapshot(house.primaryRoomId, "", false);
+  return { ...house, nowPlaying: media?.mediaId ? { title: safeMediaTitle(media.title), provider: media.provider } : null,
+    partyActivity: projectHouseActivity({ partyCount: house.partyCount, sharing: Boolean(room?.screenShare), game: game ? { gameType: game.gameType, phase: game.phase } : null, media: media?.mediaId ? { title: media.title, state: media.state, type: media.type } : null }) };
+});
 const homeStateBySocket = new Map<string, string>();
-const emitHomeToSocket = (socket: Socket<ClientToServerEvents, ServerToClientEvents>, userId: string) => { const summaries = houseSummaries(userId); const serialized = JSON.stringify(summaries); if (homeStateBySocket.get(socket.id) !== serialized) { homeStateBySocket.set(socket.id, serialized); socket.emit("home:update", summaries); } };
+const emitHomeToSocket = (socket: Socket<ClientToServerEvents, ServerToClientEvents>, userId: string) => { if (!auth.resolveSession(socket.handshake.auth?.token ?? "")) { socket.disconnect(true); return; } const summaries = houseSummaries(userId); const serialized = JSON.stringify(summaries); if (homeStateBySocket.get(socket.id) !== serialized) { homeStateBySocket.set(socket.id, serialized); socket.emit("home:update", summaries); } };
 const emitHomeForHouse = (houseId: string) => { for (const socket of io.sockets.sockets.values()) { const user = socket.data.user as User | undefined; if (user && social.isMember(houseId, user.id)) emitHomeToSocket(socket, user.id); } };
+const emitActivityForRoom = (roomId: string) => { const house = social.getByRoom(roomId); if (house) emitHomeForHouse(house.id); };
 const emitHouse = (houseId: string) => { const house = social.getHouse(houseId); if (!house) return; for (const socket of io.sockets.sockets.values()) { const user = socket.data.user as User | undefined; const details = user && social.details(houseId, user.id); if (details) socket.emit("house:update", details); } emitHomeForHouse(houseId); };
 const disconnectHouseMember = (houseId: string, userId: string) => { const house = social.getHouse(houseId); if (!house) return; games.leave(house.primaryRoomId, userId); for (const socket of io.sockets.sockets.values()) { if ((socket.data.user as User | undefined)?.id === userId) { emitHomeToSocket(socket, userId); if (socket.data.joinedRoomId === house.primaryRoomId) { socket.emit("member:removed", { houseId, message: "Você não faz mais parte desta Casa." }); socket.data.revoked = true; socket.leave(house.primaryRoomId); setTimeout(() => socket.disconnect(true), 50); } } } const key = `${house.primaryRoomId}:${userId}`; const timer = offlineTimers.get(key); if (timer) clearTimeout(timer); offlineTimers.delete(key); store.removeMember(house.primaryRoomId, userId); emitSnapshot(house.primaryRoomId); };
 const roomConnections = new Map<string, Map<string, Set<string>>>();
@@ -917,7 +925,7 @@ io.on("connection", (socket) => {
     const item = store.getSnapshot(parsed.data.roomId)?.queue.find((entry) => entry.id === parsed.data.itemId);
     if (!item) return respond?.({ ok: false, message: "Este item não está mais na fila." });
     const queue = store.removeQueueItem(parsed.data.roomId, parsed.data.itemId);
-    if (queue) { if (!await persistMediaForSocket(parsed.data.roomId, socket)) return respond?.({ ok: false, message: "Fila indisponível no momento." }); io.to(parsed.data.roomId).emit("queue:update", queue, store.getQueueRevision(parsed.data.roomId)); if (item.status === "playing") { const media = store.getSnapshot(parsed.data.roomId)?.currentMedia; if (media) io.to(parsed.data.roomId).emit("media:sync", media); } respond?.({ ok: true }); }
+    if (queue) { if (!await persistMediaForSocket(parsed.data.roomId, socket)) return respond?.({ ok: false, message: "Fila indisponível no momento." }); io.to(parsed.data.roomId).emit("queue:update", queue, store.getQueueRevision(parsed.data.roomId)); if (item.status === "playing") { const media = store.getSnapshot(parsed.data.roomId)?.currentMedia; if (media) io.to(parsed.data.roomId).emit("media:sync", media); emitActivityForRoom(parsed.data.roomId); } respond?.({ ok: true }); }
     else respond?.({ ok: false, message: "Não foi possível remover o item da fila." });
   });
 
@@ -930,6 +938,7 @@ io.on("connection", (socket) => {
     if (next) {
       emitQueueState(parsed.data.roomId, next);
       io.to(parsed.data.roomId).emit("media:sync", next.media);
+      emitActivityForRoom(parsed.data.roomId);
     } else if (store.getQueueRevision(parsed.data.roomId) !== beforeRevision) { const snapshot = store.getSnapshot(parsed.data.roomId); if (snapshot) io.to(parsed.data.roomId).emit("queue:update", snapshot.queue, snapshot.queueRevision); }
   });
 
@@ -937,7 +946,7 @@ io.on("connection", (socket) => {
     const parsed = z.object({ roomId: z.string() }).safeParse(rawInput);
     if (!parsed.success || parsed.data.roomId !== joinedRoomId || !canControl(parsed.data.roomId, user.id)) return;
     const previous = store.previousQueueItem(parsed.data.roomId, (item) => mediaAvailableInRoom(parsed.data.roomId, item));
-    if (previous) { if (!await persistMediaForSocket(parsed.data.roomId, socket)) return; emitQueueState(parsed.data.roomId, previous); io.to(parsed.data.roomId).emit("media:sync", previous.media); }
+    if (previous) { if (!await persistMediaForSocket(parsed.data.roomId, socket)) return; emitQueueState(parsed.data.roomId, previous); io.to(parsed.data.roomId).emit("media:sync", previous.media); emitActivityForRoom(parsed.data.roomId); }
   });
 
   socket.on(eventNames.queueMove, async (rawInput) => {
@@ -1001,6 +1010,7 @@ io.on("connection", (socket) => {
     if ((result.next || store.getQueueRevision(parsed.data.roomId) !== beforeRevision) && !await persistMediaForSocket(parsed.data.roomId, socket)) return respond?.({ ok: false, advanced: false, message: "Fila indisponível no momento." });
     if (result.next) { emitQueueState(parsed.data.roomId, result.next); io.to(parsed.data.roomId).emit("media:sync", result.next.media); emitMediaHubUpdate(parsed.data.roomId, "history"); }
     else if (result.media) { io.to(parsed.data.roomId).emit("media:sync", result.media); if (store.getQueueRevision(parsed.data.roomId) !== beforeRevision) { const snapshot = store.getSnapshot(parsed.data.roomId); if (snapshot) io.to(parsed.data.roomId).emit("queue:update", snapshot.queue, snapshot.queueRevision); } }
+    if (result.next || result.media) emitActivityForRoom(parsed.data.roomId);
     respond?.({ ok: true, advanced: result.advanced });
   });
 
@@ -1036,7 +1046,7 @@ io.on("connection", (socket) => {
     }
     const media = store.updateMedia(parsed.data.roomId, user.id, action, parsed.data.position, parsed.data);
     if (media && action === "play" && !await persistMediaForSocket(parsed.data.roomId, socket)) return;
-    if (media) { io.to(parsed.data.roomId).emit("media:sync", media); if (action === "play") { const snapshot = store.getSnapshot(parsed.data.roomId); if (snapshot) io.to(parsed.data.roomId).emit("queue:history", snapshot.history); emitMediaHubUpdate(parsed.data.roomId, "history"); } }
+    if (media) { io.to(parsed.data.roomId).emit("media:sync", media); if (action === "play") { const snapshot = store.getSnapshot(parsed.data.roomId); if (snapshot) io.to(parsed.data.roomId).emit("queue:history", snapshot.history); emitMediaHubUpdate(parsed.data.roomId, "history"); } if (action === "play" || action === "pause") emitActivityForRoom(parsed.data.roomId); }
     else { const room = store.getRoom(parsed.data.roomId); if (room) socket.emit("media:sync", store.getEffectiveMedia(room.currentMedia)); }
   };
   socket.on(eventNames.mediaPlay, (input) => updateMedia("play", input));
@@ -1066,7 +1076,7 @@ io.on("connection", (socket) => {
     if (!vote) return;
     if ((vote.next || store.getQueueRevision(parsed.data.roomId) !== beforeRevision) && !await persistMediaForSocket(parsed.data.roomId, socket)) return;
     io.to(parsed.data.roomId).emit("vote:skip", { count: vote.count, required: vote.required, votedBy: vote.votedBy, advanced: vote.advanced });
-    if (vote.next) { emitQueueState(parsed.data.roomId, vote.next); io.to(parsed.data.roomId).emit("media:sync", vote.next.media); }
+    if (vote.next) { emitQueueState(parsed.data.roomId, vote.next); io.to(parsed.data.roomId).emit("media:sync", vote.next.media); emitActivityForRoom(parsed.data.roomId); }
     else if (store.getQueueRevision(parsed.data.roomId) !== beforeRevision) { const snapshot = store.getSnapshot(parsed.data.roomId); if (snapshot) io.to(parsed.data.roomId).emit("queue:update", snapshot.queue, snapshot.queueRevision); }
   });
 

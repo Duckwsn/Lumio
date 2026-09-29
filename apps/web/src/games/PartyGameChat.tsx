@@ -30,22 +30,26 @@ export function PartyGameChatProvider({ socket, roomId, userId, onSelect, childr
   const [drafts, setDrafts] = useState({ chat: "", guess: "" });
   const [preference, setPreference] = useState<{ round: string; mode: Mode } | null>(null);
   const [error, setError] = useState(""), [busy, setBusy] = useState(false);
+  const [connected, setConnected] = useState(Boolean(socket?.connected));
   const sending = useRef(false), selection = useRef(onSelect); selection.current = onSelect;
   const round = game ? `${game.sessionId}:${game.roundId}` : "";
-  const eligible = selected && Boolean(socket?.connected) && canGuess(game, userId);
+  const eligible = selected && connected && Boolean(socket?.connected) && canGuess(game, userId);
   const mode: Mode = eligible ? preference?.round === round ? preference.mode : "guess" : "chat";
   useEffect(() => { if (selected) selection.current(); }, [selected]);
   useEffect(() => {
     if (!socket) return;
     const receive = (snapshot: PartyGameSnapshot | PartyGameState | null) => {
       if (snapshot && snapshot.roomId !== roomId) return;
+      setConnected(socket.connected);
       if (!snapshot || snapshot.gameType !== "draw") { setGame(null); return; }
       // Explicit omission: private projection and board never enter the social context.
       const { choices: _choices, secretWord: _secret, ...metadata } = snapshot;
       const { strokes: _strokes, ...publicGame } = metadata as DrawSnapshot;
       setGame((old) => old?.sessionId === publicGame.sessionId && old.revision > publicGame.revision ? old : publicGame);
     };
-    const disconnected = () => { setGame(null); setError(""); };
+    // Keep public role/round and both drafts during a brief transport loss.
+    // Guessing resumes only after an authenticated authoritative projection.
+    const disconnected = () => { setConnected(false); setError(""); };
     const connected = () => setError("");
     socket.on("game:snapshot", receive); socket.on("game:state", receive); socket.on("disconnect", disconnected);
     socket.on("connect", connected);

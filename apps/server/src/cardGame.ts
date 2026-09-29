@@ -128,7 +128,11 @@ export class CardGameRuntime {
     this.changed(roomId, s); return { ok: true };
   }
   leave(roomId: string, userId: string) {
-    const s = this.sessions.get(roomId); if (!s || !s.active.has(userId)) return;
+    const s = this.sessions.get(roomId); if (!s) return;
+    if (!s.active.has(userId)) {
+      if (s.state.hostId === userId) { s.offline.delete(userId); s.state.hostId = this.online(s)[0]?.id ?? ""; this.changed(roomId, s); }
+      return;
+    }
     const p = s.state, current = p.currentPlayerId === userId;
     s.deck = shuffleCards([...s.deck, ...(s.hands.get(userId) ?? [])]); s.hands.delete(userId); s.active.delete(userId); s.offline.delete(userId);
     const me = p.players.find((p) => p.id === userId)!; me.online = false; me.declaredLast = false;
@@ -138,8 +142,8 @@ export class CardGameRuntime {
     this.changed(roomId, s);
   }
   presence(roomId: string, userId: string, online: boolean) {
-    const s = this.sessions.get(roomId), me = s?.state.players.find((p) => p.id === userId); if (!s || !me || !s.active.has(userId)) return;
-    if (me.online === online) return; me.online = online;
+    const s = this.sessions.get(roomId), me = s?.state.players.find((p) => p.id === userId); if (!s || ((!me || !s.active.has(userId)) && s.state.hostId !== userId)) return;
+    if (me?.online === online) return; if (me) me.online = online;
     if (online) { s.offline.delete(userId); if (!s.state.hostId) s.state.hostId = userId; } else s.offline.set(userId, this.now() + 5000);
     this.changed(roomId, s);
   }
