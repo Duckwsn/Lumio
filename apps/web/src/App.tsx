@@ -103,6 +103,8 @@ export function App() {
   const [showMainMenu, setShowMainMenu] = useState(false);
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
+  const queueAddIntents = useRef(new Map<string, QueueItem>());
+  const queueNextIntents = useRef(new Map<string, QueueItem>());
   const [showHouseSettings, setShowHouseSettings] = useState(false);
   const [showInvite, setShowInvite] = useState(false);
   const [showProfile, setShowProfile] = useState(false);
@@ -518,11 +520,14 @@ export function App() {
 
   const sendChat = (body: string) => { if (body.trim() && snapshot && socket?.connected) { socket.emit(eventNames.chatMessage, { roomId: snapshot.id, body }); return true; } notifyParty("Sem conexão com a Party. Tente novamente.", "error"); return false; };
   const voteToSkip = () => { if (snapshot) socket?.emit(eventNames.voteSkip, { roomId: snapshot.id }); };
-  const nextMedia = () => { if (snapshot) socket?.emit(eventNames.queueNext, { roomId: snapshot.id }); };
-  const previousMedia = () => { if (snapshot) socket?.emit(eventNames.queuePrevious, { roomId: snapshot.id }); };
-  const moveQueueItem = (itemId: string, toIndex: number) => {
-    if (!snapshot || !socket?.connected) return void notifyParty("Sem conexão com a Party. Tente novamente.", "error");
-    socket.emit(eventNames.queueMove, { roomId: snapshot.id, itemId, toIndex, revision: snapshot.queueRevision });
+  const nextMedia = () => { if (snapshot) socket?.emit(eventNames.queueNext, { roomId: snapshot.id, expectedQueueItemId: snapshot.queue.find((item) => item.status === "playing")?.id, revision: snapshot.queueRevision }); };
+  const previousMedia = () => { if (snapshot) socket?.emit(eventNames.queuePrevious, { roomId: snapshot.id, expectedQueueItemId: snapshot.queue.find((item) => item.status === "playing")?.id, revision: snapshot.queueRevision }); };
+  const reconcileQueue = (queue?: QueueItem[], revision?: number) => { if (!queue || revision === undefined || !snapshot) return; setSnapshot((current) => current?.id === snapshot.id && revision >= current.queueRevision ? { ...current, queue, queueRevision: revision } : current); };
+  const moveQueueItem = async (itemId: string, toIndex: number) => {
+    if (!snapshot || !socket?.connected) throw new Error("Sem conexão com a Party. Tente novamente.");
+    const result = await socket.timeout(10_000).emitWithAck(eventNames.queueMove, { roomId: snapshot.id, itemId, toIndex, revision: snapshot.queueRevision });
+    reconcileQueue(result.queue, result.revision);
+    if (!result.ok) throw new Error(result.message ?? "Não foi possível reorganizar a fila.");
   };
   const sendPlaybackCommand = useCallback((command: { action: "play" | "pause" | "seek" | "rate"; position: number; playbackRate?: number }) => {
     if (!socket?.connected || !snapshot || !snapshot.currentMedia.mediaId) { notifyParty("Sem conexão com a Party. Tente novamente.", "error"); return false; }
@@ -536,9 +541,12 @@ export function App() {
   const addMedia = async (media: MediaItem, playNow = false): Promise<{ position: number }> => {
     if (!socket?.connected || !snapshot || !session) throw new Error("Sem conexão com a Party. Tente novamente.");
     const roomId = snapshot.id;
-    const item = toQueueItem(media, session.user);
-    const result = await socket.timeout(10_000).emitWithAck(eventNames.queueAdd, { roomId, item });
+    const intentKey = `${roomId}:${media.provider}:${media.providerMediaId}:append`;
+    const item = queueAddIntents.current.get(intentKey) ?? toQueueItem(media, session.user);
+    queueAddIntents.current.set(intentKey, item);
+    const result = await socket.timeout(10_000).emitWithAck(eventNames.queueAdd, { roomId, item, operationId: item.id });
     if (!result.ok || !result.item) throw new Error(result.message ?? "Não foi possível adicionar à fila.");
+    queueAddIntents.current.delete(intentKey);
     if (playNow || canControlMedia && (snapshot.queue.length === 0 || !snapshot.currentMedia.mediaId)) {
       const change = await socket.timeout(10_000).emitWithAck(eventNames.mediaChange, { roomId, item: result.item });
       if (!change.ok) throw new Error(change.message ?? "Mídia adicionada, mas não foi possível iniciar a reprodução.");
@@ -547,17 +555,24 @@ export function App() {
   };
   const playMediaNext = async (media: MediaItem): Promise<void> => {
     if (!socket?.connected || !snapshot || !session) throw new Error("Sem conexão com a Party. Tente novamente.");
-    const result = await socket.timeout(10_000).emitWithAck(eventNames.queuePlayNext, { roomId: snapshot.id, item: toQueueItem(media, session.user), revision: snapshot.queueRevision });
+    const intentKey = `${snapshot.id}:${media.provider}:${media.providerMediaId}:next`;
+    const item = queueNextIntents.current.get(intentKey) ?? toQueueItem(media, session.user);
+    queueNextIntents.current.set(intentKey, item);
+    const result = await socket.timeout(10_000).emitWithAck(eventNames.queuePlayNext, { roomId: snapshot.id, item, revision: snapshot.queueRevision });
+    reconcileQueue(result.queue, result.revision);
     if (!result.ok) throw new Error(result.message ?? "Não foi possível alterar a fila.");
+    queueNextIntents.current.delete(intentKey);
   };
   const clearQueue = async () => {
     if (!socket?.connected || !snapshot) throw new Error("Sem conexão com a Party. Tente novamente.");
     const result = await socket.timeout(10_000).emitWithAck(eventNames.queueClear, { roomId: snapshot.id, revision: snapshot.queueRevision });
+    reconcileQueue(result.queue, result.revision);
     if (!result.ok) throw new Error(result.message ?? "Não foi possível limpar a fila.");
   };
   const removeQueueItem = async (item: QueueItem) => {
     if (!socket?.connected || !snapshot) throw new Error("Sem conexão com a Party. Tente novamente.");
-    const result = await socket.timeout(10_000).emitWithAck(eventNames.queueRemove, { roomId: snapshot.id, itemId: item.id });
+    const result = await socket.timeout(10_000).emitWithAck(eventNames.queueRemove, { roomId: snapshot.id, itemId: item.id, revision: snapshot.queueRevision });
+    reconcileQueue(result.queue, result.revision);
     if (!result.ok) throw new Error(result.message ?? "Não foi possível remover o item da fila.");
   };
 
@@ -827,7 +842,7 @@ export function App() {
           </section>
         </section>
 
-        {!rightPanelCollapsed && (!mobileParty || activePanel !== "chat") ? <aside className={`party-drawer ${activePanel === "chat" ? "is-chat" : ""}`} aria-label="Painel da Party">{mobileParty ? <MobileSheetHandle onClose={closeDrawer} /> : null}<div className="drawer-header"><div className="drawer-tabs" role="tablist" aria-label="Conteúdo da Party">{!mobileParty ? <button className={activePanel === "chat" ? "active" : ""} onClick={() => setActivePanel("chat")} role="tab" aria-selected={activePanel === "chat"}>Chat</button> : null}<button className={activePanel === "members" ? "active" : ""} onClick={() => setActivePanel("members")} role="tab" aria-selected={activePanel === "members"}>Pessoas</button><button className={activePanel === "queue" ? "active" : ""} onClick={() => setActivePanel("queue")} role="tab" aria-selected={activePanel === "queue"}>Fila</button></div><button className="icon-button" onClick={closeDrawer} aria-label="Fechar painel" data-tooltip="Fechar"><X size={18} /></button></div>{activePanel === "chat" ? <ChatPanel messages={snapshot.messages} currentUser={session.user} typingNames={(house?.members ?? []).filter((member) => typingUserIds.includes(member.user.id)).map((member) => member.user.displayName)} onTyping={(typing) => socket?.emit(eventNames.chatTyping, { roomId: snapshot.id, typing })} onSend={sendChat} /> : activePanel === "members" ? <MembersPanel voiceMembers={snapshot.members} members={house?.members ?? snapshot.houseMembers ?? []} currentUserId={session.user.id} participantVolumes={participantVolumes} onVolume={(userId, volume) => setParticipantVolumes((current) => ({ ...current, [userId]: volume }))} /> : <div className="drawer-queue"><div className="drawer-section-title"><div><strong>Fila da Party</strong><span>{snapshot.queue.length} {snapshot.queue.length === 1 ? "item" : "itens"} · rev. {snapshot.queueRevision}</span></div><div className="drawer-title-actions"><button className={showHistory ? "active" : ""} onClick={() => setShowHistory((value) => !value)} aria-label="Alternar histórico" data-tooltip="Histórico"><History size={17} /></button>{house?.permissions.includes("QUEUE_MANAGE") && snapshot.queue.length > 1 ? <button onClick={() => setConfirmClearQueue(true)} aria-label="Limpar fila" data-tooltip="Limpar fila"><Trash2 size={16} /></button> : null}</div></div>{showHistory ? <HistoryList history={snapshot.history} /> : null}<QueueList queue={snapshot.queue} onPlay={(item) => socket?.emit(eventNames.mediaChange, { roomId: snapshot.id, item })} onRemove={setPendingQueueRemoval} onMove={moveQueueItem} onNext={nextMedia} onPrevious={previousMedia} onAdd={() => setShowMediaHub(true)} /></div>}</aside> : null}
+        {!rightPanelCollapsed && (!mobileParty || activePanel !== "chat") ? <aside className={`party-drawer ${activePanel === "chat" ? "is-chat" : ""}`} aria-label="Painel da Party">{mobileParty ? <MobileSheetHandle onClose={closeDrawer} /> : null}<div className="drawer-header"><div className="drawer-tabs" role="tablist" aria-label="Conteúdo da Party">{!mobileParty ? <button className={activePanel === "chat" ? "active" : ""} onClick={() => setActivePanel("chat")} role="tab" aria-selected={activePanel === "chat"}>Chat</button> : null}<button className={activePanel === "members" ? "active" : ""} onClick={() => setActivePanel("members")} role="tab" aria-selected={activePanel === "members"}>Pessoas</button><button className={activePanel === "queue" ? "active" : ""} onClick={() => setActivePanel("queue")} role="tab" aria-selected={activePanel === "queue"}>Fila</button></div><button className="icon-button" onClick={closeDrawer} aria-label="Fechar painel" data-tooltip="Fechar"><X size={18} /></button></div>{activePanel === "chat" ? <ChatPanel messages={snapshot.messages} currentUser={session.user} typingNames={(house?.members ?? []).filter((member) => typingUserIds.includes(member.user.id)).map((member) => member.user.displayName)} onTyping={(typing) => socket?.emit(eventNames.chatTyping, { roomId: snapshot.id, typing })} onSend={sendChat} /> : activePanel === "members" ? <MembersPanel voiceMembers={snapshot.members} members={house?.members ?? snapshot.houseMembers ?? []} currentUserId={session.user.id} participantVolumes={participantVolumes} onVolume={(userId, volume) => setParticipantVolumes((current) => ({ ...current, [userId]: volume }))} /> : <div className="drawer-queue"><div className="drawer-section-title"><div><strong>Fila da Party</strong><span>{snapshot.queue.length} {snapshot.queue.length === 1 ? "item" : "itens"} · rev. {snapshot.queueRevision}</span></div><div className="drawer-title-actions"><button className={showHistory ? "active" : ""} onClick={() => setShowHistory((value) => !value)} aria-label="Alternar histórico" data-tooltip="Histórico"><History size={17} /></button>{house?.permissions.includes("QUEUE_MANAGE") && snapshot.queue.length > 1 ? <button onClick={() => setConfirmClearQueue(true)} aria-label="Limpar fila" data-tooltip="Limpar fila"><Trash2 size={16} /></button> : null}</div></div>{showHistory ? <HistoryList history={snapshot.history} /> : null}<QueueList queue={snapshot.queue} currentState={snapshot.currentMedia.state} autoplay={snapshot.settings.autoplayNext} canControl={canControlMedia} canAdd={canAddMedia} historyCount={snapshot.history.length} onPlay={async (item) => { if (!socket?.connected) throw new Error("Sem conexão com a Party."); const result = await socket.timeout(10_000).emitWithAck(eventNames.mediaChange, { roomId: snapshot.id, item, revision: snapshot.queueRevision }); if (!result.ok) throw new Error(result.message ?? "Não foi possível reproduzir."); }} onRemove={setPendingQueueRemoval} onMove={moveQueueItem} onNext={nextMedia} onPrevious={previousMedia} onAdd={() => setShowMediaHub(true)} /></div>}</aside> : null}
         {mobileParty ? <MobilePartyChat key={snapshot.id} userId={session.user.id} hidden={playerFullscreen || gameFullscreen} onPeople={() => openDrawer("members")} onQueue={() => openDrawer("queue")} onAdd={() => setShowMediaHub(true)}><ChatPanel messages={snapshot.messages} currentUser={session.user} typingNames={(house?.members ?? []).filter((member) => typingUserIds.includes(member.user.id)).map((member) => member.user.displayName)} onTyping={(typing) => socket?.emit(eventNames.chatTyping, { roomId: snapshot.id, typing })} onSend={sendChat} composerAccessory={<MobileCallControls
           micEnabled={micEnabled} muted={muted} deafened={deafened} callState={callState} voiceError={voiceError}
           micLabel={micLabel} isSharingScreen={isSharingScreen} shareOccupied={Boolean(snapshot.screenShare && !isSharingScreen)}
@@ -891,19 +906,30 @@ function LoadingScreen({ user, connectionState, error, onBack }: { user: User; c
   return <main className="loading-screen"><LumioLogo /><h1>{connectionState === "error" ? "Não foi possível entrar na Party" : "Entrando na Party..."}</h1><p>{error || (connectionState === "offline" ? "Sem conexão com a Party. Tentando reconectar..." : `Preparando a sala, ${user.displayName}.`)}</p><button onClick={onBack}>Voltar para suas Casas</button></main>;
 }
 
-function QueueList({ queue, onPlay, onRemove, onMove, onNext, onPrevious, onAdd }: { queue: QueueItem[]; onPlay: (item: QueueItem) => void; onRemove: (item: QueueItem) => void; onMove: (id: string, toIndex: number) => void; onNext: () => void; onPrevious: () => void; onAdd: () => void }) {
-  const [draggedId, setDraggedId] = useState<string | null>(null);
-  const [dragOverId, setDragOverId] = useState<string | null>(null);
-  if (!queue.length) return <div className="queue-empty"><Library size={28} aria-hidden="true" /><h3>Nada na fila ainda.</h3><button className="primary-action compact" onClick={onAdd}><Plus size={17} aria-hidden="true" /> Adicionar mídia</button></div>;
-  return <><div className="queue-toolbar"><span>Ordem de reprodução</span><div><button className="icon-button" onClick={onPrevious} aria-label="Mídia anterior"><SkipBack /></button><button className="icon-button" onClick={onNext} aria-label="Próxima mídia"><SkipForward /></button></div></div><ol className="queue-list">{queue.map((item, index) => {
-    const isCurrent = item.status === "playing";
-    return <li className={`queue-item ${isCurrent ? "current" : ""} ${draggedId === item.id ? "dragging" : ""} ${dragOverId === item.id ? "drop-target" : ""}`} key={item.id} draggable={!isCurrent} onDragStart={() => setDraggedId(item.id)} onDragEnter={() => setDragOverId(item.id)} onDragOver={(event) => event.preventDefault()} onDragEnd={() => { setDraggedId(null); setDragOverId(null); }} onDrop={() => { if (draggedId && draggedId !== item.id) onMove(draggedId, index); setDraggedId(null); setDragOverId(null); }}>
-      <button className="queue-play" onClick={() => onPlay(item)} aria-label={`Reproduzir ${item.title}`}>{isCurrent ? <Volume2 aria-hidden="true" /> : <span>{index + 1}</span>}</button>
-      <QueueThumbnail item={item} />
-      <div className="queue-copy"><small className="queue-position">{isCurrent ? "TOCANDO AGORA" : "A SEGUIR"}</small><strong>{item.title}</strong><span>{providerLabel(item.provider)} · {formatDuration(item.duration)} · Adicionado por {item.addedBy.displayName}</span></div>
-      <div className="queue-actions"><button className="icon-button" onClick={() => onMove(item.id, Math.max(0, index - 1))} disabled={index === 0} aria-label={`Mover ${item.title} para cima`}><ChevronUp /></button><button className="icon-button" onClick={() => onMove(item.id, Math.min(queue.length - 1, index + 1))} disabled={index === queue.length - 1} aria-label={`Mover ${item.title} para baixo`}><ChevronDown /></button><button className="icon-button danger" onClick={() => onRemove(item)} aria-label={`Remover ${item.title}`}><Trash2 /></button></div>
-    </li>;
-  })}</ol></>;
+function QueueList({ queue, currentState, autoplay, canControl, canAdd, historyCount, onPlay, onRemove, onMove, onNext, onPrevious, onAdd }: { queue: QueueItem[]; currentState: string; autoplay: boolean; canControl: boolean; canAdd: boolean; historyCount: number; onPlay: (item: QueueItem) => Promise<void>; onRemove: (item: QueueItem) => void; onMove: (id: string, toIndex: number) => Promise<void>; onNext: () => void; onPrevious: () => void; onAdd: () => void }) {
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [menuId, setMenuId] = useState<string | null>(null);
+  const [error, setError] = useState("");
+  useEffect(() => { if (!menuId) return; const close = (event: KeyboardEvent) => { if (event.key === "Escape") setMenuId(null); }; document.addEventListener("keydown", close); return () => document.removeEventListener("keydown", close); }, [menuId]);
+  const currentIndex = queue.findIndex((item) => item.status === "playing");
+  const current = currentIndex >= 0 ? queue[currentIndex] : null;
+  const upcoming = queue.filter((item) => item.id !== current?.id);
+  const run = async (id: string, action: () => Promise<void>) => { if (busyId) return; setBusyId(id); setError(""); setMenuId(null); try { await action(); } catch (cause) { setError(cause instanceof Error ? cause.message : "Não foi possível alterar a fila."); } finally { setBusyId(null); } };
+  const row = (item: QueueItem, index: number, isCurrent: boolean) => <li className={`queue-item ${isCurrent ? "current" : ""}`} key={item.id}>
+    <span className="queue-index" aria-hidden="true">{isCurrent ? <Volume2 size={18} /> : index + 1}</span><QueueThumbnail item={item} />
+    <div className="queue-copy"><small className="queue-position">{isCurrent ? currentState === "paused" ? "PAUSADO" : currentState === "ended" ? "ENCERRADO" : "TOCANDO AGORA" : `A SEGUIR · ${index + 1}`}</small><strong title={item.title}>{item.title}</strong><span>{providerLabel(item.provider)} · {formatDuration(item.duration)} · {item.addedBy.displayName}</span>{busyId === item.id ? <span className="queue-pending" role="status">Atualizando fila…</span> : null}</div>
+    {canControl ? <div className="queue-item-menu"><button type="button" className="queue-menu-trigger" aria-label={`Opções para ${item.title}`} aria-expanded={menuId === item.id} onClick={() => setMenuId((value) => value === item.id ? null : item.id)} disabled={Boolean(busyId)}>•••</button>{menuId === item.id ? <div className="queue-menu" role="group" aria-label={`Ações para ${item.title}`}>
+      {!isCurrent ? <button onClick={() => void run(item.id, () => onPlay(item))}>Reproduzir agora</button> : null}
+      {!isCurrent ? <button disabled={index === 0} onClick={() => void run(item.id, () => onMove(item.id, current ? index : index - 1))}>Mover para cima</button> : null}
+      {!isCurrent ? <button disabled={index === upcoming.length - 1} onClick={() => void run(item.id, () => onMove(item.id, current ? index + 2 : index + 1))}>Mover para baixo</button> : null}
+      <button className="danger" onClick={() => { setMenuId(null); onRemove(item); }}>Remover da fila</button>
+    </div> : null}</div> : null}
+  </li>;
+  if (!queue.length) return <div className="queue-empty"><Library size={28} aria-hidden="true" /><h3>Nada na fila ainda.</h3><p>Adicione um vídeo ou música para começar a Party.</p>{canAdd ? <button className="primary-action compact" onClick={onAdd}><Plus size={17} aria-hidden="true" /> Adicionar mídia</button> : null}</div>;
+  return <div className="queue-v2">{error ? <p className="queue-error" role="alert">{error}</p> : null}<div className="queue-toolbar"><span>{!current ? "Aguardando reprodução" : !upcoming.length ? "Sem próxima mídia" : autoplay ? "Avança automaticamente" : "Aguarda avanço manual"}</span><div>{canControl ? <><button className="icon-button" onClick={onPrevious} disabled={historyCount === 0 || Boolean(busyId)} aria-label="Mídia anterior"><SkipBack /></button><button className="icon-button" onClick={onNext} disabled={upcoming.length === 0 || Boolean(busyId)} aria-label="Próxima mídia"><SkipForward /></button></> : null}{canAdd ? <button className="icon-button" onClick={onAdd} aria-label="Adicionar mídia"><Plus /></button> : null}</div></div>
+    <section className="queue-group" aria-label="Tocando agora"><h3>Tocando agora</h3>{current ? <ol className="queue-list">{row(current, 0, true)}</ol> : <p className="queue-group-empty">Nenhuma mídia em reprodução.</p>}</section>
+    <section className="queue-group" aria-label="A seguir"><h3>A seguir <span>{upcoming.length}</span></h3>{upcoming.length ? <ol className="queue-list">{upcoming.map((item, index) => row(item, index, false))}</ol> : <p className="queue-group-empty">Nada programado a seguir.</p>}</section>
+  </div>;
 }
 
 function QueueThumbnail({ item }: { item: QueueItem }) {

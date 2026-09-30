@@ -3,6 +3,79 @@ import assert from "node:assert/strict";
 import { RoomStore } from "./store.js";
 import { projectLibraryMedia } from "./socialLibrary.js";
 
+test("M3 occurrence retries are idempotent while intentional duplicates remain distinct", () => {
+  const store = new RoomStore();
+  const user = { id: "m3-owner", displayName: "Owner", color: "#fff" };
+  const base = { id: "occurrence-1", provider: "youtube" as const, providerMediaId: "abcdefghijk", type: "video" as const, title: "Same song", addedBy: user, addedAt: new Date().toISOString() };
+  store.addQueueItem("cinema", base);
+  const revision = store.getQueueRevision("cinema");
+  assert.equal(store.addQueueItem("cinema", base)?.length, 1);
+  assert.equal(store.getQueueRevision("cinema"), revision);
+  assert.equal(store.addQueueItem("cinema", { ...base, addedBy: { ...user, id: "other" } }), null);
+  assert.equal(store.addQueueItem("cinema", { ...base, id: "occurrence-2" })?.length, 2);
+  assert.deepEqual(store.getSnapshot("cinema")?.queue.map((item) => item.id), ["occurrence-1", "occurrence-2"]);
+});
+
+test("M3 reordering is revision-bound, keeps the current item fixed and no-op does not bump", () => {
+  const store = new RoomStore();
+  const user = { id: "m3-host", displayName: "Host", color: "#fff" };
+  const item = (id: string) => ({ id, provider: "youtube" as const, providerMediaId: id, type: "video" as const, title: id, addedBy: user, addedAt: new Date().toISOString() });
+  for (const id of ["one", "two", "three"]) store.addQueueItem("cinema", item(id));
+  store.changeMedia("cinema", item("one"));
+  const revision = store.getQueueRevision("cinema");
+  assert.equal(store.moveQueueItem("cinema", "one", 2, revision)?.invalid, true);
+  assert.equal(store.moveQueueItem("cinema", "three", 2, revision)?.changed, false);
+  assert.equal(store.getQueueRevision("cinema"), revision);
+  assert.equal(store.moveQueueItem("cinema", "three", 1, revision)?.changed, true);
+  assert.equal(store.moveQueueItem("cinema", "two", 1, revision)?.conflict, true);
+  assert.deepEqual(store.getSnapshot("cinema")?.queue.map((entry) => entry.id), ["one", "three", "two"]);
+  assert.equal(store.getSnapshot("cinema")?.currentMedia.mediaId, "one");
+});
+
+test("M3 Play Next retry uses occurrence identity before stale revision", () => {
+  const store = new RoomStore();
+  const user = { id: "m3-host", displayName: "Host", color: "#fff" };
+  const item = { id: "next-intent", provider: "youtube" as const, providerMediaId: "abcdefghijk", type: "video" as const, title: "Next", addedBy: user, addedAt: new Date().toISOString() };
+  const revision = store.getQueueRevision("cinema");
+  assert.equal(store.playNext("cinema", item, revision)?.changed, true);
+  assert.equal(store.playNext("cinema", item, revision)?.conflict, false);
+  assert.equal(store.getSnapshot("cinema")?.queue.length, 1);
+  assert.equal(store.playNext("cinema", { ...item, id: "other-intent" }, revision)?.conflict, true);
+});
+
+test("M3 selecting an upcoming occurrence rebases Up Next and operational history keeps repeat plays", () => {
+  const store = new RoomStore();
+  const user = { id: "m3-host", displayName: "Host", color: "#fff" };
+  const item = (id: string, providerMediaId = id) => ({ id, provider: "youtube" as const, providerMediaId, type: "video" as const, title: providerMediaId, addedBy: user, addedAt: new Date().toISOString() });
+  for (const entry of [item("one"), item("two"), item("three", "one")]) store.addQueueItem("cinema", entry);
+  store.changeMedia("cinema", item("one")); store.updateMedia("cinema", user.id, "play", 0);
+  store.changeMedia("cinema", item("three", "one")); store.updateMedia("cinema", user.id, "play", 0);
+  assert.deepEqual(store.getSnapshot("cinema")?.queue.map((entry) => entry.id), ["three", "two"]);
+  assert.equal(store.getSnapshot("cinema")?.history.length, 2);
+  assert.equal(store.getSnapshot("cinema")?.history[0].providerMediaId, "one");
+  assert.equal(store.previousQueueItem("cinema")?.media.mediaId, "one");
+});
+
+test("M3 batch enqueue is atomic at capacity and a retried operation cannot duplicate", () => {
+  const store = new RoomStore();
+  const user = { id: "m3-host", displayName: "Host", color: "#fff" };
+  const playlist = store.createPlaylist("cinema", user, "M3 batch")!;
+  const media = { id: "media-one", provider: "youtube" as const, providerMediaId: "abcdefghijk", type: "video" as const, title: "Song" };
+  store.addPlaylistItem("cinema", playlist.id, user, media);
+  const revision = store.getQueueRevision("cinema");
+  const first = store.enqueuePlaylist("cinema", playlist.id, user, "append", false, revision, undefined, "aaaa0000-0000-4000-8000-000000000001")!;
+  assert.equal(first.queue.length, 1);
+  const retry = store.enqueuePlaylist("cinema", playlist.id, user, "append", false, revision, undefined, "aaaa0000-0000-4000-8000-000000000001")!;
+  assert.equal("duplicate" in retry && retry.duplicate, true);
+  assert.equal(store.getQueueRevision("cinema"), first.revision);
+  for (let index = 1; index < 250; index++) store.addQueueItem("cinema", { ...media, id: `occ-${index}`, addedBy: user, addedAt: new Date().toISOString() });
+  const fullRevision = store.getQueueRevision("cinema");
+  const full = store.enqueuePlaylist("cinema", playlist.id, user, "append", false, fullRevision)!;
+  assert.equal("capacity" in full && full.capacity, true);
+  assert.equal(store.getSnapshot("cinema")?.queue.length, 250);
+  assert.equal(store.getQueueRevision("cinema"), fullRevision);
+});
+
 test("Party entry and re-entry start with microphone off and not speaking", () => {
   const store = new RoomStore();
   store.addHouseRoom({ houseId: "voice", houseName: "Voice", roomId: "voice-room" });

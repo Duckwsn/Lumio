@@ -284,6 +284,7 @@ export const joinRoomInputSchema = z.object({ roomId: z.string(), user: userSche
 export const addQueueInputSchema = z.object({
   roomId: z.string(),
   item: queueItemSchema,
+  operationId: z.string().uuid().optional(),
 });
 export const mediaCommandSchema = z.object({
   roomId: z.string(),
@@ -293,8 +294,10 @@ export const mediaCommandSchema = z.object({
   position: z.number().min(0).optional(),
   playbackRate: z.number().min(0.25).max(2).optional(),
 });
-export const changeMediaSchema = z.object({ roomId: z.string(), item: queueItemSchema });
-export const queueMoveSchema = z.object({ roomId: z.string(), itemId: z.string(), toIndex: z.number().int().min(0), revision: z.number().int().nonnegative().optional() });
+export const changeMediaSchema = z.object({ roomId: z.string(), item: queueItemSchema, revision: z.number().int().nonnegative().optional() });
+export const queueMoveSchema = z.object({ roomId: z.string(), itemId: z.string(), toIndex: z.number().int().min(0), revision: z.number().int().nonnegative() });
+export const queueRemoveSchema = z.object({ roomId: z.string(), itemId: z.string().min(1).max(100), revision: z.number().int().nonnegative().optional() });
+export const queueStepSchema = z.object({ roomId: z.string(), expectedQueueItemId: z.string().min(1).optional(), revision: z.number().int().nonnegative().optional() });
 export const queueRevisionSchema = z.object({ roomId: z.string(), revision: z.number().int().nonnegative().optional() });
 export const queuePlayNextSchema = queueRevisionSchema.extend({ item: queueItemSchema });
 export const queueAdvanceSchema = queueRevisionSchema.extend({ expectedMediaId: z.string(), expectedQueueItemId: z.string().min(1) });
@@ -340,12 +343,12 @@ export interface ClientToServerEvents {
   "media:pause": (input: z.infer<typeof mediaCommandSchema>) => void;
   "media:seek": (input: z.infer<typeof mediaCommandSchema>) => void;
   "media:rate": (input: z.infer<typeof mediaCommandSchema>) => void;
-  "media:change": (input: z.infer<typeof changeMediaSchema>, respond?: (result: { ok: boolean; message?: string }) => void) => void;
-  "queue:add": (input: z.infer<typeof addQueueInputSchema>, respond?: (result: { ok: boolean; item?: QueueItem; position?: number; message?: string }) => void) => void;
-  "queue:remove": (input: { roomId: string; itemId: string }, respond?: (result: { ok: boolean; message?: string }) => void) => void;
-  "queue:next": (input: { roomId: string }) => void;
-  "queue:previous": (input: { roomId: string }) => void;
-  "queue:move": (input: z.infer<typeof queueMoveSchema>) => void;
+  "media:change": (input: z.infer<typeof changeMediaSchema>, respond?: (result: { ok: boolean; message?: string; revision?: number; queue?: QueueItem[] }) => void) => void;
+  "queue:add": (input: z.infer<typeof addQueueInputSchema>, respond?: (result: { ok: boolean; item?: QueueItem; position?: number; changed?: boolean; message?: string }) => void) => void;
+  "queue:remove": (input: z.infer<typeof queueRemoveSchema>, respond?: (result: { ok: boolean; message?: string; queue?: QueueItem[]; revision?: number }) => void) => void;
+  "queue:next": (input: z.infer<typeof queueStepSchema>) => void;
+  "queue:previous": (input: z.infer<typeof queueStepSchema>) => void;
+  "queue:move": (input: z.infer<typeof queueMoveSchema>, respond?: (result: { ok: boolean; message?: string; queue?: QueueItem[]; revision?: number }) => void) => void;
   "queue:play-next": (input: z.infer<typeof queuePlayNextSchema>, respond?: (result: { ok: boolean; queue?: QueueItem[]; revision?: number; message?: string }) => void) => void;
   "queue:clear": (input: z.infer<typeof queueRevisionSchema>, respond?: (result: { ok: boolean; queue?: QueueItem[]; revision?: number; message?: string }) => void) => void;
   "queue:advance": (input: z.infer<typeof queueAdvanceSchema>, respond?: (result: { ok: boolean; advanced: boolean; message?: string }) => void) => void;

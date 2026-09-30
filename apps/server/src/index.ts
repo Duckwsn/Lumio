@@ -23,8 +23,10 @@ import {
   queueAdvanceSchema,
   queueItemSchema,
   queueMoveSchema,
+  queueRemoveSchema,
   queuePlayNextSchema,
   queueRevisionSchema,
+  queueStepSchema,
   roomSettingsInputSchema,
   voiceSignalSchema,
   type ClientToServerEvents,
@@ -691,7 +693,22 @@ app.post("/api/media-hub/:roomId/playlists/:playlistId/items", async (request, r
 });
 app.delete("/api/media-hub/:roomId/playlists/:playlistId/items/:itemId", async (request, response) => { const user = requireRoomPermission(request, response, String(request.params.roomId), "PLAYLIST_EDIT"); if (!user) return; if (!apiRateLimit(request, response, user.id, 60)) return; const before = store.getPlaylist(request.params.roomId, request.params.playlistId); const playlist = store.removePlaylistItem(request.params.roomId, request.params.playlistId, request.params.itemId); if (!playlist) return response.status(404).json({ message: "Coleção não encontrada." }); if (playlist.updatedAt !== before?.updatedAt) { if (!await persistMediaForResponse(request.params.roomId, response)) return; emitMediaHubUpdate(request.params.roomId, "playlist"); } return response.json({ playlist: projectPlaylistFor(request.params.roomId, user.id, playlist) }); });
 app.put("/api/media-hub/:roomId/playlists/:playlistId/order", async (request, response) => { const user = requireRoomPermission(request, response, String(request.params.roomId), "PLAYLIST_EDIT"); if (!user) return; if (!apiRateLimit(request, response, user.id, 60)) return; const parsed = z.object({ itemIds: z.array(z.string()).max(500), expectedUpdatedAt: z.string().datetime() }).safeParse(request.body); if (!parsed.success) return response.status(400).json({ message: "Ordem inválida." }); const playlist = store.reorderPlaylist(request.params.roomId, request.params.playlistId, parsed.data.itemIds, parsed.data.expectedUpdatedAt); if (!playlist) { const current = store.getPlaylist(request.params.roomId, request.params.playlistId); return response.status(409).json({ message: "A coleção mudou. Atualize e tente novamente.", playlist: current && projectPlaylistFor(request.params.roomId, user.id, current) }); } if (!await persistMediaForResponse(request.params.roomId, response)) return; emitMediaHubUpdate(request.params.roomId, "playlist"); return response.json({ playlist: projectPlaylistFor(request.params.roomId, user.id, playlist) }); });
-app.post("/api/media-hub/:roomId/playlists/:playlistId/queue", async (request, response) => { const user = requireRoomPermission(request, response, String(request.params.roomId), "MEDIA_ADD"); if (!user) return; const parsed = z.object({ mode: z.enum(["append", "next", "replace"]).default("append"), playNow: z.boolean().default(false), revision: z.number().int().nonnegative() }).safeParse(request.body); if (!parsed.success) return response.status(400).json({ message: "Opção de fila inválida." }); if ((parsed.data.playNow || parsed.data.mode === "replace") && !store.canControlMedia(request.params.roomId, user.id)) return response.status(403).json({ message: "Você não pode controlar a reprodução ou substituir a fila." }); const result = store.enqueuePlaylist(request.params.roomId, request.params.playlistId, user, parsed.data.mode, parsed.data.playNow, parsed.data.revision, (item) => mediaAvailableInRoom(request.params.roomId, item)); if (!result) return response.status(404).json({ message: "Playlist vazia ou não encontrada." }); if (result.conflict) return response.status(409).json({ message: "A fila mudou. Revise a ordem e tente novamente.", revision: result.revision }); if (!result.media && result.skipped && result.skipped === store.getPlaylist(request.params.roomId, request.params.playlistId)?.items?.length) return response.status(409).json({ message: "Todos os itens da playlist estão indisponíveis.", skipped: result.skipped }); if (!await persistMediaForResponse(request.params.roomId, response)) return; io.to(request.params.roomId).emit("queue:update", result.queue, result.revision); if (result.media) { io.to(request.params.roomId).emit("media:sync", result.media); emitMediaHubUpdate(request.params.roomId, "history"); emitActivityForRoom(request.params.roomId); } return response.json(result); });
+app.post("/api/media-hub/:roomId/playlists/:playlistId/queue", async (request, response) => {
+  const user = requireRoomPermission(request, response, String(request.params.roomId), "MEDIA_ADD"); if (!user) return;
+  const parsed = z.object({ mode: z.enum(["append", "next", "replace"]).default("append"), playNow: z.boolean().default(false), revision: z.number().int().nonnegative(), operationId: z.string().uuid().optional() }).safeParse(request.body);
+  if (!parsed.success) return response.status(400).json({ message: "Opção de fila inválida." });
+  if ((parsed.data.playNow || parsed.data.mode === "replace") && !store.canControlMedia(request.params.roomId, user.id)) return response.status(403).json({ message: "Você não pode controlar a reprodução ou substituir a fila." });
+  const result = store.enqueuePlaylist(request.params.roomId, request.params.playlistId, user, parsed.data.mode, parsed.data.playNow, parsed.data.revision, (item) => mediaAvailableInRoom(request.params.roomId, item), parsed.data.operationId);
+  if (!result) return response.status(404).json({ message: "Playlist vazia ou não encontrada." });
+  if (result.conflict) return response.status(409).json({ message: "A fila mudou. Revise a ordem e tente novamente.", revision: result.revision, queue: result.queue });
+  if ("capacity" in result && result.capacity) return response.status(409).json({ message: "A fila comporta até 250 itens. Remova alguns antes de adicionar a coleção.", revision: result.revision });
+  if ("duplicate" in result && result.duplicate) return response.json(result);
+  if (!result.media && result.skipped && result.skipped === store.getPlaylist(request.params.roomId, request.params.playlistId)?.items?.length) return response.status(409).json({ message: "Todos os itens da playlist estão indisponíveis.", skipped: result.skipped });
+  if (!await persistMediaForResponse(request.params.roomId, response)) return;
+  io.to(request.params.roomId).emit("queue:update", result.queue, result.revision);
+  if (result.media) { io.to(request.params.roomId).emit("media:sync", result.media); emitMediaHubUpdate(request.params.roomId, "history"); emitActivityForRoom(request.params.roomId); }
+  return response.json(result);
+});
 
 app.post("/api/media-hub/:roomId/progress", async (request, response) => {
   const user = requireRoomMember(request, response, String(request.params.roomId)); if (!user) return;
@@ -992,7 +1009,7 @@ io.on("connection", (socket) => {
     if (item.provider === "youtube" && youtube.isConfigured()) {
       try {
         const verified = await youtube.getVideo(item.providerMediaId);
-        item = { ...verified, addedBy: publicUser(user), addedAt: parsed.data.item.addedAt };
+        item = { ...verified, id: item.id, addedBy: publicUser(user), addedAt: parsed.data.item.addedAt };
       } catch (error) {
         const message = error instanceof Error ? error.message : "Vídeo do YouTube indisponível.";
         respond?.({ ok: false, message });
@@ -1001,27 +1018,34 @@ io.on("connection", (socket) => {
     }
     if (deletingRooms.has(parsed.data.roomId) || !social.getByRoom(parsed.data.roomId)) { googleDrive.revokeRoom(parsed.data.roomId); return respond?.({ ok: false, message: "Acesso à Casa revogado." }); }
     if (!social.isMember(social.getByRoom(parsed.data.roomId)?.id ?? "", user.id) || joinedRoomId !== parsed.data.roomId || !store.canAddToQueue(parsed.data.roomId, user.id)) return respond?.({ ok: false, message: "Acesso à Casa revogado." });
+    const beforeRevision = store.getQueueRevision(parsed.data.roomId);
     const queue = store.addQueueItem(parsed.data.roomId, item);
     if (queue) {
-      if (!await persistMediaForSocket(parsed.data.roomId, socket)) return respond?.({ ok: false, message: "Fila indisponível no momento." });
-      io.to(parsed.data.roomId).emit("queue:update", queue, store.getQueueRevision(parsed.data.roomId));
-      respond?.({ ok: true, item: queue.at(-1), position: queue.length });
-    } else respond?.({ ok: false, message: "Não foi possível adicionar o item à fila." });
+      const changed = beforeRevision !== store.getQueueRevision(parsed.data.roomId);
+      if (changed && !await persistMediaForSocket(parsed.data.roomId, socket)) return respond?.({ ok: false, message: "Fila indisponível no momento." });
+      if (changed) io.to(parsed.data.roomId).emit("queue:update", queue, store.getQueueRevision(parsed.data.roomId));
+      const actual = queue.find((entry) => entry.id === item.id);
+      respond?.({ ok: true, item: actual, position: actual ? queue.indexOf(actual) + 1 : queue.length, changed });
+    } else respond?.({ ok: false, message: "Item inválido ou fila cheia (limite de 250 itens)." });
   });
 
   socket.on(eventNames.queueRemove, async (rawInput, respond) => {
-    const parsed = z.object({ roomId: z.string(), itemId: z.string() }).safeParse(rawInput);
+    const parsed = queueRemoveSchema.safeParse(rawInput);
     if (!parsed.success || parsed.data.roomId !== joinedRoomId || !canControl(parsed.data.roomId, user.id)) return respond?.({ ok: false, message: "Você não pode remover este item." });
-    const item = store.getSnapshot(parsed.data.roomId)?.queue.find((entry) => entry.id === parsed.data.itemId);
-    if (!item) return respond?.({ ok: false, message: "Este item não está mais na fila." });
+    const before = store.getSnapshot(parsed.data.roomId);
+    if (parsed.data.revision !== undefined && parsed.data.revision !== before?.queueRevision) return respond?.({ ok: false, message: "A fila mudou. Revise antes de remover.", queue: before?.queue, revision: before?.queueRevision });
+    const item = before?.queue.find((entry) => entry.id === parsed.data.itemId);
+    if (!item) return respond?.({ ok: false, message: "Este item não está mais na fila.", queue: before?.queue, revision: before?.queueRevision });
     const queue = store.removeQueueItem(parsed.data.roomId, parsed.data.itemId);
-    if (queue) { if (!await persistMediaForSocket(parsed.data.roomId, socket)) return respond?.({ ok: false, message: "Fila indisponível no momento." }); io.to(parsed.data.roomId).emit("queue:update", queue, store.getQueueRevision(parsed.data.roomId)); if (item.status === "playing") { const media = store.getSnapshot(parsed.data.roomId)?.currentMedia; if (media) io.to(parsed.data.roomId).emit("media:sync", media); emitActivityForRoom(parsed.data.roomId); } respond?.({ ok: true }); }
+    if (queue) { if (!await persistMediaForSocket(parsed.data.roomId, socket)) return respond?.({ ok: false, message: "Fila indisponível no momento." }); io.to(parsed.data.roomId).emit("queue:update", queue, store.getQueueRevision(parsed.data.roomId)); if (item.status === "playing") { const media = store.getSnapshot(parsed.data.roomId)?.currentMedia; if (media) io.to(parsed.data.roomId).emit("media:sync", media); emitActivityForRoom(parsed.data.roomId); } respond?.({ ok: true, queue, revision: store.getQueueRevision(parsed.data.roomId) }); }
     else respond?.({ ok: false, message: "Não foi possível remover o item da fila." });
   });
 
   socket.on(eventNames.queueNext, async (rawInput) => {
-    const parsed = z.object({ roomId: z.string() }).safeParse(rawInput);
+    const parsed = queueStepSchema.safeParse(rawInput);
     if (!parsed.success || parsed.data.roomId !== joinedRoomId || !canControl(parsed.data.roomId, user.id)) return;
+    const current = store.getRoom(parsed.data.roomId);
+    if (parsed.data.revision !== undefined && parsed.data.revision !== current?.queueRevision || parsed.data.expectedQueueItemId && parsed.data.expectedQueueItemId !== current?.currentItem?.id) { const latest = store.getSnapshot(parsed.data.roomId); if (latest) socket.emit("queue:update", latest.queue, latest.queueRevision); return socket.emit("server:error", "A fila mudou. Revise antes de avançar."); }
     const beforeRevision = store.getQueueRevision(parsed.data.roomId);
     const next = store.nextQueueItem(parsed.data.roomId, user.id, (item) => mediaAvailableInRoom(parsed.data.roomId, item));
     if ((next || store.getQueueRevision(parsed.data.roomId) !== beforeRevision) && !await persistMediaForSocket(parsed.data.roomId, socket)) return;
@@ -1033,22 +1057,24 @@ io.on("connection", (socket) => {
   });
 
   socket.on(eventNames.queuePrevious, async (rawInput) => {
-    const parsed = z.object({ roomId: z.string() }).safeParse(rawInput);
+    const parsed = queueStepSchema.safeParse(rawInput);
     if (!parsed.success || parsed.data.roomId !== joinedRoomId || !canControl(parsed.data.roomId, user.id)) return;
+    const current = store.getRoom(parsed.data.roomId);
+    if (parsed.data.revision !== undefined && parsed.data.revision !== current?.queueRevision || parsed.data.expectedQueueItemId && parsed.data.expectedQueueItemId !== current?.currentItem?.id) { const latest = store.getSnapshot(parsed.data.roomId); if (latest) socket.emit("queue:update", latest.queue, latest.queueRevision); return socket.emit("server:error", "A fila mudou. Revise antes de voltar."); }
     const previous = store.previousQueueItem(parsed.data.roomId, (item) => mediaAvailableInRoom(parsed.data.roomId, item));
     if (previous) { if (!await persistMediaForSocket(parsed.data.roomId, socket)) return; emitQueueState(parsed.data.roomId, previous); io.to(parsed.data.roomId).emit("media:sync", previous.media); emitActivityForRoom(parsed.data.roomId); }
   });
 
-  socket.on(eventNames.queueMove, async (rawInput) => {
+  socket.on(eventNames.queueMove, async (rawInput, respond) => {
     const parsed = queueMoveSchema.safeParse(rawInput);
-    if (!parsed.success || parsed.data.roomId !== joinedRoomId) return;
-    if (!canControl(parsed.data.roomId, user.id)) return socket.emit("server:error", "Você não tem permissão para organizar a fila.");
+    if (!parsed.success || parsed.data.roomId !== joinedRoomId) return respond?.({ ok: false, message: "Movimento inválido." });
+    if (!canControl(parsed.data.roomId, user.id)) return respond?.({ ok: false, message: "Você não tem permissão para organizar a fila." });
     const result = store.moveQueueItem(parsed.data.roomId, parsed.data.itemId, parsed.data.toIndex, parsed.data.revision);
     if (result) {
-      if (!result.conflict && !await persistMediaForSocket(parsed.data.roomId, socket)) return;
-      io.to(parsed.data.roomId).emit("queue:update", result.queue, result.revision);
-      if (result.conflict) socket.emit("server:error", "A fila mudou. Tente novamente.");
-    }
+      if (result.changed && !await persistMediaForSocket(parsed.data.roomId, socket)) return respond?.({ ok: false, message: "Fila indisponível no momento." });
+      if (result.changed) io.to(parsed.data.roomId).emit("queue:update", result.queue, result.revision);
+      respond?.({ ok: !result.conflict && !result.invalid, queue: result.queue, revision: result.revision, message: result.conflict ? "A fila mudou. Revise a ordem atual." : result.invalid ? "Este item não pode ser movido para essa posição." : undefined });
+    } else respond?.({ ok: false, message: "Party não encontrada." });
   });
 
   socket.on(eventNames.queuePlayNext, async (rawInput, respond) => {
@@ -1075,8 +1101,8 @@ io.on("connection", (socket) => {
     if (!social.isMember(social.getByRoom(parsed.data.roomId)?.id ?? "", user.id) || joinedRoomId !== parsed.data.roomId || !store.canAddToQueue(parsed.data.roomId, user.id)) return respond?.({ ok: false, message: "Acesso à Casa revogado." });
     const result = store.playNext(parsed.data.roomId, item, parsed.data.revision);
     if (!result) return respond?.({ ok: false, message: "Party não encontrada." });
-    if (!result.conflict && !await persistMediaForSocket(parsed.data.roomId, socket)) return respond?.({ ok: false, message: "Fila indisponível no momento." });
-    io.to(parsed.data.roomId).emit("queue:update", result.queue, result.revision);
+    if (result.changed && !await persistMediaForSocket(parsed.data.roomId, socket)) return respond?.({ ok: false, message: "Fila indisponível no momento." });
+    if (result.changed) io.to(parsed.data.roomId).emit("queue:update", result.queue, result.revision);
     respond?.({ ok: !result.conflict, queue: result.queue, revision: result.revision, message: result.conflict ? "A fila mudou; a ordem atual foi restaurada." : undefined });
   });
 
@@ -1084,8 +1110,8 @@ io.on("connection", (socket) => {
     const parsed = queueRevisionSchema.safeParse(rawInput); const house = parsed.success ? social.getByRoom(parsed.data.roomId) : undefined;
     if (!parsed.success || parsed.data.roomId !== joinedRoomId || !house || !can(social.role(house.id, user.id), "QUEUE_MANAGE")) return respond?.({ ok: false, message: "Você não pode limpar esta fila." });
     const result = store.clearQueue(parsed.data.roomId, parsed.data.revision); if (!result) return respond?.({ ok: false, message: "Party não encontrada." });
-    if (!result.conflict && !await persistMediaForSocket(parsed.data.roomId, socket)) return respond?.({ ok: false, message: "Fila indisponível no momento." });
-    io.to(parsed.data.roomId).emit("queue:update", result.queue, result.revision); respond?.({ ok: !result.conflict, queue: result.queue, revision: result.revision, message: result.conflict ? "A fila mudou; tente novamente." : undefined });
+    if (result.changed && !await persistMediaForSocket(parsed.data.roomId, socket)) return respond?.({ ok: false, message: "Fila indisponível no momento." });
+    if (result.changed) io.to(parsed.data.roomId).emit("queue:update", result.queue, result.revision); respond?.({ ok: !result.conflict, queue: result.queue, revision: result.revision, message: result.conflict ? "A fila mudou; tente novamente." : undefined });
   });
 
   socket.on(eventNames.queueAdvance, async (rawInput, respond) => {
@@ -1148,6 +1174,7 @@ io.on("connection", (socket) => {
     const parsed = changeMediaSchema.safeParse(rawInput);
     if (!parsed.success || parsed.data.roomId !== joinedRoomId || !canControl(parsed.data.roomId, user.id)) return respond?.({ ok: false, message: "Você não pode controlar a reprodução." });
     const room = store.getRoom(parsed.data.roomId);
+    if (parsed.data.revision !== undefined && parsed.data.revision !== room?.queueRevision) { const latest = store.getSnapshot(parsed.data.roomId); if (latest) socket.emit("queue:update", latest.queue, latest.queueRevision); return respond?.({ ok: false, message: "A fila mudou. Revise antes de reproduzir.", revision: room?.queueRevision, queue: latest?.queue }); }
     const item = room?.queue.find((candidate) => candidate.id === parsed.data.item.id);
     if (!item) return respond?.({ ok: false, message: "Adicione a mídia à fila antes de reproduzir." });
     if (!mediaAvailableInRoom(parsed.data.roomId, item)) return respond?.({ ok: false, message: "Esta mídia está indisponível. Peça ao proprietário para adicioná-la novamente." });
@@ -1155,7 +1182,7 @@ io.on("connection", (socket) => {
     const media = changed ? store.updateMedia(parsed.data.roomId, user.id, "play", 0) : null;
     if (media && !await persistMediaForSocket(parsed.data.roomId, socket)) return respond?.({ ok: false, message: "Mídia indisponível no momento." });
     if (media) { io.to(parsed.data.roomId).emit("media:sync", media); const snapshot = store.getSnapshot(parsed.data.roomId); if (snapshot) io.to(parsed.data.roomId).emit("queue:history", snapshot.history); emitMediaHubUpdate(parsed.data.roomId, "history"); emitSnapshot(parsed.data.roomId); }
-    respond?.({ ok: Boolean(media), message: media ? undefined : "Não foi possível reproduzir esta mídia." });
+    respond?.({ ok: Boolean(media), revision: store.getQueueRevision(parsed.data.roomId), message: media ? undefined : "Não foi possível reproduzir esta mídia." });
   });
 
   socket.on(eventNames.voteSkip, async (rawInput) => {

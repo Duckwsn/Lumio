@@ -580,6 +580,21 @@ svg { flex:none; }
 .drawer-queue .queue-actions button:nth-child(-n+2) { display:none; }
 .drawer-queue .queue-empty { align-items:flex-start; flex-direction:column; }
 .drawer-queue .history-panel { margin-top:12px; }
+.queue-v2 .queue-group { margin-top:18px; }
+.queue-v2 .queue-group h3 { display:flex; justify-content:space-between; margin:0; color:var(--text); font-size:12px; font-weight:650; }
+.queue-v2 .queue-group h3 span,.queue-group-empty { color:var(--muted); font-size:11px; }
+.queue-v2 .queue-group-empty { margin:10px 0; }
+.queue-v2 .queue-item { grid-template-columns:24px 48px minmax(0,1fr) 42px; position:relative; }
+.queue-v2 .queue-position { color:var(--primary); font-size:9px; font-weight:700; letter-spacing:.05em; }
+.queue-v2 .queue-copy { min-width:0; }
+.queue-v2 .queue-item-menu { position:relative; }
+.queue-v2 .queue-menu-trigger { width:40px; min-height:44px; border-radius:8px; color:var(--text); background:var(--surface-2); cursor:pointer; }
+.queue-v2 .queue-menu { position:absolute; right:0; top:100%; z-index:10; display:grid; width:max-content; min-width:160px; padding:4px; border:1px solid var(--border-strong); border-radius:10px; background:var(--surface-2); box-shadow:0 12px 28px rgba(0,0,0,.3); }
+.queue-v2 .queue-menu button { min-height:40px; padding:8px 10px; border-radius:6px; color:var(--text); background:transparent; text-align:left; cursor:pointer; }
+.queue-v2 .queue-menu button:hover:not(:disabled) { background:var(--surface-3); }
+.queue-v2 .queue-menu button:disabled { opacity:.4; cursor:not-allowed; }
+.queue-v2 .queue-menu .danger,.queue-error { color:var(--danger); }
+.queue-error { padding:8px; border-radius:7px; background:rgba(255,80,80,.1); font-size:11px; }
 .chat-panel,.members-panel { background:transparent; }
 .chat-form { background:var(--bg); }
 .member-row.is-speaking { background:rgba(120,169,140,.07); box-shadow:inset 2px 0 var(--primary); }
@@ -1436,4 +1451,8 @@ html[data-compact-viewport] .mobile-party.game-mode:has(.chat-form:focus-within)
 @media (max-width:560px) {
   .playlist-items li { grid-template-columns:22px 48px minmax(0,1fr); }
   .playlist-items li>.playlist-row-actions { grid-column:1 / -1; grid-row:2; }
+}
+@media (max-width:900px) {
+  .drawer-queue .queue-v2 .queue-item { grid-template-columns:24px 48px minmax(0,1fr) 44px; gap:8px; }
+  .drawer-queue .queue-v2 .queue-item-menu { grid-column:4; grid-row:1; }
 }

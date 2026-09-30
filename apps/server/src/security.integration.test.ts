@@ -184,8 +184,8 @@ test("HTTP verification/reset gates real endpoints and rejects token replay", { 
   assert.equal(queued.ok, true);
   assert.equal((await remoteQueue).length, 1);
   assert.ok(queued.item);
-  const concurrentQueue = new Promise<Array<{ id: string }>>((resolve) => {
-    const onUpdate = (items: Array<{ id: string }>) => { if (items.length === 3) { joSocket.off("queue:update", onUpdate); resolve(items); } };
+  const concurrentQueue = new Promise<{ items: Array<{ id: string }>; revision: number }>((resolve) => {
+    const onUpdate = (items: Array<{ id: string }>, revision: number) => { if (items.length === 3) { joSocket.off("queue:update", onUpdate); resolve({ items, revision }); } };
     joSocket.on("queue:update", onUpdate);
   });
   const second = { ...qaMedia, id: crypto.randomUUID(), providerMediaId: "kXYiU_JCYtU", title: "QA concurrent B", addedBy: maria.user };
@@ -196,7 +196,16 @@ test("HTTP verification/reset gates real endpoints and rejects token replay", { 
   ]);
   assert.equal(secondAck.ok, true);
   assert.equal(thirdAck.ok, true);
-  assert.deepEqual(new Set((await concurrentQueue).map((item) => item.id)), new Set([queued.item!.id, second.id, third.id]));
+  const concurrent = await concurrentQueue;
+  assert.deepEqual(new Set(concurrent.items.map((item) => item.id)), new Set([queued.item!.id, second.id, third.id]));
+  const retry = await new Promise<{ ok: boolean; changed?: boolean; item?: { id: string } }>((resolve) => hostSocket.emit("queue:add", { roomId: house.primaryRoomId, item: qaMedia, operationId: qaMedia.id }, resolve));
+  assert.equal(retry.ok, true); assert.equal(retry.changed, false); assert.equal(retry.item?.id, qaMedia.id);
+  const moved = await new Promise<{ ok: boolean; revision?: number; queue?: Array<{ id: string }> }>((resolve) => hostSocket.emit("queue:move", { roomId: house.primaryRoomId, itemId: third.id, toIndex: 0, revision: concurrent.revision }, resolve));
+  assert.equal(moved.ok, true); assert.deepEqual(moved.queue?.map((item) => item.id), [third.id, qaMedia.id, second.id]);
+  const staleMove = await new Promise<{ ok: boolean; revision?: number; queue?: Array<{ id: string }> }>((resolve) => hostSocket.emit("queue:move", { roomId: house.primaryRoomId, itemId: second.id, toIndex: 0, revision: concurrent.revision }, resolve));
+  assert.equal(staleMove.ok, false); assert.equal(staleMove.revision, moved.revision);
+  const staleRemove = await new Promise<{ ok: boolean; revision?: number }>((resolve) => hostSocket.emit("queue:remove", { roomId: house.primaryRoomId, itemId: second.id, revision: concurrent.revision }, resolve));
+  assert.equal(staleRemove.ok, false); assert.equal(staleRemove.revision, moved.revision);
   const remoteMedia = new Promise<{ state: string; revision: number; mediaId: string }>((resolve) => joSocket.once("media:sync", resolve));
   const changed = await new Promise<{ ok: boolean }>((resolve) => hostSocket.emit("media:change", { roomId: house.primaryRoomId, item: queued.item! }, resolve));
   assert.equal(changed.ok, true);

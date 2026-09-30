@@ -10,6 +10,8 @@ import { io } from "socket.io-client";
 import { drawWordBanks } from "../apps/server/src/drawWords";
 import { quizQuestions } from "../apps/server/src/quizQuestions";
 
+let m2QaSessions: Array<{ token: string; user: { id: string; displayName: string; color: string } }> | null = null;
+
 test("S1 Houses: Home observes two Party browsers, three games, six widths, details and invite without joining", async ({ browser, request }) => {
   test.setTimeout(120000);
   const origin = `http://127.0.0.1:${webPort}`, api = `http://127.0.0.1:${apiPort}`;
@@ -1488,6 +1490,7 @@ test("M2 three browsers share favorites and collections without disturbing playb
     expect((await request.post(`${api}/api/auth/verification/confirm`, { data: { token: new URL(link).hash.slice(7) } })).status()).toBe(204);
     sessions.push(await (await request.post(`${api}/api/auth/login`, { data: { email, password } })).json());
   }
+  m2QaSessions = sessions;
   const headers = { Authorization: `Bearer ${sessions[0].token}` };
   const { house } = await (await request.post(`${api}/api/houses`, { headers, data: { name: "M2 Library QA" } })).json();
   const { invite } = await (await request.post(`${api}/api/houses/${house.id}/invites`, { headers, data: { expiresInHours: 1, maxUses: 2 } })).json();
@@ -1576,4 +1579,105 @@ test("M2 three browsers share favorites and collections without disturbing playb
     await a.screenshot({ path: "artifacts/m2/m2-party-player-preserved.png" });
     await a.screenshot({ path: "artifacts/m2/m2-hub-open-desktop.png" });
   } finally { socket.disconnect(); for (const context of contexts) await context.close(); }
+});
+
+test("M3 Queue V2: three clients converge through reorder, stale action, late join, batch and reconnect", async ({ browser, request }) => {
+  test.setTimeout(180_000);
+  fs.mkdirSync("artifacts/m3", { recursive: true });
+  const origin = `http://127.0.0.1:${webPort}`, api = `http://127.0.0.1:${apiPort}`;
+  const sessions = m2QaSessions ? [...m2QaSessions] : [];
+  for (const name of sessions.length ? [] : ["M3 Ana", "M3 Bia", "M3 Caio"]) {
+    const email = `m3-${crypto.randomUUID()}@example.test`, password = "local-e2e-password-123";
+    expect((await request.post(`${api}/api/auth/signup`, { data: { displayName: name, email, password } })).status()).toBe(201);
+    const link = JSON.parse(fs.readFileSync(path.join(directory, "mail.jsonl"), "utf8").trim().split("\n").at(-1)!).text.match(/https?:\/\/\S+/)[0];
+    expect((await request.post(`${api}/api/auth/verification/confirm`, { data: { token: new URL(link).hash.slice(7) } })).status()).toBe(204);
+    sessions.push(await (await request.post(`${api}/api/auth/login`, { data: { email, password } })).json());
+  }
+  const headers = { Authorization: `Bearer ${sessions[0].token}` };
+  const { house } = await (await request.post(`${api}/api/houses`, { headers, data: { name: "M3 Queue QA" } })).json();
+  const { invite } = await (await request.post(`${api}/api/houses/${house.id}/invites`, { headers, data: { expiresInHours: 1, maxUses: 2 } })).json();
+  for (const session of sessions.slice(1)) expect((await request.post(`${api}/api/invites/${invite.code}/accept`, { headers: { Authorization: `Bearer ${session.token}` } })).status()).toBe(200);
+  const contexts = await Promise.all(sessions.map((_, index) => browser.newContext({ viewport: { width: index === 1 ? 390 : 1280, height: index === 1 ? 844 : 900 }, isMobile: index === 1, hasTouch: index === 1 })));
+  const sockets = sessions.map((session) => io(api, { autoConnect: false, auth: { token: session.token }, transports: ["websocket"], extraHeaders: { Origin: origin } }));
+  const roomId = house.primaryRoomId;
+  const joinSocket = async (index: number) => { const s = sockets[index]; const joined = new Promise<any>((resolve, reject) => { s.once("room:snapshot", resolve); s.once("connect_error", reject); }); s.once("connect", () => s.emit("room:join", { roomId, user: sessions[index].user })); s.connect(); return joined; };
+  const item = (id: string, owner: number) => ({ id: crypto.randomUUID(), provider: "youtube", providerMediaId: id, type: "video", title: `M3 mídia ${id}`, duration: 180, addedBy: sessions[owner].user, addedAt: new Date().toISOString() });
+  try {
+    for (let index = 0; index < contexts.length; index++) await contexts[index].addInitScript((session) => localStorage.setItem("lumio.session.v1", JSON.stringify(session)), sessions[index]);
+    const [a, b, c] = await Promise.all(contexts.map((context) => context.newPage()));
+    const errors: string[] = [];
+    for (const page of [a, b, c]) page.on("pageerror", (error) => errors.push(error.message));
+    await Promise.all([a.goto(`${origin}/house/${house.id}`), b.goto(`${origin}/house/${house.id}`)]);
+    await a.getByRole("button", { name: /Abrir fila/ }).click();
+    await expect(a.locator(".queue-empty")).toBeVisible();
+    await a.screenshot({ path: "artifacts/m3/m3-queue-empty-desktop.png" });
+    await b.getByRole("button", { name: "Fila da Party", exact: true }).click();
+    await expect(b.locator(".queue-empty")).toBeVisible();
+    await b.screenshot({ path: "artifacts/m3/m3-queue-empty-mobile.png" });
+    await b.getByRole("button", { name: "Fechar painel" }).click();
+    const initial = await joinSocket(0); await joinSocket(1);
+    sockets[0].emit("room:settings", { roomId, settings: { ...initial.settings, mediaControl: "everyone", queueControl: "members" } });
+    const first = item("dQw4w9WgXcQ", 0), second = item("kXYiU_JCYtU", 1), third = item("3tmd-ClpJxA", 0);
+    first.title = "M3 vídeo com um título bem longo para conferir truncamento e leitura da fila no celular";
+    expect((await sockets[0].timeout(5000).emitWithAck("queue:add", { roomId, item: first })).ok).toBe(true);
+    expect((await sockets[0].timeout(5000).emitWithAck("media:change", { roomId, item: first })).ok).toBe(true);
+    expect((await sockets[1].timeout(5000).emitWithAck("queue:add", { roomId, item: second })).ok).toBe(true);
+    expect((await sockets[0].timeout(5000).emitWithAck("queue:add", { roomId, item: third })).ok).toBe(true);
+    await c.goto(`${origin}/house/${house.id}`); const late = await joinSocket(2);
+    expect(late.queue.map((entry: { id: string }) => entry.id)).toEqual([first.id, second.id, third.id]);
+    await expect(a.locator(".queue-group").first()).toContainText(first.title);
+    await expect(a.locator(".queue-group").last()).toContainText(second.title);
+    await a.screenshot({ path: "artifacts/m3/m3-queue-desktop.png" });
+    sockets[0].emit("room:settings", { roomId, settings: { ...initial.settings, mediaControl: "everyone", queueControl: "members", autoplayNext: false } });
+    await expect(a.locator(".queue-toolbar")).toContainText("Aguarda avanço manual");
+    await a.screenshot({ path: "artifacts/m3/m3-autoplay-off.png" });
+    sockets[0].emit("room:settings", { roomId, settings: { ...initial.settings, mediaControl: "everyone", queueControl: "members", autoplayNext: true } });
+    await expect(a.locator(".queue-toolbar")).toContainText("Avança automaticamente");
+    const oldRevision = late.queueRevision;
+    const moved = await sockets[1].timeout(5000).emitWithAck("queue:move", { roomId, itemId: third.id, toIndex: 1, revision: oldRevision });
+    expect(moved.ok).toBe(true);
+    await expect(a.locator(".queue-group").last().locator(".queue-item").first()).toContainText(third.title);
+    await a.screenshot({ path: "artifacts/m3/m3-reorder-desktop.png" });
+    const stale = await sockets[0].timeout(5000).emitWithAck("queue:move", { roomId, itemId: second.id, toIndex: 1, revision: oldRevision });
+    expect(stale.ok).toBe(false); expect(stale.queue.map((entry: { id: string }) => entry.id)).toEqual([first.id, third.id, second.id]);
+    await expect(a.locator(".queue-group").last().locator(".queue-item").first()).toContainText(third.title);
+    await b.getByRole("button", { name: "Fila da Party", exact: true }).click();
+    await expect(b.locator(".queue-group").last().locator(".queue-item").first()).toContainText(third.title);
+    await b.screenshot({ path: "artifacts/m3/m3-queue-mobile.png" });
+    await b.getByRole("button", { name: `Opções para ${third.title}` }).click();
+    await b.screenshot({ path: "artifacts/m3/m3-queue-menu-mobile.png" });
+    for (const width of [320, 360, 375, 390, 412, 430]) {
+      await b.setViewportSize({ width, height: 844 });
+      expect(await b.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      await b.screenshot({ path: `artifacts/m3/m3-queue-${width}.png` });
+    }
+    const removed = await sockets[0].timeout(5000).emitWithAck("queue:remove", { roomId, itemId: second.id, revision: moved.revision });
+    expect(removed.ok).toBe(true);
+    const collection = await (await request.post(`${api}/api/media-hub/${roomId}/playlists`, { headers, data: { name: "M3 coleção" } })).json();
+    const playlistId = collection.playlist.id;
+    expect((await request.post(`${api}/api/media-hub/${roomId}/playlists/${playlistId}/items`, { headers, data: { item: { ...third, id: "media-third" } } })).ok()).toBe(true);
+    const batchId = crypto.randomUUID();
+    const batch = await request.post(`${api}/api/media-hub/${roomId}/playlists/${playlistId}/queue`, { headers, data: { mode: "append", playNow: false, revision: removed.revision, operationId: batchId } });
+    expect(batch.status()).toBe(200);
+    const retry = await request.post(`${api}/api/media-hub/${roomId}/playlists/${playlistId}/queue`, { headers, data: { mode: "append", playNow: false, revision: removed.revision, operationId: batchId } });
+    expect((await retry.json()).duplicate).toBe(true);
+    sockets[1].disconnect(); await b.reload();
+    if (!await b.getByRole("complementary", { name: "Painel da Party" }).isVisible()) await b.getByRole("button", { name: "Fila da Party", exact: true }).click();
+    await expect(b.locator(".queue-group").last().locator(".queue-item")).toHaveCount(2);
+    const next = await sockets[0].timeout(5000).emitWithAck("queue:advance", { roomId, expectedMediaId: first.providerMediaId, expectedQueueItemId: first.id });
+    const repeated = await sockets[2].timeout(5000).emitWithAck("queue:advance", { roomId, expectedMediaId: first.providerMediaId, expectedQueueItemId: first.id });
+    expect(next.advanced).toBe(true); expect(repeated.advanced).toBe(false);
+    await expect(a.locator(".queue-group").first()).toContainText(third.title);
+    await expect(c.locator(".now-playing h2")).toHaveText(third.title);
+    for (let index = 0; index < 15; index++) expect((await sockets[0].timeout(5000).emitWithAck("queue:add", { roomId, item: { ...item(`M3LIST${String(index).padStart(5, "0")}`, 0), title: `M3 lista longa ${index + 1}` } })).ok).toBe(true);
+    await expect(a.locator(".queue-group").last().locator(".queue-item")).toHaveCount(16);
+    await a.screenshot({ path: "artifacts/m3/m3-long-list-desktop.png" });
+    await b.screenshot({ path: "artifacts/m3/m3-long-list-mobile.png" });
+    await a.locator(".dock-add").click();
+    const hub = a.getByRole("dialog", { name: "A mídia da Casa" });
+    await hub.getByRole("button", { name: "Google Drive", exact: true }).click();
+    await a.screenshot({ path: "artifacts/m3/m3-drive-unavailable-local.png" });
+    await hub.getByRole("button", { name: "Fechar Media Hub" }).click();
+    expect(errors).toEqual([]);
+  } finally { for (const socket of sockets) socket.disconnect(); for (const context of contexts) await context.close(); }
 });

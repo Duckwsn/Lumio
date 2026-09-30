@@ -168,6 +168,8 @@ export function MediaHub({ apiUrl, token, roomId, queueRevision, refreshSignal, 
   const saveLibrary = async (item: MediaItem) => { try { await request(`/api/media-hub/${roomId}/library`, { method: "POST", body: JSON.stringify({ item: asMedia(item) }) }); notify("Salvo na biblioteca da Casa."); await refresh(); } catch (error) { setMessage((error as Error).message); } };
   const removeLibrary = async (item: MediaItem) => { try { await request(`/api/media-hub/${roomId}/library`, { method: "DELETE", body: JSON.stringify({ item: asMedia(item) }) }); notify("Removido da biblioteca."); await refresh(); } catch (error) { setMessage((error as Error).message); } };
   const pendingFavorites = useRef(new Set<string>());
+  const pendingQueueBatches = useRef(new Set<string>());
+  const queueBatchIntents = useRef(new Map<string, string>());
   const toggleFavorite = async (item: MediaItem) => {
     const key = keyOf(item);
     if (pendingFavorites.current.has(key)) return;
@@ -182,7 +184,21 @@ export function MediaHub({ apiUrl, token, roomId, queueRevision, refreshSignal, 
   };
   const openPlaylist = async (playlist: Playlist) => { setBusy(true); try { const detail = await request<{ playlist: Playlist }>(`/api/media-hub/${roomId}/playlists/${playlist.id}`); setSelectedPlaylist(detail.playlist); } catch (error) { setMessage((error as Error).message); } finally { setBusy(false); } };
   const addToPlaylist = async (playlistId: string, item: MediaItem) => { try { await request(`/api/media-hub/${roomId}/playlists/${playlistId}/items`, { method: "POST", body: JSON.stringify({ item: asMedia(item) }) }); setPlaylistTarget(null); notify("Adicionado à playlist."); await refresh(); } catch (error) { setMessage((error as Error).message); } };
-  const queuePlaylist = async (playlist: Playlist, mode: QueueMode, playNow = false) => { try { if (!canAdd || (playNow || mode === "replace") && !canControl) throw new Error("Você não tem permissão para esta ação."); const result = await request<{ skipped?: number }>(`/api/media-hub/${roomId}/playlists/${playlist.id}/queue`, { method: "POST", body: JSON.stringify({ mode, playNow, revision: queueRevision }) }); notify(`${playNow ? `Reproduzindo ${playlist.name}.` : mode === "next" ? "Playlist colocada a seguir." : "Playlist adicionada à fila."}${result.skipped ? ` ${result.skipped} item(ns) indisponível(is) ignorado(s).` : ""}`); if (playNow) onClose(); } catch (error) { setMessage((error as Error).message); } };
+  const queuePlaylist = async (playlist: Playlist, mode: QueueMode, playNow = false) => {
+    const key = `${roomId}:${playlist.id}:${mode}:${playNow}`;
+    if (pendingQueueBatches.current.has(key)) return;
+    pendingQueueBatches.current.add(key);
+    try {
+      if (!canAdd || (playNow || mode === "replace") && !canControl) throw new Error("Você não tem permissão para esta ação.");
+      const operationId = queueBatchIntents.current.get(key) ?? crypto.randomUUID();
+      queueBatchIntents.current.set(key, operationId);
+      const result = await request<{ skipped?: number; duplicate?: boolean }>(`/api/media-hub/${roomId}/playlists/${playlist.id}/queue`, { method: "POST", body: JSON.stringify({ mode, playNow, revision: queueRevision, operationId }) });
+      queueBatchIntents.current.delete(key);
+      notify(`${result.duplicate ? "Coleção já adicionada nesta tentativa." : playNow ? `Reproduzindo ${playlist.name}.` : mode === "next" ? "Playlist colocada a seguir." : "Playlist adicionada à fila."}${result.skipped ? ` ${result.skipped} item(ns) indisponível(is) ignorado(s).` : ""}`);
+      if (playNow) onClose();
+    } catch (error) { setMessage((error as Error).message); }
+    finally { pendingQueueBatches.current.delete(key); }
+  };
 
   const favoriteKeys = useMemo(() => new Set(hub.favorites.map(keyOf)), [hub.favorites]);
   const savedKeys = useMemo(() => new Set(hub.libraryKeys), [hub.libraryKeys]);

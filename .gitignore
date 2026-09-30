@@ -14,6 +14,7 @@ playwright-report/
 /artifacts/s2/
 /artifacts/m1/
 /artifacts/m2/
+/artifacts/m3/
 *.tsbuildinfo
 apps/server/prisma/dev.db
 *.db-journal
