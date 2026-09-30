@@ -22,7 +22,6 @@ import {
   type VoicePeer,
 } from "@lumio/shared";
 import type { MainStageView } from "./components/MainStage";
-import type { LocalAudioSettings } from "./components/CallSettings";
 import { expectedPosition } from "./media/MediaProvider";
 import { toQueueItem } from "./media/MediaResolver";
 import { shouldIgnoreOffer, shouldInitiateOffer } from "./rtc/negotiation";
@@ -40,6 +39,8 @@ import { parseInviteInput } from "./inviteInput";
 import { PartyGameChatProvider, PartyGameWorkspace, usePartyGameChat } from "./games/PartyGameChat";
 import { PartyComposer } from "./components/PartyComposer";
 import { NowPlayingFavorite } from "./components/NowPlayingFavorite";
+import { useHousePartyShell } from "./party/useHousePartyShell";
+import type { PartySocket } from "./party/usePartyTransport";
 
 const MediaHub = lazy(() => import("./components/MediaHub").then((module) => ({ default: module.MediaHub })));
 const MediaStage = lazy(() => import("./components/MediaStage").then((module) => ({ default: module.MediaStage })));
@@ -84,20 +85,29 @@ export function App() {
   const [homeConnectionEpoch, setHomeConnectionEpoch] = useState(0);
   const homeHouseSignature = useRef(new Map<string, string>());
   const [house, setHouse] = useState<HouseDetails | null>(null);
-  const [snapshot, setSnapshot] = useState<RoomSnapshot | null>(null);
-  const [socket, setSocket] = useState<TypedSocket | null>(null);
-  const [connectionState, setConnectionState] = useState<"connecting" | "connected" | "reconnecting" | "offline" | "error">("connecting");
-  const [entryError, setEntryError] = useState("");
+  const pathname = path.split("?")[0];
+  const routeHouseId = pathname.startsWith("/house/") ? decodeURIComponent(pathname.slice(7)) : "";
+  const inviteToken = pathname.startsWith("/invite/") ? decodeURIComponent(pathname.slice(8)) : "";
+  const selectedHouse = houses.find((item) => item.id === routeHouseId);
+  const registerPartySocket = useRef<(socket: PartySocket) => void | (() => void)>(() => undefined);
+  const partyShell = useHousePartyShell(
+    SOCKET_URL, session?.token, routeHouseId, selectedHouse?.primaryRoomId,
+    (nextSocket) => registerPartySocket.current(nextSocket),
+  );
+  const { socket, snapshot, setSnapshot, connectionState, setConnectionState, entryError, setEntryError } = partyShell.transport;
   const [partyNotice, setPartyNotice] = useState<{ message: string; tone: "info" | "success" | "error" } | null>(null);
   const [unreadChat, setUnreadChat] = useState(0);
   const [authError, setAuthError] = useState("");
-  const [voiceError, setVoiceError] = useState("");
-  const [audioBlocked, setAudioBlocked] = useState(false);
-  const [micEnabled, setMicEnabled] = useState(false);
-  const [callState, setCallState] = useState<"idle" | "joining" | "connected" | "reconnecting" | "leaving" | "error">("idle");
-  const [muted, setMuted] = useState(true);
-  const [deafened, setDeafened] = useState(false);
-  const [speaking, setSpeaking] = useState(false);
+  const {
+    voiceError, setVoiceError, audioBlocked, setAudioBlocked, micEnabled, setMicEnabled,
+    callState, setCallState, muted, setMuted, deafened, setDeafened, speaking, setSpeaking,
+    participantVolumes, setParticipantVolumes, audioDevices, setAudioDevices, audioSettings, setAudioSettings,
+    localScreenStream, setLocalScreenStream, remoteScreenStream, setRemoteScreenStream,
+    callQuality, setCallQuality, micLevelRef, getMicLevel, localStream, peerConnections,
+    peerSessions, rtcConfiguration, callActiveRef, callGeneration, micRequestInFlight,
+    resetPeers, joinCallRef, remoteAudio, analyserCleanup, displayStream,
+    mutedRef, deafenedRef, audioSettingsRef, participantVolumesRef,
+  } = partyShell.call;
   const [activePanel, setActivePanel] = useState<"chat" | "members" | "queue">("members");
   const [showMediaHub, setShowMediaHub] = useState(false);
   const [showMainMenu, setShowMainMenu] = useState(false);
@@ -118,41 +128,14 @@ export function App() {
   const [mediaHubRevision, setMediaHubRevision] = useState(0);
   const [confirmClearQueue, setConfirmClearQueue] = useState(false);
   const [pendingQueueRemoval, setPendingQueueRemoval] = useState<QueueItem | null>(null);
-  const [participantVolumes, setParticipantVolumes] = useState<Record<string, number>>({});
   const [playerResyncToken, setPlayerResyncToken] = useState(0);
   const [typingUserIds, setTypingUserIds] = useState<string[]>([]);
   const [showCallSettings, setShowCallSettings] = useState(false);
-  const [audioDevices, setAudioDevices] = useState<MediaDeviceInfo[]>([]);
-  const [audioSettings, setAudioSettings] = useState<LocalAudioSettings>(() => {
-    const defaults: LocalAudioSettings = { inputDeviceId: "", outputDeviceId: "", microphoneMode: "voice", mediaVolume: 100, callVolume: 100, duckingEnabled: true, duckingVolume: 40 };
-    try { return { ...defaults, ...JSON.parse(localStorage.getItem("lumio.audio.v1") ?? "{}") }; } catch { return defaults; }
-  });
-  const micLevelRef = useRef(0);
-  const getMicLevel = useCallback(() => micLevelRef.current, []);
   const [stageView, setStageView] = useState<MainStageView>("media");
   const mainMenuAnchor = useRef<HTMLDivElement>(null);
   const profileMenuAnchor = useRef<HTMLDivElement>(null);
   const mainMenuTrigger = useRef<HTMLButtonElement>(null);
   const profileMenuTrigger = useRef<HTMLButtonElement>(null);
-  const [localScreenStream, setLocalScreenStream] = useState<MediaStream | null>(null);
-  const [remoteScreenStream, setRemoteScreenStream] = useState<MediaStream | null>(null);
-  const [callQuality, setCallQuality] = useState<"Calculando" | "Excelente" | "Boa" | "Instável">("Calculando");
-  const localStream = useRef<MediaStream | null>(null);
-  const peerConnections = useRef(new Map<string, RTCPeerConnection>());
-  const peerSessions = useRef(new Map<string, { socketId: string; polite: boolean; makingOffer: boolean; ignoreOffer: boolean; settingAnswer: boolean; candidates: RTCIceCandidateInit[]; restartAttempts: number; restartTimer?: number; disconnectTimer?: number }>());
-  const rtcConfiguration = useRef<RTCConfiguration>({ iceServers: [] });
-  const callActiveRef = useRef(false);
-  const callGeneration = useRef(0);
-  const micRequestInFlight = useRef(false);
-  const resetPeers = useRef<() => void>(() => undefined);
-  const joinCallRef = useRef<(withMic: boolean, deviceOverride?: string) => Promise<void>>(async () => undefined);
-  const remoteAudio = useRef(new Map<string, HTMLAudioElement>());
-  const analyserCleanup = useRef<(() => void) | null>(null);
-  const displayStream = useRef<MediaStream | null>(null);
-  const mutedRef = useRef(muted);
-  const deafenedRef = useRef(deafened);
-  const audioSettingsRef = useRef(audioSettings);
-  const participantVolumesRef = useRef(participantVolumes);
   const partyNoticeTimer = useRef<number>();
   const offlineTimer = useRef<number>();
   const hadSnapshot = useRef(false);
@@ -167,10 +150,7 @@ export function App() {
   const drawerStateRef = useRef({ open: false, panel: "members" as "chat" | "members" | "queue" });
   const drawerReturnFocus = useRef<HTMLElement | null>(null);
   const shortcutActions = useRef<{ toggleDeafen?: () => void; toggleTheater?: () => void; closeTop?: () => void }>({});
-  const pathname = path.split("?")[0];
-  const routeHouseId = pathname.startsWith("/house/") ? decodeURIComponent(pathname.slice(7)) : "";
   useEffect(() => { setStageView("media"); setGameFullscreen(false); }, [routeHouseId]);
-  const inviteToken = pathname.startsWith("/invite/") ? decodeURIComponent(pathname.slice(8)) : "";
   const navigate = useCallback((next: string) => { window.history.pushState({}, "", next); setPath(next); window.scrollTo(0, 0); }, []);
 
   useEffect(() => { const onPopState = () => setPath(`${window.location.pathname}${window.location.search}`); window.addEventListener("popstate", onPopState); return () => window.removeEventListener("popstate", onPopState); }, []);
@@ -183,11 +163,6 @@ export function App() {
   }, [session?.token]);
   useEffect(() => { if (authStatus === "unknown") void bootstrap(); }, [authStatus, bootstrap]);
 
-  useEffect(() => { mutedRef.current = muted; }, [muted]);
-  useEffect(() => { deafenedRef.current = deafened; }, [deafened]);
-  useEffect(() => { audioSettingsRef.current = audioSettings; }, [audioSettings]);
-  useEffect(() => { participantVolumesRef.current = participantVolumes; }, [participantVolumes]);
-  useEffect(() => { if (window.matchMedia("(pointer: coarse)").matches) setAudioSettings((current) => current.microphoneMode === "ptt" ? { ...current, microphoneMode: "voice" } : current); }, []);
   drawerStateRef.current = { open: !rightPanelCollapsed, panel: activePanel };
   useEffect(() => { if (!rightPanelCollapsed && activePanel === "chat") setUnreadChat(0); }, [rightPanelCollapsed, activePanel]);
   const notifyParty = useCallback((message: string, tone: "info" | "success" | "error" = "info") => {
@@ -204,7 +179,6 @@ export function App() {
     mutedRef.current = true; setMuted(true); setSpeaking(false); setMicEnabled(false); setLocalScreenStream(null); setRemoteScreenStream(null); setVoiceError(message); setCallState("error");
   }, []);
   useEffect(() => () => { window.clearTimeout(partyNoticeTimer.current); window.clearTimeout(offlineTimer.current); }, []);
-  useEffect(() => { localStorage.setItem("lumio.audio.v1", JSON.stringify(audioSettings)); }, [audioSettings]);
   useEffect(() => { localStorage.setItem("lumio.presentation.v1", presentationMode); }, [presentationMode]);
 
   const authHeaders = session ? { Authorization: `Bearer ${session.token}` } : undefined;
@@ -222,7 +196,6 @@ export function App() {
 
   useEffect(() => { if (routeHouseId) localStorage.setItem(HOUSE_KEY, routeHouseId); }, [routeHouseId]);
 
-  const selectedHouse = houses.find((item) => item.id === routeHouseId);
   useEffect(() => {
     if (authStatus !== "authenticated" || routeHouseId || inviteToken || (pathname !== "/app" && pathname !== "/") || !session) return;
     const homeSocket: TypedSocket = io(SOCKET_URL, socketOptions(session.token));
@@ -250,10 +223,8 @@ export function App() {
     return () => document.removeEventListener("pointerdown", onOutside);
   }, [showMainMenu, showProfileMenu]);
 
-  useEffect(() => {
+  registerPartySocket.current = (nextSocket) => {
     if (!session || !routeHouseId || !selectedHouse || selectedHouse.id !== routeHouseId) return;
-    const nextSocket: TypedSocket = io(SOCKET_URL, socketOptions(session.token));
-    setSocket(nextSocket);
     setConnectionState("connecting"); setEntryError("");
     hadSnapshot.current = false; reconnecting.current = false; membersSeen.current.clear(); queueSeen.current.clear(); latestMedia.current = null; screenShareActor.current = null; feedbackRevision.current = -1;
     nextSocket.on("connect", () => { setConnectionState(hadSnapshot.current ? "reconnecting" : "connecting"); nextSocket.emit(eventNames.roomJoin, { roomId: selectedHouse.primaryRoomId, user: session.user }); });
@@ -296,7 +267,7 @@ export function App() {
         for (const [id, name] of membersSeen.current) if (!nextMembers.has(id) && id !== session.user.id) notifyParty(`${name} saiu da Party.`);
         membersSeen.current = nextMembers;
       }
-      setSnapshot((current) => current ? { ...nextSnapshot, currentMedia: nextSnapshot.currentMedia.revision < current.currentMedia.revision ? current.currentMedia : nextSnapshot.currentMedia, queue: nextSnapshot.queueRevision < current.queueRevision ? current.queue : nextSnapshot.queue, queueRevision: Math.max(nextSnapshot.queueRevision, current.queueRevision) } : nextSnapshot);
+      setSnapshot((current) => current?.id === nextSnapshot.id ? { ...nextSnapshot, currentMedia: nextSnapshot.currentMedia.revision < current.currentMedia.revision ? current.currentMedia : nextSnapshot.currentMedia, queue: nextSnapshot.queueRevision < current.queueRevision ? current.queue : nextSnapshot.queue, queueRevision: Math.max(nextSnapshot.queueRevision, current.queueRevision) } : nextSnapshot);
       if (recovered && callActiveRef.current) setCallState("joining");
     });
     nextSocket.on("presence:update", (members) => setSnapshot((current) => current ? { ...current, members, connectedCount: members.length } : current));
@@ -330,8 +301,8 @@ export function App() {
     nextSocket.on("member:removed", ({ houseId, message }) => { if (houseId !== routeHouseId) return; setHousesError(message); setSnapshot(null); setHouse(null); localStorage.removeItem(HOUSE_KEY); navigate("/app"); void refreshHouses(); });
     nextSocket.on("house:deleted", ({ houseId }) => { if (houseId !== routeHouseId) return; setShowHouseSettings(false); setSnapshot(null); setHouse(null); setHomeNotice("Casa excluída."); localStorage.removeItem(HOUSE_KEY); navigate("/app"); void refreshHouses(); });
     nextSocket.on("server:error", (message) => { if (!hadSnapshot.current) { setEntryError(message); setConnectionState("error"); } else notifyParty(message, "error"); });
-    return () => { window.clearTimeout(offlineTimer.current); if (nextSocket.connected) nextSocket.emit(eventNames.roomLeave, selectedHouse.primaryRoomId); nextSocket.disconnect(); resetPeers.current(); callGeneration.current += 1; callActiveRef.current = false; micRequestInFlight.current = false; analyserCleanup.current?.(); analyserCleanup.current = null; localStream.current?.getTracks().forEach((track) => track.stop()); localStream.current = null; displayStream.current?.getTracks().forEach((track) => track.stop()); displayStream.current = null; mutedRef.current = true; setMuted(true); setSpeaking(false); setAudioBlocked(false); setCallState("idle"); setMicEnabled(false); setLocalScreenStream(null); setRemoteScreenStream(null); setSocket(null); };
-  }, [session?.token, routeHouseId, selectedHouse?.id, selectedHouse?.primaryRoomId, rejectCall]);
+    return () => { window.clearTimeout(offlineTimer.current); resetPeers.current(); callGeneration.current += 1; callActiveRef.current = false; micRequestInFlight.current = false; analyserCleanup.current?.(); analyserCleanup.current = null; localStream.current?.getTracks().forEach((track) => track.stop()); localStream.current = null; displayStream.current?.getTracks().forEach((track) => track.stop()); displayStream.current = null; mutedRef.current = true; setMuted(true); setSpeaking(false); setAudioBlocked(false); setCallState("idle"); setMicEnabled(false); setLocalScreenStream(null); setRemoteScreenStream(null); };
+  };
 
   useEffect(() => {
     if (!session || !routeHouseId) return;
@@ -515,7 +486,7 @@ export function App() {
     authRequestVersion.current += 1; houseRequestVersion.current += 1;
     if (session) void fetch(`${API_URL}/api/auth/logout`, { method: "POST", headers: { Authorization: `Bearer ${session.token}` } });
     socket?.disconnect(); callGeneration.current += 1; callActiveRef.current = false; micRequestInFlight.current = false; analyserCleanup.current?.(); analyserCleanup.current = null; localStream.current?.getTracks().forEach((track) => track.stop()); localStream.current = null; displayStream.current?.getTracks().forEach((track) => track.stop()); displayStream.current = null; resetPeers.current();
-    localStorage.removeItem(SESSION_KEY); localStorage.removeItem(HOUSE_KEY); setSession(null); setHouses([]); setHouse(null); setSnapshot(null); setSocket(null); setMicEnabled(false); setCallState("idle"); setAudioBlocked(false); setLocalScreenStream(null); setRemoteScreenStream(null); setAuthStatus("unauthenticated"); navigate("/");
+    localStorage.removeItem(SESSION_KEY); localStorage.removeItem(HOUSE_KEY); setSession(null); setHouses([]); setHouse(null); setSnapshot(null); setMicEnabled(false); setCallState("idle"); setAudioBlocked(false); setLocalScreenStream(null); setRemoteScreenStream(null); setAuthStatus("unauthenticated"); navigate("/");
   };
 
   const sendChat = (body: string) => { if (body.trim() && snapshot && socket?.connected) { socket.emit(eventNames.chatMessage, { roomId: snapshot.id, body }); return true; } notifyParty("Sem conexão com a Party. Tente novamente.", "error"); return false; };

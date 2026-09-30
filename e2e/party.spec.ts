@@ -1681,3 +1681,110 @@ test("M3 Queue V2: three clients converge through reorder, stale action, late jo
     expect(errors).toEqual([]);
   } finally { for (const socket of sockets) socket.disconnect(); for (const context of contexts) await context.close(); }
 });
+
+test("GX2 Party transport, Call peers and tracks keep identity across visual child transitions", async ({ request }) => {
+  test.setTimeout(120_000);
+  const origin = `http://127.0.0.1:${webPort}`, api = `http://127.0.0.1:${apiPort}`;
+  // Reuse verified E2E identities when the full suite reaches the signup rate limit.
+  const sessions: any[] = m2QaSessions ? m2QaSessions.slice(0, 2) : [];
+  for (const displayName of ["GX2 A", "GX2 B"].slice(sessions.length)) {
+    const email = `gx2-${crypto.randomUUID()}@example.test`, password = "local-e2e-password-123";
+    expect((await request.post(`${api}/api/auth/signup`, { data: { displayName, email, password } })).status()).toBe(201);
+    const last = fs.readFileSync(path.join(directory, "mail.jsonl"), "utf8").trim().split("\n").at(-1)!;
+    const link = JSON.parse(last).text.match(/https?:\/\/\S+/)[0];
+    expect((await request.post(`${api}/api/auth/verification/confirm`, { data: { token: new URL(link).hash.slice(7) } })).status()).toBe(204);
+    sessions.push(await (await request.post(`${api}/api/auth/login`, { data: { email, password } })).json());
+  }
+  const headers = { Authorization: `Bearer ${sessions[0].token}` };
+  const { house } = await (await request.post(`${api}/api/houses`, { headers, data: { name: "GX2 Party lifetime" } })).json();
+  const { invite } = await (await request.post(`${api}/api/houses/${house.id}/invites`, { headers, data: { expiresInHours: 1, maxUses: 1, role: "MEMBER" } })).json();
+  expect((await request.post(`${api}/api/invites/${invite.token}/accept`, { headers: { Authorization: `Bearer ${sessions[1].token}` } })).ok()).toBe(true);
+  const rtcBrowser = await chromium.launch({ args: ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--autoplay-policy=no-user-gesture-required"] });
+  try {
+    const contexts = await Promise.all(sessions.map(() => rtcBrowser.newContext()));
+    for (let index = 0; index < contexts.length; index++) await contexts[index].addInitScript((session) => {
+      if (window.top !== window || !["http:", "https:"].includes(location.protocol)) return;
+      localStorage.setItem("lumio.session.v1", JSON.stringify(session));
+      const qa = (window as any).gx2 = { sockets: [] as WebSocket[], peers: [] as RTCPeerConnection[], captures: [] as MediaStream[], displays: [] as MediaStream[], packets: [] as string[], before: null as any };
+      const Transport = window.WebSocket;
+      window.WebSocket = class extends Transport {
+        constructor(url: string | URL, protocols?: string | string[]) { super(url, protocols); if (String(url).includes("/socket.io/")) qa.sockets.push(this); }
+        send(data: string | ArrayBufferLike | Blob | ArrayBufferView) {
+          if (typeof data === "string" && data.startsWith("42")) {
+            try { const packet = JSON.parse(data.slice(2)); if (typeof packet[0] === "string") qa.packets.push(packet[0]); } catch { /* Not a Socket.IO event packet. */ }
+          }
+          super.send(data);
+        }
+      };
+      const Peer = window.RTCPeerConnection;
+      window.RTCPeerConnection = class extends Peer { constructor(config?: RTCConfiguration) { super(config); qa.peers.push(this); } };
+      const capture = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+      navigator.mediaDevices.getUserMedia = async (constraints) => { const stream = await capture(constraints); qa.captures.push(stream); return stream; };
+      navigator.mediaDevices.getDisplayMedia = async () => { const canvas = document.createElement("canvas"); canvas.width = 16; canvas.height = 16; const stream = canvas.captureStream(1); qa.displays.push(stream); return stream; };
+    }, sessions[index]);
+    const [a, b] = await Promise.all(contexts.map((context) => context.newPage()));
+    try {
+      for (const page of [a, b]) {
+        await page.goto(`${origin}/house/${house.id}`);
+        await expect(page.locator(".dock-call-state").first()).toHaveText("Microfone desligado", { timeout: 20_000 });
+        expect(await page.evaluate(() => (window as any).gx2.captures.length)).toBe(0);
+        expect(await page.evaluate(() => (window as any).gx2.sockets.length)).toBe(1);
+      }
+      await expect.poll(() => a.evaluate(() => (window as any).gx2.peers.filter((peer: RTCPeerConnection) => peer.connectionState === "connected").length), { timeout: 20_000 }).toBe(1);
+      await a.getByRole("button", { name: "Ativar microfone", exact: true }).click();
+      await expect(a.getByRole("button", { name: "Desativar microfone", exact: true })).toBeVisible();
+      await b.getByRole("button", { name: "Desativar áudio da call", exact: true }).click();
+      await a.getByRole("button", { name: "Compartilhar tela", exact: true }).click();
+      await expect(a.getByRole("button", { name: "Parar compartilhamento", exact: true })).toBeVisible();
+      await a.getByRole("button", { name: "Abrir chat", exact: true }).click();
+      await a.getByRole("textbox", { name: "Mensagem" }).fill("Rascunho GX2 permanece");
+      for (const page of [a, b]) await page.evaluate(() => {
+        const q = (window as any).gx2;
+        q.before = { shell: document.querySelector(".app-shell"), socket: q.sockets[0], peers: [...q.peers], mic: q.captures[0]?.getAudioTracks()[0], display: q.displays[0]?.getVideoTracks()[0], captures: q.captures.length, displays: q.displays.length, packets: [...q.packets], player: document.querySelector(".lumio-player") };
+      });
+      for (let step = 0; step < 5; step++) {
+        const page = step % 2 ? b : a;
+        await page.getByRole("button", { name: "Jogos", exact: true }).click();
+        await expect(page.locator(".main-stage")).toHaveAttribute("data-view", "game");
+        await page.getByRole("button", { name: "Voltar à mídia", exact: true }).click();
+      }
+      for (const page of [a, b]) expect(await page.evaluate(() => {
+        const q = (window as any).gx2, before = q.before;
+        const changed = q.packets.slice(before.packets.length);
+        return {
+          sameShell: document.querySelector(".app-shell") === before.shell,
+          sameSocket: q.sockets.length === 1 && q.sockets[0] === before.socket && before.socket.readyState === WebSocket.OPEN,
+          samePeers: q.peers.length === before.peers.length && q.peers.every((peer: RTCPeerConnection, index: number) => peer === before.peers[index] && peer.connectionState !== "closed"),
+          sameMic: q.captures[0]?.getAudioTracks()[0] === before.mic,
+          sameDisplay: q.displays[0]?.getVideoTracks()[0] === before.display,
+          samePlayer: document.querySelector(".lumio-player") === before.player,
+          captures: q.captures.length - before.captures,
+          displays: q.displays.length - before.displays,
+          socialPackets: changed.filter((name: string) => ["room:join", "room:leave", "voice:join", "voice:leave"].includes(name)),
+        };
+      })).toEqual({ sameShell: true, sameSocket: true, samePeers: true, sameMic: true, sameDisplay: true, samePlayer: true, captures: 0, displays: 0, socialPackets: [] });
+      await expect(a.getByRole("textbox", { name: "Mensagem" })).toHaveValue("Rascunho GX2 permanece");
+      await expect(a.getByRole("button", { name: "Desativar microfone", exact: true })).toBeVisible();
+      await expect(b.getByRole("button", { name: "Ativar áudio da call", exact: true })).toBeVisible();
+      await b.getByRole("button", { name: "Abrir chat", exact: true }).click();
+      await b.getByRole("textbox", { name: "Mensagem" }).fill("GX2 mensagem única");
+      await b.getByRole("button", { name: "Enviar mensagem", exact: true }).click();
+      await expect(a.locator(".chat-panel .message").filter({ hasText: "GX2 mensagem única" })).toHaveCount(1);
+      await expect(a.getByRole("textbox", { name: "Mensagem" })).toHaveValue("Rascunho GX2 permanece");
+      const details = await (await request.get(`${api}/api/houses/${house.id}`, { headers })).json();
+      expect(details.house.members.filter((member: { inParty: boolean }) => member.inParty)).toHaveLength(2);
+      fs.mkdirSync(path.join(root, "test-results/gx2"), { recursive: true });
+      for (const width of [1440, 320, 375, 390, 412, 430]) {
+        await a.setViewportSize({ width, height: width === 1440 ? 900 : 844 });
+        expect(await a.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+        await a.screenshot({ path: path.join(root, `test-results/gx2/party-${width}.png`) });
+      }
+      await a.getByRole("button", { name: "Abrir menu da Casa e Party" }).click();
+      await a.getByRole("button", { name: "Sair da Party", exact: true }).click();
+      await expect(a).toHaveURL(/\/app$/);
+      await expect.poll(() => a.evaluate(() => (window as any).gx2.peers.every((peer: RTCPeerConnection) => peer.connectionState === "closed") && (window as any).gx2.captures.every((stream: MediaStream) => stream.getTracks().every((track) => track.readyState === "ended")) && (window as any).gx2.displays.every((stream: MediaStream) => stream.getTracks().every((track) => track.readyState === "ended")))).toBe(true);
+      expect(await a.evaluate(() => (window as any).gx2.packets.filter((name: string) => name === "room:leave").length)).toBe(1);
+      expect(await a.evaluate(() => (window as any).gx2.sockets[0].readyState)).toBe(WebSocket.CLOSED);
+    } finally { for (const context of contexts) await context.close(); }
+  } finally { await rtcBrowser.close(); }
+});
