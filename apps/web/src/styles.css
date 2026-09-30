@@ -539,6 +539,22 @@ svg { flex:none; }
 .now-playing-main h2 { max-width:min(62vw,980px); margin:2px 0 3px; font-size:17px; }
 .provider-badge { min-height:22px; border-color:var(--border); background:transparent; }
 .party-media-actions { display:flex; align-items:center; gap:4px; }
+.now-playing-favorite { display:inline-flex; min-height:40px; align-items:center; gap:7px; padding:0 10px; border-radius:8px; color:var(--muted); background:transparent; font-size:12px; white-space:nowrap; }
+.now-playing-favorite:hover,.now-playing-favorite:focus-visible { color:var(--text); background:var(--surface-2); }
+.now-playing-favorite.is-active { color:var(--primary); }
+.now-playing-favorite:disabled { opacity:.65; cursor:wait; }
+.playlist-items li { grid-template-columns:26px 66px minmax(0,1fr) auto; }
+.playlist-row-actions { display:flex; min-width:0; align-items:center; justify-content:flex-end; gap:4px; }
+.playlist-row-actions button { display:inline-flex; min-width:36px; min-height:36px; align-items:center; justify-content:center; gap:4px; padding:0 6px; border-radius:7px; color:var(--muted); background:transparent; font-size:11px; }
+.playlist-row-actions button:hover { color:var(--text); background:var(--surface-3); }
+.playlist-row-actions button[aria-pressed="true"] { color:var(--primary); }
+.playlist-row-actions button.danger { color:var(--danger); }
+.playlist-row-actions button:disabled { opacity:.45; }
+@media (max-width:560px) {
+  .playlist-items li { grid-template-columns:22px 48px minmax(0,1fr); }
+  .playlist-items li>.playlist-row-actions { grid-column:1 / -1; grid-row:2; flex-wrap:wrap; justify-content:flex-end; }
+  .playlist-items li>.playlist-row-actions button { min-width:44px; min-height:44px; }
+}
 .skip-vote-action { display:flex; position:relative; min-height:36px; align-items:center; gap:6px; margin-left:6px; padding:0 10px; border-radius:8px; color:var(--muted); background:transparent; font-size:11px; }
 .skip-vote-action:hover { color:var(--text); background:var(--surface-2); }
 
@@ -1414,4 +1430,10 @@ html[data-compact-viewport] .mobile-party.game-mode:has(.chat-form:focus-within)
 @media (max-width:360px) {
   .mobile-party .lumio-player:not(:fullscreen):not(.fallback-fullscreen) .music-cover { width:56px; }
   .mobile-party .lumio-player:not(:fullscreen):not(.fallback-fullscreen) .ambient-copy { max-width:calc(100% - 108px); }
+}
+/* M2 collection rows: individual actions stay reachable without widening the Hub. */
+.playlist-items li { grid-template-columns:26px 66px minmax(0,1fr) auto; }
+@media (max-width:560px) {
+  .playlist-items li { grid-template-columns:22px 48px minmax(0,1fr); }
+  .playlist-items li>.playlist-row-actions { grid-column:1 / -1; grid-row:2; }
 }

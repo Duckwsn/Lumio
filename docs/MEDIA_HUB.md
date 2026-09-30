@@ -78,3 +78,9 @@ O schema Prisma e a migration `0005_media_hub_v2` definem mídia canônica, play
 - Fluxo real validado no navegador: signup, criação de Casa, busca real no YouTube, salvar, favoritar, criar playlist, adicionar item, reproduzir playlist, abrir Media Hub durante playback, convite, segundo membro, biblioteca/favorito compartilhados, reproduzir a seguir e avanço da fila.
 - Auditoria axe do Media Hub: zero violações após ajuste de contraste.
 - Limitação da validação: a automação confirmou duas identidades sequencialmente, mas não manteve três browsers concorrentes ativos para um teste de corrida visual completo. As regras de revisão e avanço idempotente estão cobertas por testes de domínio.
+
+## Estado atual — M2 Social Library
+
+As seções acima descrevem marcos históricos. Desde a Etapa 18, o runtime de produção usa PostgreSQL/Prisma para a biblioteca; desenvolvimento isolado pode usar o adapter local. M2 reutiliza as tabelas existentes: histórico de reprodução por Casa (ocorrências limitadas a 300), biblioteca/favoritos compartilhados e playlists como coleções. A consulta de recentes agrega por `provider + providerMediaId`, ordena pela última reprodução e mostra contagem dentro da janela; a fila continua a guardar ocorrências distintas. Biblioteca tem limite de 500 itens/Casa e páginas de até 60; coleções têm limite de 50/Casa e 500 itens/coleção. Renomear e reordenar exigem versão atual; favoritos são set/unset idempotentes.
+
+O evento `media-hub:update` envia somente Casa e tipo de mudança aos sockets autorizados da Party. O cliente refaz a consulta após o evento e após reconexão. Nenhuma ação da biblioteca toca diretamente o provider: a fila e o playback continuam autoritativos no servidor. Referências Drive salvas não criam grant; ver `GOOGLE_DRIVE.md` para a projeção restrita M2.

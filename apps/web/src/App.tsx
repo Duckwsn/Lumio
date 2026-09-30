@@ -39,6 +39,7 @@ import { safeAuthDestination } from "./authNavigation";
 import { parseInviteInput } from "./inviteInput";
 import { PartyGameChatProvider, PartyGameWorkspace, usePartyGameChat } from "./games/PartyGameChat";
 import { PartyComposer } from "./components/PartyComposer";
+import { NowPlayingFavorite } from "./components/NowPlayingFavorite";
 
 const MediaHub = lazy(() => import("./components/MediaHub").then((module) => ({ default: module.MediaHub })));
 const MediaStage = lazy(() => import("./components/MediaStage").then((module) => ({ default: module.MediaStage })));
@@ -192,6 +193,7 @@ export function App() {
     setPartyNotice({ message, tone });
     partyNoticeTimer.current = window.setTimeout(() => setPartyNotice(null), tone === "error" ? 6000 : 3200);
   }, []);
+  const notifyLibraryError = useCallback((message: string) => notifyParty(message, "error"), [notifyParty]);
   const rejectCall = useCallback((message: string) => {
     callGeneration.current += 1; callActiveRef.current = false; micRequestInFlight.current = false; resetPeers.current();
     localStream.current?.getTracks().forEach((track) => track.stop()); localStream.current = null;
@@ -285,7 +287,7 @@ export function App() {
         screenShareActor.current = nextSnapshot.screenShare ? { id: nextSnapshot.screenShare.user.id, name: nextSnapshot.screenShare.user.displayName } : null;
         feedbackRevision.current = nextSnapshot.currentMedia.revision;
         setPlayerResyncToken((value) => value + 1);
-        if (recovered) notifyParty("Conectado novamente.", "success");
+        if (recovered) { setMediaHubRevision((value) => value + 1); notifyParty("Conectado novamente.", "success"); }
       } else {
         const nextMembers = new Map(nextSnapshot.members.map((member) => [member.user.id, member.user.displayName]));
         for (const [id, name] of nextMembers) if (!membersSeen.current.has(id) && id !== session.user.id) notifyParty(`${name} entrou na Party.`);
@@ -821,7 +823,7 @@ export function App() {
 
           <section className="now-playing" aria-labelledby="now-playing-title">
             <div className="now-playing-main"><span className="provider-badge">{providerLabel(snapshot.currentMedia.provider)}</span><div><p>Tocando agora</p><h2 id="now-playing-title">{snapshot.currentMedia.mediaId ? snapshot.currentMedia.title : "A Party está pronta"}</h2><span>{currentQueueItem ? `Adicionado por ${currentQueueItem.addedBy.displayName}` : "Escolha algo no Media Hub"}</span></div></div>
-            {snapshot.currentMedia.mediaId ? <div className="party-media-actions">{snapshot.settings.skipVotingEnabled ? <button className="skip-vote-action" onClick={voteToSkip} aria-label="Votar para pular" data-tooltip="Votar para pular"><SkipForward size={18} aria-hidden="true" /><span>{snapshot.skipVote.count}/{snapshot.skipVote.required}</span></button> : null}</div> : null}
+            {snapshot.currentMedia.mediaId ? <div className="party-media-actions">{currentQueueItem && house?.permissions.includes("LIBRARY_MANAGE") && (currentQueueItem.provider === "youtube" || currentQueueItem.provider === "google-drive") ? <NowPlayingFavorite key={`${snapshot.id}:${currentQueueItem.provider}:${currentQueueItem.providerMediaId}`} apiUrl={API_URL} token={session.token} roomId={snapshot.id} item={currentQueueItem} revision={mediaHubRevision} onError={notifyLibraryError} /> : null}{snapshot.settings.skipVotingEnabled ? <button className="skip-vote-action" onClick={voteToSkip} aria-label="Votar para pular" data-tooltip="Votar para pular"><SkipForward size={18} aria-hidden="true" /><span>{snapshot.skipVote.count}/{snapshot.skipVote.required}</span></button> : null}</div> : null}
           </section>
         </section>
 

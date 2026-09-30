@@ -125,6 +125,7 @@ export const houseHistoryEntrySchema = mediaItemSchema.extend({
   id: z.string(),
   startedBy: mediaActorSchema,
   playedAt: z.string(),
+  playCount: z.number().int().positive().optional(),
 });
 export type HouseHistoryEntry = z.infer<typeof houseHistoryEntrySchema>;
 

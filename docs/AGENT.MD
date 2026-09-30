@@ -240,3 +240,9 @@ Uma tarefa está pronta quando:
 - Bloqueio de clique não deve serializar lotes de desenho nem impedir sync de recuperação. Foco de escolha de palavra/cor ocorre após controles serem habilitados. Coordenador que abriu o lobby sem participar também entra na tolerância existente de desconexão e pode transferir coordenação após ela.
 - Configure/start/rematch/end validam autoridade e revisão exata. Answer permite revisão não-futura apenas da mesma session/round, uma vez por ativo online, antes do deadline; cliente não determina acerto/pontos. Reconnect conserva lock, espectadores/offline não bloqueiam early finish.
 - Banco PT-BR estável é privado; seleção sem repetição na partida, ordem de quatro alternativas única para todos. Não importar banco no frontend. Timer visual não envia eventos por segundo. Consulte `POST_1_0_G4_PARTY_GAMES_EXPANSION_QUIZ_REPORT.md` para fórmula, limites e QA manual.
+
+## Social Library M2
+
+- Biblioteca, favoritos e coleções pertencem à Casa e usam identidade `provider + providerMediaId`; ações de fila continuam sob autoridade da Party. Histórico social agrega somente ocorrências de reprodução efetiva, preservando ocorrências internas para Previous.
+- Referência Drive salva não cria grant. A projeção para outro membro não revela nome, thumbnail, MIME, duração ou metadata privada; busca da biblioteca deve filtrar a projeção autorizada, nunca metadata oculta. Playback Drive ainda exige concessão ativa da integração existente.
+- Favoritos usam set/unset idempotente, coleções usam versão para edição/ordenação e `media-hub:update` anuncia mudanças sem enviar a biblioteca. Reconsultar após reconnect. Não adicionar feed social ou presença de biblioteca. Consulte `POST_1_0_M2_SOCIAL_LIBRARY_REPORT.md`.

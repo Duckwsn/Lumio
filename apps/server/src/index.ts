@@ -32,6 +32,8 @@ import {
   houseRoleSchema,
   type Permission,
   type HouseHistoryEntry,
+  type MediaItem,
+  type Playlist,
   type QueueItem,
   type User,
 } from "@lumio/shared";
@@ -53,6 +55,7 @@ import { validateProductionEnvironment } from "./productionConfig.js";
 import { bootFailureFields, type BootStage } from "./bootDiagnostics.js";
 import { PartyGames } from "./partyGames.js";
 import { projectHouseActivity, safeMediaTitle } from "./houseActivity.js";
+import { projectLibraryMedia, publicHistory } from "./socialLibrary.js";
 
 // npm workspaces execute this package with apps/server as the working directory.
 // Resolve the project-level environment file from this module so dev and dist agree.
@@ -212,6 +215,30 @@ const mediaAvailableInRoom = (roomId: string, item: QueueItem) => {
   const grant = googleDrive.getGrant(roomId, item.providerMediaId);
   const house = social.getByRoom(roomId);
   return Boolean(grant && house && social.isMember(house.id, grant.ownerId));
+};
+const projectSavedMedia = <T extends MediaItem>(roomId: string, viewerId: string, item: T): T => {
+  const house = social.getByRoom(roomId);
+  const grant = item.provider === "google-drive" ? googleDrive.getGrant(roomId, item.providerMediaId) : undefined;
+  return projectLibraryMedia(item, viewerId, Boolean(grant && house && social.isMember(house.id, grant.ownerId)));
+};
+const projectPlaylistFor = (roomId: string, viewerId: string, playlist: Playlist): Playlist => ({
+  ...playlist, items: playlist.items?.map((item) => projectSavedMedia(roomId, viewerId, item)),
+});
+const normalizeSavedMedia = async (userId: string, item: MediaItem): Promise<MediaItem> => {
+  if (item.provider === "google-drive") {
+    const verified = await googleDrive.resolve(userId, item.providerMediaId);
+    return { ...verified, title: verified.title.slice(0, 180), metadata: undefined };
+  }
+  if (item.provider !== "youtube" || !/^[A-Za-z0-9_-]{11}$/.test(item.providerMediaId) || !item.title.trim()) throw new Error("Mídia inválida.");
+  const channel = item.metadata?.channelTitle;
+  const channelTitle = typeof channel === "string" ? channel.trim().slice(0, 120) : undefined;
+  return {
+    id: `youtube:${item.providerMediaId}`, provider: "youtube", providerMediaId: item.providerMediaId,
+    type: item.type, title: item.title.trim().slice(0, 180),
+    thumbnail: `https://i.ytimg.com/vi/${item.providerMediaId}/hqdefault.jpg`,
+    duration: typeof item.duration === "number" && Number.isFinite(item.duration) && item.duration >= 0 && item.duration <= 86_400 ? item.duration : undefined,
+    metadata: channelTitle ? { channelTitle } : undefined, creator: channelTitle,
+  };
 };
 const requireUser = (request: express.Request, response: express.Response) => {
   const user = getUser(request);
@@ -562,9 +589,21 @@ app.get("/api/media-hub/:roomId", (request, response) => {
   const user = requireRoomMember(request, response, String(request.params.roomId)); if (!user) return;
   const query = z.object({ q: z.string().max(100).optional(), filter: z.string().max(32).optional(), cursor: z.coerce.number().int().min(0).optional(), limit: z.coerce.number().int().min(1).max(60).optional() }).safeParse(request.query);
   if (!query.success) return response.status(400).json({ message: "Filtros inválidos." });
-  const hub = store.getMediaHub(request.params.roomId, user.id, { query: query.data.q, filter: query.data.filter, cursor: query.data.cursor, limit: query.data.limit });
+  const hub = store.getMediaHub(request.params.roomId, user.id, { query: query.data.q, filter: query.data.filter, cursor: query.data.cursor, limit: query.data.limit }, (item) => projectSavedMedia(request.params.roomId, user.id, item));
   if (!hub) return response.status(404).json({ message: "Sala não encontrada." });
-  return response.json(hub);
+  return response.json({ ...hub,
+    library: hub.library.map((item) => projectSavedMedia(request.params.roomId, user.id, item)),
+    favorites: hub.favorites.map((item) => projectSavedMedia(request.params.roomId, user.id, item)),
+    recent: hub.recent.map((item) => projectSavedMedia(request.params.roomId, user.id, item)),
+  });
+});
+
+app.get("/api/media-hub/:roomId/status", (request, response) => {
+  const user = requireRoomMember(request, response, String(request.params.roomId)); if (!user) return;
+  const parsed = z.object({ provider: z.enum(["youtube", "google-drive"]), providerMediaId: z.string().min(1).max(160) }).safeParse(request.query);
+  if (!parsed.success) return response.status(400).json({ message: "Mídia inválida." });
+  const status = store.getSavedStatus(request.params.roomId, parsed.data);
+  return status ? response.json(status) : response.status(404).json({ message: "Party não encontrada." });
 });
 
 app.get("/api/media-hub/:roomId/history", (request, response) => {
@@ -572,50 +611,86 @@ app.get("/api/media-hub/:roomId/history", (request, response) => {
   const query = z.object({ cursor: z.coerce.number().int().min(0).default(0), limit: z.coerce.number().int().min(1).max(60).default(30) }).safeParse(request.query);
   if (!query.success) return response.status(400).json({ message: "Paginação inválida." });
   const page = store.getHistoryPage(request.params.roomId, query.data.cursor, query.data.limit);
-  return page ? response.json(page) : response.status(404).json({ message: "Party não encontrada." });
+  return page ? response.json({ ...page, items: page.items.map((item) => projectSavedMedia(request.params.roomId, user.id, item)) }) : response.status(404).json({ message: "Party não encontrada." });
 });
 
-app.post("/api/media-hub/:roomId/favorite", async (request, response) => {
-  const user = requireRoomPermission(request, response, String(request.params.roomId), "LIBRARY_MANAGE"); if (!user) return;
+const setFavoriteRoute = async (request: express.Request, response: express.Response, active: boolean) => {
+  const roomId = String(request.params.roomId);
+  const user = requireRoomPermission(request, response, roomId, "LIBRARY_MANAGE"); if (!user) return;
+  if (!apiRateLimit(request, response, user.id, 60)) return;
   const parsed = mediaItemSchema.safeParse(request.body.item);
   if (!parsed.success) return response.status(400).json({ message: "Mídia inválida." });
-  const result = store.toggleFavorite(request.params.roomId, user, parsed.data); if (!await persistMediaForResponse(request.params.roomId, response)) return; emitMediaHubUpdate(request.params.roomId, "favorite");
+  let item = parsed.data;
+  if (active) { try { item = await normalizeSavedMedia(user.id, item); } catch (error) { return response.status(error instanceof DriveError ? driveStatus(error) : 400).json({ message: error instanceof DriveError ? driveMessage(error) : "Mídia inválida." }); } }
+  const result = store.setFavorite(roomId, user, item, active);
+  if (!result) return response.status(409).json({ message: "A biblioteca da Casa está cheia." });
+  if (result.changed) { if (!await persistMediaForResponse(roomId, response)) return; emitMediaHubUpdate(roomId, "favorite"); }
   return response.json(result);
-});
+};
+app.put("/api/media-hub/:roomId/favorite", (request, response) => void setFavoriteRoute(request, response, true));
+app.delete("/api/media-hub/:roomId/favorite", (request, response) => void setFavoriteRoute(request, response, false));
+// Legacy POST is intentionally idempotent; toggle-on-POST races across clients.
+app.post("/api/media-hub/:roomId/favorite", (request, response) => void setFavoriteRoute(request, response, true));
 
 app.post("/api/media-hub/:roomId/library", async (request, response) => {
   const user = requireRoomPermission(request, response, String(request.params.roomId), "LIBRARY_MANAGE"); if (!user) return;
+  if (!apiRateLimit(request, response, user.id, 60)) return;
   const parsed = mediaItemSchema.safeParse(request.body.item); if (!parsed.success) return response.status(400).json({ message: "Mídia inválida." });
-  const item = store.saveLibrary(request.params.roomId, user, parsed.data); if (!item) return response.status(404).json({ message: "Party não encontrada." });
-  if (!await persistMediaForResponse(request.params.roomId, response)) return; emitMediaHubUpdate(request.params.roomId, "library"); return response.status(201).json({ item });
+  let input: MediaItem;
+  try { input = await normalizeSavedMedia(user.id, parsed.data); } catch (error) { return response.status(error instanceof DriveError ? driveStatus(error) : 400).json({ message: error instanceof DriveError ? driveMessage(error) : "Mídia inválida." }); }
+  const prior = store.getSavedStatus(request.params.roomId, input);
+  const item = store.saveLibrary(request.params.roomId, user, input); if (!item) return response.status(409).json({ message: "A biblioteca da Casa está cheia." });
+  if (!prior?.saved) { if (!await persistMediaForResponse(request.params.roomId, response)) return; emitMediaHubUpdate(request.params.roomId, "library"); }
+  return response.status(prior?.saved ? 200 : 201).json({ item: projectSavedMedia(request.params.roomId, user.id, item) });
 });
 
 app.delete("/api/media-hub/:roomId/library", async (request, response) => {
   const user = requireRoomPermission(request, response, String(request.params.roomId), "LIBRARY_MANAGE"); if (!user) return;
+  if (!apiRateLimit(request, response, user.id, 60)) return;
   const parsed = mediaItemSchema.safeParse(request.body.item); if (!parsed.success) return response.status(400).json({ message: "Mídia inválida." });
-  store.removeLibrary(request.params.roomId, parsed.data); if (!await persistMediaForResponse(request.params.roomId, response)) return; emitMediaHubUpdate(request.params.roomId, "library"); return response.status(204).end();
+  const changed = store.removeLibrary(request.params.roomId, parsed.data);
+  if (changed) { if (!await persistMediaForResponse(request.params.roomId, response)) return; emitMediaHubUpdate(request.params.roomId, "library"); }
+  return response.status(204).end();
 });
 
 app.post("/api/media-hub/:roomId/playlists", async (request, response) => {
   const user = requireRoomPermission(request, response, String(request.params.roomId), "PLAYLIST_CREATE"); if (!user) return;
+  if (!apiRateLimit(request, response, user.id, 30)) return;
   const parsed = z.object({ name: z.string().trim().min(1).max(80), description: z.string().trim().max(240).optional() }).safeParse(request.body); if (!parsed.success) return response.status(400).json({ message: "Informe um nome válido." });
-  const playlist = store.createPlaylist(request.params.roomId, user, parsed.data.name, parsed.data.description); if (!playlist) return response.status(404).json({ message: "Party não encontrada." });
+  const playlist = store.createPlaylist(request.params.roomId, user, parsed.data.name, parsed.data.description); if (!playlist) return response.status(409).json({ message: "Limite de 50 coleções por Casa atingido." });
   if (!await persistMediaForResponse(request.params.roomId, response)) return; emitMediaHubUpdate(request.params.roomId, "playlist"); return response.status(201).json({ playlist });
 });
 
-app.get("/api/media-hub/:roomId/playlists/:playlistId", (request, response) => { const user = requireRoomMember(request, response, String(request.params.roomId)); if (!user) return; const playlist = store.getPlaylist(request.params.roomId, request.params.playlistId); return playlist ? response.json({ playlist }) : response.status(404).json({ message: "Playlist não encontrada." }); });
+app.get("/api/media-hub/:roomId/playlists/:playlistId", (request, response) => { const user = requireRoomMember(request, response, String(request.params.roomId)); if (!user) return; const playlist = store.getPlaylist(request.params.roomId, request.params.playlistId); return playlist ? response.json({ playlist: projectPlaylistFor(request.params.roomId, user.id, playlist) }) : response.status(404).json({ message: "Coleção não encontrada." }); });
 
 app.patch("/api/media-hub/:roomId/playlists/:playlistId", async (request, response) => {
   const user = requireRoomPermission(request, response, String(request.params.roomId), "PLAYLIST_EDIT"); if (!user) return;
-  const parsed = z.object({ name: z.string().trim().min(1).max(80), description: z.string().trim().max(240).optional() }).safeParse(request.body); if (!parsed.success) return response.status(400).json({ message: "Dados inválidos." });
-  const playlist = store.updatePlaylist(request.params.roomId, request.params.playlistId, parsed.data); if (!playlist) return response.status(404).json({ message: "Playlist não encontrada." }); if (!await persistMediaForResponse(request.params.roomId, response)) return; emitMediaHubUpdate(request.params.roomId, "playlist"); return response.json({ playlist });
+  if (!apiRateLimit(request, response, user.id, 60)) return;
+  const parsed = z.object({ name: z.string().trim().min(1).max(80), description: z.string().trim().max(240).optional(), expectedUpdatedAt: z.string().datetime() }).safeParse(request.body); if (!parsed.success) return response.status(400).json({ message: "Dados inválidos." });
+  const before = store.getPlaylist(request.params.roomId, request.params.playlistId);
+  if (!before) return response.status(404).json({ message: "Coleção não encontrada." });
+  const playlist = store.updatePlaylist(request.params.roomId, request.params.playlistId, parsed.data);
+  if (!playlist) return response.status(409).json({ message: "A coleção mudou. Atualize e tente novamente." });
+  if (!await persistMediaForResponse(request.params.roomId, response)) return; emitMediaHubUpdate(request.params.roomId, "playlist"); return response.json({ playlist: projectPlaylistFor(request.params.roomId, user.id, playlist) });
 });
 
-app.delete("/api/media-hub/:roomId/playlists/:playlistId", async (request, response) => { const user = requireRoomPermission(request, response, String(request.params.roomId), "PLAYLIST_DELETE"); if (!user) return; if (!store.deletePlaylist(request.params.roomId, request.params.playlistId)) return response.status(404).json({ message: "Playlist não encontrada." }); if (!await persistMediaForResponse(request.params.roomId, response)) return; emitMediaHubUpdate(request.params.roomId, "playlist"); return response.status(204).end(); });
+app.delete("/api/media-hub/:roomId/playlists/:playlistId", async (request, response) => { const user = requireRoomPermission(request, response, String(request.params.roomId), "PLAYLIST_DELETE"); if (!user) return; if (!apiRateLimit(request, response, user.id, 30)) return; if (!store.deletePlaylist(request.params.roomId, request.params.playlistId)) return response.status(404).json({ message: "Playlist não encontrada." }); if (!await persistMediaForResponse(request.params.roomId, response)) return; emitMediaHubUpdate(request.params.roomId, "playlist"); return response.status(204).end(); });
 
-app.post("/api/media-hub/:roomId/playlists/:playlistId/items", async (request, response) => { const user = requireRoomPermission(request, response, String(request.params.roomId), "PLAYLIST_EDIT"); if (!user) return; const parsed = mediaItemSchema.safeParse(request.body.item); if (!parsed.success) return response.status(400).json({ message: "Mídia inválida." }); const playlist = store.addPlaylistItem(request.params.roomId, request.params.playlistId, user, parsed.data); if (!playlist) return response.status(404).json({ message: "Playlist não encontrada." }); if (!await persistMediaForResponse(request.params.roomId, response)) return; emitMediaHubUpdate(request.params.roomId, "playlist"); return response.status(201).json({ playlist }); });
-app.delete("/api/media-hub/:roomId/playlists/:playlistId/items/:itemId", async (request, response) => { const user = requireRoomPermission(request, response, String(request.params.roomId), "PLAYLIST_EDIT"); if (!user) return; const playlist = store.removePlaylistItem(request.params.roomId, request.params.playlistId, request.params.itemId); if (!playlist) return response.status(404).json({ message: "Playlist não encontrada." }); if (!await persistMediaForResponse(request.params.roomId, response)) return; emitMediaHubUpdate(request.params.roomId, "playlist"); return response.json({ playlist }); });
-app.put("/api/media-hub/:roomId/playlists/:playlistId/order", async (request, response) => { const user = requireRoomPermission(request, response, String(request.params.roomId), "PLAYLIST_EDIT"); if (!user) return; const parsed = z.object({ itemIds: z.array(z.string()).max(500), expectedUpdatedAt: z.string().datetime() }).safeParse(request.body); if (!parsed.success) return response.status(400).json({ message: "Ordem inválida." }); const playlist = store.reorderPlaylist(request.params.roomId, request.params.playlistId, parsed.data.itemIds, parsed.data.expectedUpdatedAt); if (!playlist) return response.status(409).json({ message: "A playlist mudou. Atualize e tente novamente.", playlist: store.getPlaylist(request.params.roomId, request.params.playlistId) }); if (!await persistMediaForResponse(request.params.roomId, response)) return; emitMediaHubUpdate(request.params.roomId, "playlist"); return response.json({ playlist }); });
+app.post("/api/media-hub/:roomId/playlists/:playlistId/items", async (request, response) => {
+  const user = requireRoomPermission(request, response, String(request.params.roomId), "PLAYLIST_EDIT"); if (!user) return;
+  if (!apiRateLimit(request, response, user.id, 60)) return;
+  const parsed = mediaItemSchema.safeParse(request.body.item); if (!parsed.success) return response.status(400).json({ message: "Mídia inválida." });
+  let item: MediaItem;
+  try { item = await normalizeSavedMedia(user.id, parsed.data); } catch (error) { return response.status(error instanceof DriveError ? driveStatus(error) : 400).json({ message: error instanceof DriveError ? driveMessage(error) : "Mídia inválida." }); }
+  const before = store.getPlaylist(request.params.roomId, request.params.playlistId);
+  if (!before) return response.status(404).json({ message: "Coleção não encontrada." });
+  const playlist = store.addPlaylistItem(request.params.roomId, request.params.playlistId, user, item);
+  if (!playlist) return response.status(409).json({ message: "Limite de 500 mídias por coleção atingido." });
+  if (playlist.updatedAt !== before.updatedAt) { if (!await persistMediaForResponse(request.params.roomId, response)) return; emitMediaHubUpdate(request.params.roomId, "playlist"); }
+  return response.status(playlist.updatedAt === before.updatedAt ? 200 : 201).json({ playlist: projectPlaylistFor(request.params.roomId, user.id, playlist) });
+});
+app.delete("/api/media-hub/:roomId/playlists/:playlistId/items/:itemId", async (request, response) => { const user = requireRoomPermission(request, response, String(request.params.roomId), "PLAYLIST_EDIT"); if (!user) return; if (!apiRateLimit(request, response, user.id, 60)) return; const before = store.getPlaylist(request.params.roomId, request.params.playlistId); const playlist = store.removePlaylistItem(request.params.roomId, request.params.playlistId, request.params.itemId); if (!playlist) return response.status(404).json({ message: "Coleção não encontrada." }); if (playlist.updatedAt !== before?.updatedAt) { if (!await persistMediaForResponse(request.params.roomId, response)) return; emitMediaHubUpdate(request.params.roomId, "playlist"); } return response.json({ playlist: projectPlaylistFor(request.params.roomId, user.id, playlist) }); });
+app.put("/api/media-hub/:roomId/playlists/:playlistId/order", async (request, response) => { const user = requireRoomPermission(request, response, String(request.params.roomId), "PLAYLIST_EDIT"); if (!user) return; if (!apiRateLimit(request, response, user.id, 60)) return; const parsed = z.object({ itemIds: z.array(z.string()).max(500), expectedUpdatedAt: z.string().datetime() }).safeParse(request.body); if (!parsed.success) return response.status(400).json({ message: "Ordem inválida." }); const playlist = store.reorderPlaylist(request.params.roomId, request.params.playlistId, parsed.data.itemIds, parsed.data.expectedUpdatedAt); if (!playlist) { const current = store.getPlaylist(request.params.roomId, request.params.playlistId); return response.status(409).json({ message: "A coleção mudou. Atualize e tente novamente.", playlist: current && projectPlaylistFor(request.params.roomId, user.id, current) }); } if (!await persistMediaForResponse(request.params.roomId, response)) return; emitMediaHubUpdate(request.params.roomId, "playlist"); return response.json({ playlist: projectPlaylistFor(request.params.roomId, user.id, playlist) }); });
 app.post("/api/media-hub/:roomId/playlists/:playlistId/queue", async (request, response) => { const user = requireRoomPermission(request, response, String(request.params.roomId), "MEDIA_ADD"); if (!user) return; const parsed = z.object({ mode: z.enum(["append", "next", "replace"]).default("append"), playNow: z.boolean().default(false), revision: z.number().int().nonnegative() }).safeParse(request.body); if (!parsed.success) return response.status(400).json({ message: "Opção de fila inválida." }); if ((parsed.data.playNow || parsed.data.mode === "replace") && !store.canControlMedia(request.params.roomId, user.id)) return response.status(403).json({ message: "Você não pode controlar a reprodução ou substituir a fila." }); const result = store.enqueuePlaylist(request.params.roomId, request.params.playlistId, user, parsed.data.mode, parsed.data.playNow, parsed.data.revision, (item) => mediaAvailableInRoom(request.params.roomId, item)); if (!result) return response.status(404).json({ message: "Playlist vazia ou não encontrada." }); if (result.conflict) return response.status(409).json({ message: "A fila mudou. Revise a ordem e tente novamente.", revision: result.revision }); if (!result.media && result.skipped && result.skipped === store.getPlaylist(request.params.roomId, request.params.playlistId)?.items?.length) return response.status(409).json({ message: "Todos os itens da playlist estão indisponíveis.", skipped: result.skipped }); if (!await persistMediaForResponse(request.params.roomId, response)) return; io.to(request.params.roomId).emit("queue:update", result.queue, result.revision); if (result.media) { io.to(request.params.roomId).emit("media:sync", result.media); emitMediaHubUpdate(request.params.roomId, "history"); emitActivityForRoom(request.params.roomId); } return response.json(result); });
 
 app.post("/api/media-hub/:roomId/progress", async (request, response) => {
@@ -803,7 +878,7 @@ const canManageRoom = (roomId: string, userId: string) => {
 };
 const emitQueueState = (roomId: string, state: { queue: QueueItem[]; history: HouseHistoryEntry[]; revision: number }) => {
   io.to(roomId).emit("queue:update", state.queue, state.revision);
-  io.to(roomId).emit("queue:history", state.history);
+  io.to(roomId).emit("queue:history", publicHistory(state.history));
 };
 const persistMediaForSocket = async (roomId: string, socket: Socket) => {
   try { await saveMedia(roomId); return true; }

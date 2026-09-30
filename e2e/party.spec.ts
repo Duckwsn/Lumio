@@ -1476,3 +1476,104 @@ test("M1 three clients keep playback shared and Ambiente local through late join
     await a.screenshot({ path: "artifacts/m1/m1-multi-client-a-video.png" });
   } finally { socket.disconnect(); for (const context of contexts) await context.close(); }
 });
+
+test("M2 three browsers share favorites and collections without disturbing playback", async ({ browser, request }) => {
+  test.setTimeout(180_000);
+  const origin = `http://127.0.0.1:${webPort}`, api = `http://127.0.0.1:${apiPort}`;
+  const sessions = [];
+  for (const name of ["M2 Ana", "M2 Bia", "M2 Caio"]) {
+    const email = `m2-${crypto.randomUUID()}@example.test`, password = "local-e2e-password-123";
+    expect((await request.post(`${api}/api/auth/signup`, { data: { displayName: name, email, password } })).status()).toBe(201);
+    const link = JSON.parse(fs.readFileSync(path.join(directory, "mail.jsonl"), "utf8").trim().split("\n").at(-1)!).text.match(/https?:\/\/\S+/)[0];
+    expect((await request.post(`${api}/api/auth/verification/confirm`, { data: { token: new URL(link).hash.slice(7) } })).status()).toBe(204);
+    sessions.push(await (await request.post(`${api}/api/auth/login`, { data: { email, password } })).json());
+  }
+  const headers = { Authorization: `Bearer ${sessions[0].token}` };
+  const { house } = await (await request.post(`${api}/api/houses`, { headers, data: { name: "M2 Library QA" } })).json();
+  const { invite } = await (await request.post(`${api}/api/houses/${house.id}/invites`, { headers, data: { expiresInHours: 1, maxUses: 2 } })).json();
+  for (const session of sessions.slice(1)) expect((await request.post(`${api}/api/invites/${invite.code}/accept`, { headers: { Authorization: `Bearer ${session.token}` } })).status()).toBe(200);
+  const contexts = await Promise.all(sessions.map(() => browser.newContext({ viewport: { width: 1280, height: 900 } })));
+  const socket = io(api, { autoConnect: false, auth: { token: sessions[0].token }, transports: ["websocket"], extraHeaders: { Origin: origin } });
+  try {
+    for (let index = 0; index < contexts.length; index++) await contexts[index].addInitScript((session) => localStorage.setItem("lumio.session.v1", JSON.stringify(session)), sessions[index]);
+    const [a, b, c] = await Promise.all(contexts.map((context) => context.newPage()));
+    await Promise.all([a.goto(`${origin}/house/${house.id}`), b.goto(`${origin}/house/${house.id}`)]);
+    const joined = new Promise<void>((resolve, reject) => { socket.once("room:snapshot", () => resolve()); socket.once("connect_error", reject); });
+    socket.on("connect", () => socket.emit("room:join", { roomId: house.primaryRoomId, user: sessions[0].user })); socket.connect(); await joined;
+    const media = { id: crypto.randomUUID(), provider: "youtube", providerMediaId: "dQw4w9WgXcQ", type: "video", title: "M2 shared media com um título suficientemente longo para testar o layout", duration: 300, addedBy: sessions[0].user, addedAt: new Date().toISOString() };
+    expect((await socket.timeout(5000).emitWithAck("queue:add", { roomId: house.primaryRoomId, item: media })).ok).toBe(true);
+    expect((await socket.timeout(5000).emitWithAck("media:change", { roomId: house.primaryRoomId, item: media })).ok).toBe(true);
+    await expect(a.locator(".now-playing h2")).toHaveText(media.title);
+    await expect(b.locator(".now-playing h2")).toHaveText(media.title);
+    const before = await a.locator(".now-playing h2").textContent();
+    await b.locator(".dock-add").click();
+    const hubB = b.getByRole("dialog", { name: "A mídia da Casa" });
+    await hubB.getByRole("button", { name: "Biblioteca", exact: true }).click();
+    await hubB.getByRole("combobox", { name: "Filtrar biblioteca" }).selectOption("favorites");
+    await expect(hubB.getByRole("heading", { name: "Nenhum favorito nesta Casa" })).toBeVisible();
+    await expect(hubB.getByText("Carregando biblioteca...")).toBeHidden();
+    await b.screenshot({ path: "artifacts/m2/m2-favorites-empty.png" });
+    await a.getByRole("button", { name: "Salvar nos favoritos da Casa" }).click();
+    await expect(a.getByRole("button", { name: "Remover dos favoritos da Casa" })).toBeVisible();
+    await expect(hubB.locator(".media-row").filter({ hasText: media.title })).toBeVisible();
+    await hubB.getByRole("button", { name: "Playlists", exact: true }).click();
+    await hubB.getByRole("button", { name: "Nova playlist" }).first().click();
+    await b.screenshot({ path: "artifacts/m2/m2-create-collection.png" });
+    await hubB.getByRole("textbox", { name: "Nome" }).fill("M2 shared collection");
+    await hubB.getByRole("button", { name: "Criar", exact: true }).click();
+    await expect(hubB.locator(".playlist-detail header h3")).toHaveText("M2 shared collection");
+    await b.screenshot({ path: "artifacts/m2/m2-collection-empty.png" });
+    await hubB.getByLabel("Mais opções").click();
+    await hubB.getByRole("button", { name: "Editar detalhes" }).click();
+    await b.screenshot({ path: "artifacts/m2/m2-edit-collection.png" });
+    await hubB.getByRole("button", { name: "Cancelar" }).click();
+    await hubB.getByLabel("Mais opções").click();
+    await a.locator(".dock-add").click();
+    const hubA = a.getByRole("dialog", { name: "A mídia da Casa" });
+    await hubA.getByRole("button", { name: "Biblioteca", exact: true }).click();
+    const row = hubA.locator(".media-row").filter({ hasText: media.title });
+    await expect(row).toBeVisible();
+    await row.getByLabel(`Mais ações para ${media.title}`).click();
+    await row.getByRole("button", { name: `Adicionar ${media.title} à playlist` }).click();
+    await a.screenshot({ path: "artifacts/m2/m2-add-to-collection.png" });
+    await hubA.getByRole("button", { name: /M2 shared collection/ }).click();
+    await expect(hubB.locator(".playlist-items li")).toHaveCount(1);
+    await b.screenshot({ path: "artifacts/m2/m2-collection-open-desktop.png" });
+    for (const width of [320, 360, 375, 390, 412, 430]) {
+      await b.setViewportSize({ width, height: 844 });
+      expect(await b.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      expect(await hubB.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+      await b.screenshot({ path: `artifacts/m2/m2-collection-${width}.png` });
+    }
+    await b.setViewportSize({ width: 1280, height: 900 });
+    await hubA.getByRole("combobox", { name: "Filtrar biblioteca" }).selectOption("favorites");
+    await expect(row).toBeVisible();
+    await a.screenshot({ path: "artifacts/m2/m2-favorites-desktop.png" });
+    await hubA.getByRole("button", { name: "Histórico", exact: true }).click();
+    await expect(hubA.locator(".media-row").filter({ hasText: media.title })).toBeVisible();
+    await a.screenshot({ path: "artifacts/m2/m2-recents-desktop.png" });
+    await hubA.getByRole("button", { name: "Google Drive", exact: true }).click();
+    await a.screenshot({ path: "artifacts/m2/m2-drive-unavailable.png" });
+    await hubA.getByRole("button", { name: "Descobrir", exact: true }).click();
+    await hubA.getByRole("textbox", { name: "Pesquisar no YouTube ou colar URL" }).fill("m2 teste de erro sem chave");
+    await expect(hubA.getByRole("alert")).toBeVisible();
+    await a.screenshot({ path: "artifacts/m2/m2-error.png" });
+    await hubA.getByRole("button", { name: "Biblioteca", exact: true }).click();
+    expect(await a.locator(".now-playing h2").textContent()).toBe(before);
+    expect(await b.locator(".now-playing h2").textContent()).toBe(before);
+    await hubB.getByRole("button", { name: `Adicionar ${media.title} à fila` }).click();
+    await hubB.getByRole("button", { name: "Fechar Media Hub" }).click();
+    await b.getByRole("button", { name: /Abrir fila/ }).click();
+    await expect(b.locator(".drawer-queue .queue-item")).toHaveCount(2);
+    await c.goto(`${origin}/house/${house.id}`);
+    await expect(c.locator(".now-playing h2")).toHaveText(media.title);
+    await c.locator(".dock-add").click();
+    const hubC = c.getByRole("dialog", { name: "A mídia da Casa" });
+    await hubC.getByRole("button", { name: "Playlists", exact: true }).click();
+    await expect(hubC.getByRole("button", { name: /M2 shared collection/ })).toBeVisible();
+    await hubC.getByRole("button", { name: "Biblioteca", exact: true }).click();
+    await expect(hubC.locator(".media-row").filter({ hasText: media.title })).toBeVisible();
+    await a.screenshot({ path: "artifacts/m2/m2-party-player-preserved.png" });
+    await a.screenshot({ path: "artifacts/m2/m2-hub-open-desktop.png" });
+  } finally { socket.disconnect(); for (const context of contexts) await context.close(); }
+});

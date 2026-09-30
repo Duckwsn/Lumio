@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { RoomStore } from "./store.js";
+import { projectLibraryMedia } from "./socialLibrary.js";
 
 test("Party entry and re-entry start with microphone off and not speaking", () => {
   const store = new RoomStore();
@@ -227,7 +228,8 @@ test("repeated media advances by queue occurrence and records each playback once
   assert.equal(store.advanceQueue("cinema", "repeat", user.id, "q1").advanced, true);
   assert.equal(store.advanceQueue("cinema", "repeat", user.id, "q1").advanced, false);
   assert.equal(store.getSnapshot("cinema")?.queue.find((entry) => entry.status === "playing")?.id, "q2");
-  assert.equal(store.getHistoryPage("cinema")?.total, 2);
+  assert.equal(store.getHistoryPage("cinema")?.total, 1);
+  assert.equal(store.getHistoryPage("cinema")?.items[0]?.playCount, 2);
 });
 
 test("playlist reorder rejects a stale timestamp and preserves latest order", () => {
@@ -282,7 +284,8 @@ test("replaying an ended occurrence records one new history event", () => {
   assert.equal(store.getSnapshot("cinema")?.currentMedia.state, "ended");
   const replay = store.updateMedia("cinema", user.id, "play", 60);
   assert.ok(replay && replay.position >= 0 && replay.position < 0.1, "replay starts near zero while the clock advances");
-  assert.equal(store.getHistoryPage("cinema")?.total, 2);
+  assert.equal(store.getHistoryPage("cinema")?.total, 1);
+  assert.equal(store.getHistoryPage("cinema")?.items[0]?.playCount, 2);
 });
 
 test("favorites remain complete when library is paginated", () => {
@@ -297,6 +300,48 @@ test("favorites remain complete when library is paginated", () => {
   assert.equal(page?.library.length, 10);
   assert.equal(page?.favorites.length, 1);
   assert.equal(page?.favorites[0].providerMediaId, "0");
+});
+
+test("shared favorites are idempotent and isolated by House", () => {
+  const store = new RoomStore();
+  const a = { id: "a", displayName: "A", color: "#fff" };
+  const b = { id: "b", displayName: "B", color: "#fff" };
+  store.addHouseRoom({ houseId: "other", houseName: "Other", roomId: "other-room" });
+  const media = { id: "m", provider: "youtube" as const, providerMediaId: "abcdefghijk", type: "video" as const, title: "Same" };
+  assert.deepEqual(store.setFavorite("cinema", a, media, true), { active: true, changed: true });
+  assert.deepEqual(store.setFavorite("cinema", b, media, true), { active: true, changed: false });
+  assert.equal(store.getMediaHub("cinema", b.id)?.favorites.length, 1);
+  assert.equal(store.getMediaHub("other-room", a.id)?.favorites.length, 0);
+  assert.deepEqual(store.setFavorite("cinema", a, media, false), { active: false, changed: true });
+  assert.deepEqual(store.setFavorite("cinema", b, media, false), { active: false, changed: false });
+  assert.deepEqual(store.setFavorite("cinema", b, media, true), { active: true, changed: true });
+  assert.equal(store.getMediaHub("cinema", b.id)?.favorites.length, 1);
+});
+
+test("collection edits use a version and item identity is unique", () => {
+  const store = new RoomStore();
+  const a = { id: "a", displayName: "A", color: "#fff" };
+  const media = { id: "m", provider: "youtube" as const, providerMediaId: "abcdefghijk", type: "video" as const, title: "Same" };
+  const collection = store.createPlaylist("cinema", a, "Shared")!;
+  const first = store.addPlaylistItem("cinema", collection.id, a, media)!;
+  const repeat = store.addPlaylistItem("cinema", collection.id, a, { ...media, id: "different" })!;
+  assert.equal(repeat.items?.length, 1);
+  assert.equal(first.updatedAt, repeat.updatedAt);
+  const renamed = store.updatePlaylist("cinema", collection.id, { name: "Updated", expectedUpdatedAt: repeat.updatedAt })!;
+  assert.equal(store.updatePlaylist("cinema", collection.id, { name: "Stale", expectedUpdatedAt: repeat.updatedAt }), null);
+  assert.equal(store.getPlaylist("cinema", collection.id)?.name, "Updated");
+  assert.equal(store.removePlaylistItem("cinema", collection.id, renamed.items![0].itemId)?.items?.length, 0);
+  assert.equal(store.deletePlaylist("cinema", collection.id), true);
+  assert.equal(store.getPlaylist("cinema", collection.id), null);
+});
+
+test("private Drive filenames cannot be inferred through House library search", () => {
+  const store = new RoomStore();
+  const owner = { id: "owner", displayName: "Owner", color: "#fff" };
+  store.saveLibrary("cinema", owner, { id: "drive:private", provider: "google-drive", providerMediaId: "private", type: "video", title: "Secret vacation", thumbnail: "https://private.example/thumbnail" });
+  const project = (item: NonNullable<ReturnType<typeof store.getMediaHub>>["library"][number]) => projectLibraryMedia(item, "other", false);
+  assert.equal(store.getMediaHub("cinema", "other", { query: "Secret" }, project)?.libraryTotal, 0);
+  assert.equal(store.getMediaHub("cinema", "other", { query: "Arquivo privado" }, project)?.libraryTotal, 1);
 });
 
 test("playback revision rejects stale commands and commands for another media", () => {
