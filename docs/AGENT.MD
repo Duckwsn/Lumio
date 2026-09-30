@@ -54,6 +54,7 @@ Na Landing pública, a demonstração da Party é apenas visual e local: sem soc
 - MainStage é a fronteira de apresentação da Party: mídia, tela compartilhada ou Jogos. Abrir o Hub é estado local; não criar outra sala, socket, call/chat ou sessão compartilhada para explorar o catálogo. GameRuntime e GameSession só entram quando houver gameplay.
 - Trocas de experiência preservam o mesmo MediaStage/provider, fila e sync. Chat, voz e presença pertencem à Party, não ao palco. Não use componentes ocultos que limpem seus efeitos para preservar um engine ativo; React Activity não está disponível no React 18 atual.
 - YouTube não deve tocar oculto em Jogos: mantenha o único iframe numa região visível e separada, com tamanho mínimo, sem sobreposição pelo Hub. Drive pode continuar em background. Fullscreen pertence à superfície Lumio da experiência; sair de fullscreen não deve trocar Jogos por mídia.
+- Ambiente é apresentação local do mesmo engine; o iframe oficial do YouTube permanece visível também nessa apresentação. Trocar Ambiente/Vídeo/fullscreen nunca muda `mediaId`, `revision` ou a sessão da Call. Metadados de apresentação vêm da mídia atual, sem inferir artista/álbum/letras ou expor URL temporária do Drive.
 
 - Existe uma única Party, uma única fila e um único UniversalPlayer.
 - Nunca crie player de áudio paralelo para conteúdo do YouTube, extraia áudio ou use APIs não oficiais.

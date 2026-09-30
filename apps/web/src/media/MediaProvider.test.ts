@@ -33,13 +33,14 @@ test("YouTube reconciles either readiness order, latest media and autoplay gestu
   const controller = new MediaController({ youtube: () => provider }, () => undefined);
   try {
     const old = controller.sync({ ...media("youtube", 1), state: "playing", position: 10, startedAt: Date.now() - 2000 });
-    const latest = controller.sync({ ...media("youtube", 2), position: 17 });
-    await Promise.resolve(); events!.onReady(); await Promise.all([old, latest]);
-    assert.equal(loaded, "youtube-2"); assert.equal(position, 17); assert.equal(plays, 0); assert.equal(state, 2);
-    const playing = { ...media("youtube", 3), state: "playing" as const, position: 20, startedAt: Date.now() - 2000 };
+    const middle = controller.sync({ ...media("youtube", 2), position: 17 });
+    const latest = controller.sync({ ...media("youtube", 3), position: 25 });
+    await Promise.resolve(); events!.onReady(); await Promise.all([old, middle, latest]);
+    assert.equal(loaded, "youtube-3"); assert.equal(position, 25); assert.equal(plays, 0); assert.equal(state, 2);
+    const playing = { ...media("youtube", 4), state: "playing" as const, position: 20, startedAt: Date.now() - 2000 };
     blocked = true; await controller.sync(playing);
     assert.ok(position >= 22); assert.ok(emitted.includes("autoplay-blocked"));
-    await controller.sync(media("youtube", 1), { force: true }); assert.equal(loaded, "youtube-3");
+    await controller.sync(media("youtube", 1), { force: true }); assert.equal(loaded, "youtube-4");
     blocked = false; controller.resumeFromGesture(); assert.equal(state, 1); assert.ok(position >= 22);
     assert.equal(plays, 2);
   } finally { controller.destroy(); globalThis.window = previousWindow; }

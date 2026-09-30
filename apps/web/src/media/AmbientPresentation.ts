@@ -14,5 +14,5 @@ export function artworkSource(media: MediaState): string | undefined {
 
 export function ambientMetadata(media: MediaState) {
   const channel = media.metadata?.channelTitle;
-  return { title: media.title || "Mídia da Party", channel: typeof channel === "string" && channel.trim() ? channel : media.provider === "youtube" ? "YouTube" : "Google Drive", artwork: artworkSource(media), lyrics: lyricsCapability(media) };
+  return { title: media.title?.trim() || "Mídia da Party", channel: typeof channel === "string" && channel.trim() ? channel.trim() : media.provider === "youtube" ? "YouTube" : "Google Drive", artwork: artworkSource(media), lyrics: lyricsCapability(media) };
 }

@@ -981,6 +981,7 @@ test("automatic voice: three real RTC clients, explicit capture, denial, deafen,
 
 test("mobile permanent chat, gesture, secondary tools, late join and player idle controls", async ({ browser, request }) => {
   test.setTimeout(120_000);
+  fs.mkdirSync(path.join(root, "artifacts/m1"), { recursive: true });
   const origin = `http://127.0.0.1:${webPort}`, api = `http://127.0.0.1:${apiPort}`;
   const email = `mobile-${crypto.randomUUID()}@example.test`, password = "local-e2e-password-123";
   expect((await request.post(`${api}/api/auth/signup`, { data: { displayName: "Mobile QA", email, password } })).status()).toBe(201);
@@ -1083,15 +1084,27 @@ test("mobile permanent chat, gesture, secondary tools, late join and player idle
     };
     await assertPortraitLayout();
     const videoHeight = await page.locator(".player-frame").evaluate((node) => node.getBoundingClientRect().height);
+    for (const width of [320, 360, 375, 390, 412, 430]) {
+      await page.setViewportSize({ width, height: 844 });
+      await assertPortraitLayout();
+      await page.screenshot({ path: `artifacts/m1/m1-video-${width}.png` });
+    }
+    await page.setViewportSize({ width: 390, height: 844 });
     await page.screenshot({ path: "test-results/mobile-video-proportion.png" });
     await page.locator(".player-touch-surface").tap({ position: { x: 20, y: 20 } });
     await page.getByRole("button", { name: "Entrar no Ambiente", exact: true }).tap();
     await expect(page.locator(".music-presentation")).toBeVisible();
     expect(await page.locator(".player-frame").evaluate((node) => node.getBoundingClientRect().height)).toBeCloseTo(videoHeight, 2);
-    await expect(page.locator(".provider-player")).toHaveCSS("opacity", "0");
+    await expect(page.locator("iframe.provider-player")).toHaveCSS("opacity", "1");
     await expect(page.locator(".music-presentation")).toHaveAttribute("data-lyrics", "unavailable");
     expect(await engine()).toEqual(originalEngine);
     await expect.poll(() => page.locator(".music-presentation").evaluate((node) => Math.abs(node.getBoundingClientRect().height - node.parentElement!.clientHeight))).toBeLessThanOrEqual(1);
+    for (const width of [320, 360, 375, 390, 412, 430]) {
+      await page.setViewportSize({ width, height: 844 });
+      await assertPortraitLayout();
+      await page.screenshot({ path: `artifacts/m1/m1-ambient-${width}.png` });
+    }
+    await page.setViewportSize({ width: 390, height: 844 });
     await page.screenshot({ path: "test-results/mobile-ambiente.png" });
     await page.getByRole("textbox", { name: "Mensagem" }).fill("Mobile message");
     await page.getByRole("button", { name: "Enviar mensagem" }).tap(); await expect(page.getByText("Mobile message", { exact: true })).toBeVisible();
@@ -1173,12 +1186,14 @@ test("mobile permanent chat, gesture, secondary tools, late join and player idle
     await expect(page.locator(".music-presentation")).toBeVisible();
     expect((await engine()).created).toBe(originalEngine.created);
     await page.screenshot({ path: "test-results/mobile-fullscreen.png" });
+    await page.screenshot({ path: "artifacts/m1/m1-fullscreen-ambient.png" });
     await page.getByRole("button", { name: "Sair do Ambiente", exact: true }).tap();
     await expect(page.locator(".music-presentation")).toHaveCount(0);
     await expect(page.locator(".provider-player")).toHaveCSS("opacity", "1");
     const fullscreenVideo = await page.locator("iframe.provider-player").boundingBox();
     expect(fullscreenVideo!.width / fullscreenVideo!.height).toBeCloseTo(16 / 9, 1);
     await page.screenshot({ path: "test-results/mobile-video-fullscreen.png" });
+    await page.screenshot({ path: "artifacts/m1/m1-fullscreen-video.png" });
     await page.getByRole("button", { name: /Sair da tela (cheia|ampliada)/ }).tap();
     await expect(page.getByRole("textbox", { name: "Mensagem" })).toBeVisible();
     await expect(page.getByRole("textbox", { name: "Mensagem" })).toHaveValue("Fullscreen draft");
@@ -1202,11 +1217,11 @@ test("mobile permanent chat, gesture, secondary tools, late join and player idle
     await expect(page.locator(".lumio-controls")).toHaveCSS("opacity", "1");
     await page.getByRole("button", { name: "Reproduzir", exact: true }).tap();
     await page.evaluate(() => localStorage.setItem("qa.blocked", "1")); await page.reload();
-    await expect(page.getByText("Toque para entrar na reprodução", { exact: true })).toBeVisible();
+    await expect(page.getByText("Toque para continuar", { exact: true })).toBeVisible();
     await page.evaluate(() => { (window as any).qaPlayer.blocked = false; localStorage.removeItem("qa.blocked"); });
-    await page.getByRole("button", { name: "Entrar na reprodução", exact: true }).tap();
+    await page.getByRole("button", { name: "Continuar", exact: true }).tap();
     await expect.poll(() => page.evaluate(() => (window as any).qaPlayer.state)).toBe(1);
-    await expect(page.getByText("Toque para entrar na reprodução", { exact: true })).toBeHidden();
+    await expect(page.getByText("Toque para continuar", { exact: true })).toBeHidden();
     await page.locator(".player-touch-surface").tap({ position: { x: 20, y: 20 } });
     await page.getByRole("button", { name: "Entrar no Ambiente", exact: true }).tap();
     await page.reload();
@@ -1216,7 +1231,25 @@ test("mobile permanent chat, gesture, secondary tools, late join and player idle
     await page.setViewportSize({ width: 1280, height: 800 });
     await expect(page.locator(".music-presentation")).toBeVisible();
     await expect.poll(() => page.locator(".music-presentation").evaluate((node) => Math.abs(node.getBoundingClientRect().height - node.parentElement!.clientHeight))).toBeLessThanOrEqual(1);
+    const settleDesktopLayout = () => page.locator(".main-stage,.now-playing").evaluateAll((nodes) => Promise.all(nodes.flatMap((node) => node.getAnimations().map((animation) => animation.finished.then(() => undefined)))));
+    await settleDesktopLayout();
     await page.screenshot({ path: "test-results/desktop-ambiente.png" });
+    await page.screenshot({ path: "artifacts/m1/m1-ambient-desktop.png" });
+    for (const [width, height] of [[1280, 720], [1280, 900], [1440, 900]]) {
+      await page.setViewportSize({ width, height });
+      await settleDesktopLayout();
+      await page.screenshot({ path: `artifacts/m1/m1-ambient-${width}x${height}.png` });
+    }
+    await page.locator(".player-touch-surface").tap({ position: { x: 20, y: 20 } });
+    await page.getByRole("button", { name: "Sair do Ambiente", exact: true }).tap();
+    for (const [width, height] of [[1280, 720], [1280, 900], [1440, 900]]) {
+      await page.setViewportSize({ width, height });
+      await settleDesktopLayout();
+      await page.screenshot({ path: `artifacts/m1/m1-video-${width}x${height}.png` });
+    }
+    await page.locator(".player-touch-surface").tap({ position: { x: 20, y: 20 } });
+    await page.getByRole("button", { name: "Entrar no Ambiente", exact: true }).tap();
+    await page.setViewportSize({ width: 1280, height: 800 });
     await page.getByRole("button", { name: "Abrir menu da Casa e Party", exact: true }).tap();
     await page.getByRole("button", { name: "Luz ambiente ligada", exact: true }).tap();
     await expect(page.locator(".ambient-glow")).toHaveCSS("opacity", "0");
@@ -1228,14 +1261,16 @@ test("mobile permanent chat, gesture, secondary tools, late join and player idle
     await page.emulateMedia({ reducedMotion: "no-preference" });
     // Artwork failure and media change keep the supported fallback, not a broken image.
     await context.route("https://i.ytimg.com/**", (route) => route.abort());
-    const secondItem = { ...item, id: crypto.randomUUID(), providerMediaId: "M7lc1UVf-VE", title: "Outro vídeo sem letras" };
+    const secondItem = { ...item, id: crypto.randomUUID(), providerMediaId: "M7lc1UVf-VE", title: "Uma noite inteira de música com a turma — título longo para conferir o layout 🎵 音楽" };
     expect((await socket.timeout(5000).emitWithAck("queue:add", { roomId: house.primaryRoomId, item: secondItem })).ok).toBe(true);
     expect((await socket.timeout(5000).emitWithAck("media:change", { roomId: house.primaryRoomId, item: secondItem })).ok).toBe(true);
     await expect(page.locator(".music-presentation").getByText(secondItem.title, { exact: true })).toBeVisible();
-    await expect(page.locator(".music-cover img")).toHaveAttribute("alt", "Lumio");
+    await expect(page.locator(".music-cover img.ambient-brand")).toHaveAttribute("alt", "");
+    await page.screenshot({ path: "artifacts/m1/m1-ambient-no-artwork.png" });
+    await page.screenshot({ path: "artifacts/m1/m1-ambient-long-title.png" });
     expect((await engine()).created).toBe(1); expect((await engine()).destroyed).toBe(0);
     await page.locator(".player-touch-surface").tap({ position: { x: 20, y: 20 } });
-    await page.getByRole("slider", { name: /^Posição:/ }).focus();
+    await page.getByRole("slider", { name: "Posição da reprodução" }).focus();
     await page.keyboard.press("ArrowRight");
     const seekPosition = (await engine()).position;
     await page.getByRole("button", { name: "Pausar", exact: true }).tap();
@@ -1358,4 +1393,86 @@ test("Drive native video keeps portrait/4:3/16:9 content contained in the mobile
     expect(frame!.width / frame!.height).toBeCloseTo(16 / 9, 1);
   }
   await page.screenshot({ path: "test-results/mobile-native-video.png" });
+});
+
+test("M1 three clients keep playback shared and Ambiente local through late join and media switches", async ({ browser, request }) => {
+  test.setTimeout(90_000);
+  const origin = `http://127.0.0.1:${webPort}`, api = `http://127.0.0.1:${apiPort}`;
+  const sessions = [];
+  for (const name of ["M1 Ana", "M1 Bia", "M1 Caio"]) {
+    const email = `m1-${crypto.randomUUID()}@example.test`, password = "local-e2e-password-123";
+    expect((await request.post(`${api}/api/auth/signup`, { data: { displayName: name, email, password } })).status()).toBe(201);
+    const link = JSON.parse(fs.readFileSync(path.join(directory, "mail.jsonl"), "utf8").trim().split("\n").at(-1)!).text.match(/https?:\/\/\S+/)[0];
+    expect((await request.post(`${api}/api/auth/verification/confirm`, { data: { token: new URL(link).hash.slice(7) } })).status()).toBe(204);
+    sessions.push(await (await request.post(`${api}/api/auth/login`, { data: { email, password } })).json());
+  }
+  const { house } = await (await request.post(`${api}/api/houses`, { headers: { Authorization: `Bearer ${sessions[0].token}` }, data: { name: "M1 Multi QA" } })).json();
+  const { invite } = await (await request.post(`${api}/api/houses/${house.id}/invites`, { headers: { Authorization: `Bearer ${sessions[0].token}` }, data: { expiresInHours: 1, maxUses: 2 } })).json();
+  for (const session of sessions.slice(1)) expect((await request.post(`${api}/api/invites/${invite.code}/accept`, { headers: { Authorization: `Bearer ${session.token}` } })).ok()).toBe(true);
+  const contexts = await Promise.all(sessions.map(() => browser.newContext({ viewport: { width: 1280, height: 900 } })));
+  const socket = io(api, { autoConnect: false, auth: { token: sessions[0].token }, transports: ["websocket"], extraHeaders: { Origin: origin } });
+  try {
+    for (let index = 0; index < 3; index++) {
+      await contexts[index].addInitScript((session) => {
+        if (window.top !== window || !["http:", "https:"].includes(location.protocol)) return;
+        localStorage.setItem("lumio.session.v1", JSON.stringify(session));
+        (window as any).qaM1 = { created: 0, destroyed: 0, state: -1, position: 0 };
+        (window as any).YT = { Player: class {
+          events: any;
+          constructor(_id: string, options: any) { (window as any).qaM1.created++; this.events = options.events; queueMicrotask(() => this.events.onReady()); }
+          cueVideoById() {} seekTo(value: number) { (window as any).qaM1.position = value; }
+          playVideo() { (window as any).qaM1.state = 1; this.events.onStateChange({ data: 1 }); }
+          pauseVideo() { (window as any).qaM1.state = 2; this.events.onStateChange({ data: 2 }); }
+          getCurrentTime() { return (window as any).qaM1.position; } getPlayerState() { return (window as any).qaM1.state; }
+          getDuration() { return 300; } getPlaybackRate() { return 1; } getAvailablePlaybackRates() { return [1]; }
+          setVolume() {} setPlaybackRate() {} mute() {} unMute() {} destroy() { (window as any).qaM1.destroyed++; }
+        } };
+      }, sessions[index]);
+      await contexts[index].route("https://www.youtube-nocookie.com/**", (route) => route.fulfill({ body: "<html><body style='background:#101210;color:#a7f3c2'>M1 local fixture</body></html>", contentType: "text/html" }));
+    }
+    const [a, b, c] = await Promise.all(contexts.map((context) => context.newPage()));
+    await Promise.all([a.goto(`${origin}/house/${house.id}`), b.goto(`${origin}/house/${house.id}`)]);
+    await expect(a.getByRole("heading", { name: "M1 Multi QA" })).toBeVisible();
+    await expect(b.getByRole("heading", { name: "M1 Multi QA" })).toBeVisible();
+    const joined = new Promise<void>((resolve, reject) => { socket.once("room:snapshot", () => resolve()); socket.once("connect_error", reject); });
+    socket.on("connect", () => socket.emit("room:join", { roomId: house.primaryRoomId, user: sessions[0].user })); socket.connect(); await joined;
+    const item = (id: string, title: string) => ({ id: crypto.randomUUID(), provider: "youtube", providerMediaId: id, type: "video", title, duration: 300, addedBy: sessions[0].user, addedAt: new Date().toISOString() });
+    const first = item("dQw4w9WgXcQ", "M1 primeira mídia");
+    expect((await socket.timeout(5000).emitWithAck("queue:add", { roomId: house.primaryRoomId, item: first })).ok).toBe(true);
+    expect((await socket.timeout(5000).emitWithAck("media:change", { roomId: house.primaryRoomId, item: first })).ok).toBe(true);
+    await expect(a.locator(".now-playing h2")).toHaveText(first.title);
+    await expect(b.locator(".now-playing h2")).toHaveText(first.title);
+    await expect.poll(() => a.evaluate(() => (window as any).qaM1.created)).toBe(1);
+    await expect.poll(() => b.evaluate(() => (window as any).qaM1.created)).toBe(1);
+    await b.getByRole("button", { name: "Entrar no Ambiente", exact: true }).click();
+    await expect(b.locator(".music-presentation")).toBeVisible();
+    await expect(a.locator(".music-presentation")).toHaveCount(0);
+    expect(await b.evaluate(() => (window as any).qaM1.created)).toBe(1);
+    // The room may already be playing when the first item becomes current.
+    if (await a.evaluate(() => (window as any).qaM1.state !== 1)) {
+      await a.locator(".player-touch-surface").hover();
+      await a.getByRole("button", { name: "Reproduzir", exact: true }).click();
+    }
+    await expect(b.getByRole("button", { name: "Pausar", exact: true })).toBeVisible();
+    await c.goto(`${origin}/house/${house.id}`);
+    await expect(c.locator(".now-playing h2")).toHaveText(first.title);
+    await expect(c.locator(".music-presentation")).toHaveCount(0);
+    await expect.poll(() => c.evaluate(() => (window as any).qaM1.state)).toBe(1);
+    await a.locator(".player-touch-surface").hover();
+    await a.getByRole("slider", { name: "Posição da reprodução" }).focus(); await a.keyboard.press("ArrowRight");
+    await expect.poll(async () => Number(await b.getByRole("slider", { name: "Posição da reprodução" }).inputValue())).toBeGreaterThan(1);
+    const second = item("M7lc1UVf-VE", "M1 mídia intermediária"), third = item("jfKfPfyJRdk", "M1 mídia final");
+    for (const next of [second, third]) {
+      expect((await socket.timeout(5000).emitWithAck("queue:add", { roomId: house.primaryRoomId, item: next })).ok).toBe(true);
+      expect((await socket.timeout(5000).emitWithAck("media:change", { roomId: house.primaryRoomId, item: next })).ok).toBe(true);
+    }
+    for (const page of [a, b, c]) await expect(page.locator(".now-playing h2")).toHaveText(third.title);
+    await expect(b.locator(".music-presentation strong")).toHaveText(third.title);
+    await expect(a.locator(".music-presentation")).toHaveCount(0);
+    await expect(c.locator(".music-presentation")).toHaveCount(0);
+    for (const page of [a, b, c]) expect(await page.evaluate(() => (window as any).qaM1.created)).toBe(1);
+    fs.mkdirSync(path.join(root, "artifacts/m1"), { recursive: true });
+    await b.screenshot({ path: "artifacts/m1/m1-multi-client-b-ambient.png" });
+    await a.screenshot({ path: "artifacts/m1/m1-multi-client-a-video.png" });
+  } finally { socket.disconnect(); for (const context of contexts) await context.close(); }
 });
