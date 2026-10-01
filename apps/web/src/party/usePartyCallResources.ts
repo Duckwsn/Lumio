@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { LocalAudioSettings } from "../components/CallSettings";
 
-/** RTC resources belong to the Party lifetime, never to MainStage or a provider. */
+/** RTC resources belong to the Party lifetime, never to an experience stage or provider. */
 export function usePartyCallResources() {
   const [voiceError, setVoiceError] = useState("");
   const [audioBlocked, setAudioBlocked] = useState(false);

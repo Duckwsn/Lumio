@@ -6,7 +6,7 @@ import type { HouseSummary } from "@lumio/shared";
 import { safeAuthDestination } from "./authNavigation";
 import { HomePage } from "./components/EntryExperience";
 import { parseInviteInput } from "./inviteInput.js";
-import { MainStage } from "./components/MainStage";
+import { MediaExperienceStage, GamesExperienceStage } from "./components/PartyStages";
 import { GameHub } from "./components/GameHub";
 import { memberPresenceLabel, memberPreviewName, sortHouseMembers } from "./presence";
 
@@ -45,19 +45,15 @@ test("invite input supports normalized codes and existing local invitation links
   assert.equal(safeAuthDestination(next, origin), next);
 });
 
-test("MainStage recognizes games while retaining exactly one media surface", () => {
-  for (const view of ["media", "game", "screen"] as const) {
-    const html = renderToStaticMarkup(createElement(MainStage, { media: createElement("video", { "data-engine": "single" }), screenShare: null, screenStream: null, view, onViewChange: () => undefined, onFullscreenChange: () => undefined }));
-    assert.equal((html.match(/data-engine="single"/g) ?? []).length, 1);
-    assert.equal(html.includes("O que vamos jogar?"), view === "game");
-    assert.equal(html.includes('inert=""'), view !== "media");
-  }
-});
-test("game presentation keeps the existing YouTube surface visible instead of background playback", () => {
-  const html = renderToStaticMarkup(createElement(MainStage, { media: createElement("iframe", { title: "YouTube" }), screenShare: null, screenStream: null, view: "game", youtubeVisible: true, onViewChange: () => undefined, onFullscreenChange: () => undefined }));
-  assert.match(html, /game-media-visible/); assert.equal(html.includes('inert=""'), false);
+test("GX3 Media experience owns the only provider surface", () => {
+  const html = renderToStaticMarkup(createElement(MediaExperienceStage, { media: createElement("iframe", { title: "YouTube" }), screenShare: null, screenStream: null, view: "media", onViewChange: () => undefined }));
   assert.equal((html.match(/<iframe/g) ?? []).length, 1);
-  assert.equal(html.includes("Iniciar jogo"), false);
+  assert.match(html, /media-experience/);
+});
+test("GX3 Games experience has no hidden YouTube, Drive or MediaStage", () => {
+  const html = renderToStaticMarkup(createElement(GamesExperienceStage, { screenShare: null, screenStream: null, onBack: () => undefined, onFullscreenChange: () => undefined }));
+  assert.match(html, /games-experience/);
+  assert.doesNotMatch(html, /<iframe|<video|game-media-visible|lumio-player/);
 });
 
 test("S1 Home distinguishes Party occupancy, online members and escaped activity", () => {

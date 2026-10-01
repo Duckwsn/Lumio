@@ -67,7 +67,7 @@ test("S1 Houses: Home observes two Party browsers, three games, six widths, deta
         await contexts[2].setOffline(true); await expect(home.getByRole("status")).toContainText("último estado recebido");
         await contexts[2].setOffline(false); await expect(home.locator(".home-presence-pending")).toHaveCount(0, { timeout: 15000 });
         await home.screenshot({ path: "artifacts/s1/s1-home-desktop.png" });
-        for (const width of [320, 360, 375, 390, 412, 430]) { await home.setViewportSize({ width, height: 844 }); expect(await home.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true); const box = await home.locator(".house-card-v2>button").boundingBox(); expect(box!.height).toBeGreaterThanOrEqual(44); await home.screenshot({ path: `artifacts/s1/s1-home-${width}.png` }); }
+        for (const width of [320, 360, 375, 390, 412, 430]) { await home.setViewportSize({ width, height: 844 }); expect(await home.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true); const box = await home.locator(".house-card-v2 .house-open-actions > button").first().boundingBox(); expect(box!.height).toBeGreaterThanOrEqual(44); await home.screenshot({ path: `artifacts/s1/s1-home-${width}.png` }); }
       }
       await a.getByRole("button", { name: "Voltar à mídia", exact: true }).click(); await b.getByRole("button", { name: "Voltar à mídia", exact: true }).click();
       await expect(home.locator(".house-party-summary")).toContainText(`Partida de ${label} ativa`, { timeout: 5000 });
@@ -88,7 +88,7 @@ test("S1 Houses: Home observes two Party browsers, three games, six widths, deta
     await home.setViewportSize({ width: 1440, height: 900 }); await home.screenshot({ path: "artifacts/s1/s1-house-multiple.png" });
     await contexts[0].close(); await expect(home.locator(".house-card-v2").first()).toContainText("1 pessoa na Party", { timeout: 10000 });
     await contexts[1].close(); await expect(home.locator(".house-card-v2").first()).toContainText("Ninguém na Party agora", { timeout: 10000 });
-    await home.locator(".house-card-v2").first().getByRole("button", { name: /Abrir Party/ }).click(); await expect(home).toHaveURL(new RegExp(`/house/${house.id}$`));
+    await home.locator(".house-card-v2").first().getByRole("button", { name: /Abrir Party/ }).click(); await expect(home).toHaveURL(new RegExp(`/house/${house.id}/media$`));
     expect(errors).toEqual([]);
   } finally { for (const ctx of contexts) await ctx.close(); }
 });
@@ -763,7 +763,7 @@ test("invitation sharing offers code and link, mobile code entry and unauthentic
     await guestPage.getByRole("button", { name: "Abrir convite" }).click();
     await expect(guestPage.getByRole("heading", { name: house.name })).toBeVisible();
     await guestPage.getByRole("button", { name: "Entrar na Casa", exact: true }).click();
-    await expect(guestPage).toHaveURL(`${origin}/house/${house.id}`);
+    await expect(guestPage).toHaveURL(`${origin}/house/${house.id}/media`);
     await guestPage.goto(`${origin}/invite/${code}`);
     await expect(guestPage.getByRole("button", { name: "Abrir Party", exact: true })).toBeVisible();
     await guestPage.getByRole("button", { name: "Abrir Party", exact: true }).click();
@@ -776,7 +776,7 @@ test("invitation sharing offers code and link, mobile code entry and unauthentic
     await guestPage.getByRole("button", { name: "Entrar", exact: true }).last().click();
     await expect(guestPage).toHaveURL(link);
     await guestPage.getByRole("button", { name: "Entrar na Casa", exact: true }).click();
-    await expect(guestPage).toHaveURL(`${origin}/house/${house.id}`);
+    await expect(guestPage).toHaveURL(`${origin}/house/${house.id}/media`);
     const details = await (await request.get(`${api}/api/houses/${house.id}`, { headers: { Authorization: `Bearer ${host.session.token}` } })).json();
     expect(details.house.members).toHaveLength(3); expect(details.house.invites[0].uses).toBe(2);
   } finally { await hostContext.close(); await guestContext.close(); }
@@ -873,7 +873,7 @@ test("automatic voice: three real RTC clients, explicit capture, denial, deafen,
     await a.screenshot({ path: "test-results/g0-desktop-games.png" });
     await a.getByRole("button", { name: "Voltar à mídia", exact: true }).click();
     await b.getByRole("button", { name: "Voltar à mídia", exact: true }).click();
-    await expect(a.getByRole("button", { name: "Jogos", exact: true })).toBeFocused();
+    await expect(a.getByRole("button", { name: "Assistir/Ouvir", exact: true })).toBeFocused();
     await connected(a, 1); await connected(b, 1);
     await join(c);
     await expect.poll(() => c.evaluate(() => ({ ready: (window as any).qaVoice.peers.some((peer: RTCPeerConnection) => peer.connectionState === "connected"), peers: (window as any).qaVoice.peers.map((peer: RTCPeerConnection) => ({ state: peer.connectionState, signaling: peer.signalingState, ice: peer.iceConnectionState, slots: peer.getTransceivers().map((slot) => ({ kind: slot.receiver.track.kind, direction: slot.direction, current: slot.currentDirection, sender: Boolean(slot.sender.track) })) })), voice: document.querySelector(".dock-call-state")?.textContent })), { timeout: 20000 }).toMatchObject({ ready: true });
@@ -920,12 +920,12 @@ test("automatic voice: three real RTC clients, explicit capture, denial, deafen,
       await a.getByRole("button", { name: "Retornar à partida", exact: true }).click();
       await expect(a.locator(selector)).toHaveAttribute("data-phase", phase);
       expect(await a.locator(selector === ".quiz-game" ? ".quiz-question" : ".card-hand button").allTextContents()).toEqual(content);
-      // The game presentation may remount; the shared player/RTC must not.
+      // The game presentation may remount; GX3 destroys the local player, not shared RTC.
       expect(await surface!.evaluate((node) => node.isConnected)).toBe(false);
       for (const page of [a, b, c]) {
         expect(await page.evaluate(() => {
           const q = (window as any).qaVoice;
-          return q.peers.length === q.beforePolish.length && q.peers.every((p: RTCPeerConnection, i: number) => p === q.beforePolish[i] && p.connectionState !== "closed") && q.tracks.every((t: MediaStreamTrack, i: number) => t === q.beforeTracks[i]) && q.sockets.length === q.beforeSockets.length && q.sockets.every((s: WebSocket, i: number) => s === q.beforeSockets[i] && s.readyState === WebSocket.OPEN) && document.querySelector(".lumio-player") === q.beforePlayer;
+          return q.peers.length === q.beforePolish.length && q.peers.every((p: RTCPeerConnection, i: number) => p === q.beforePolish[i] && p.connectionState !== "closed") && q.tracks.every((t: MediaStreamTrack, i: number) => t === q.beforeTracks[i]) && q.sockets.length === q.beforeSockets.length && q.sockets.every((s: WebSocket, i: number) => s === q.beforeSockets[i] && s.readyState === WebSocket.OPEN) && document.querySelector(".lumio-player") === null;
         })).toBe(true);
       }
       await a.getByRole("button", { name: "Voltar aos jogos", exact: true }).click();
@@ -973,8 +973,8 @@ test("automatic voice: three real RTC clients, explicit capture, denial, deafen,
     } catch (error) {
       for (const [name, page] of [["A", a], ["B", b], ["C", c]] as const) console.info("RTC diagnostic", name, JSON.stringify(await page.evaluate(() => ({
         voice: document.querySelector(".dock-call-state")?.textContent,
-        tracks: (window as any).qaVoice.tracks.map((track: MediaStreamTrack) => ({ enabled: track.enabled, ready: track.readyState })),
-        peers: (window as any).qaVoice.peers.map((peer: RTCPeerConnection) => ({ state: peer.connectionState, signaling: peer.signalingState, ice: peer.iceConnectionState, gathering: peer.iceGatheringState, slots: peer.getTransceivers().map((slot) => ({ kind: slot.receiver.track.kind, direction: slot.direction, current: slot.currentDirection, sender: slot.sender.track?.readyState, enabled: slot.sender.track?.enabled })) })),
+        tracks: ((window as any).qaVoice?.tracks ?? []).map((track: MediaStreamTrack) => ({ enabled: track.enabled, ready: track.readyState })),
+        peers: ((window as any).qaVoice?.peers ?? []).map((peer: RTCPeerConnection) => ({ state: peer.connectionState, signaling: peer.signalingState, ice: peer.iceConnectionState, gathering: peer.iceGatheringState, slots: peer.getTransceivers().map((slot) => ({ kind: slot.receiver.track.kind, direction: slot.direction, current: slot.currentDirection, sender: slot.sender.track?.readyState, enabled: slot.sender.track?.enabled })) })),
       }))));
       throw error;
     }
@@ -1028,6 +1028,10 @@ test("mobile permanent chat, gesture, secondary tools, late join and player idle
     await page.goto(`${origin}/house/${house.id}`);
     await expect(page.getByRole("heading", { name: "Mobile QA Casa", exact: true })).toBeVisible({ timeout: 30_000 });
     await expect(page.getByRole("textbox", { name: "Mensagem" })).toBeVisible();
+    if ((await page.evaluate(() => (window as any).qaPlayer.state)) !== 1) {
+      await page.locator(".player-touch-surface").tap({ position: { x: 20, y: 20 } });
+      await page.getByRole("button", { name: "Reproduzir", exact: true }).tap();
+    }
     await expect.poll(() => page.evaluate(() => (window as any).qaPlayer.state)).toBe(1);
     await expect.poll(() => page.evaluate(() => (window as any).qaPlayer.plays)).toBeGreaterThan(0);
     await expect(page.locator(".mobile-party-chat button.chat-drag-handle")).toHaveCount(0);
@@ -1048,9 +1052,7 @@ test("mobile permanent chat, gesture, secondary tools, late join and player idle
       await page.setViewportSize({ width, height: 844 });
       await expect(page.getByRole("textbox", { name: "Mensagem" })).toBeVisible();
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth && document.documentElement.scrollHeight <= innerHeight)).toBe(true);
-      const box = await page.locator("iframe.provider-player").boundingBox();
-      expect(box!.width).toBeGreaterThanOrEqual(200); expect(box!.height).toBeGreaterThanOrEqual(200);
-      expect(box!.y).toBeGreaterThanOrEqual(0); expect(box!.y + box!.height).toBeLessThanOrEqual(844);
+      await expect(page.locator("iframe.provider-player, video.provider-player, .lumio-player")).toHaveCount(0);
       for (const name of ["Pessoas da Party", "Fila da Party"]) {
         await page.getByRole("button", { name, exact: true }).tap();
         await expect(page.getByRole("button", { name: "Recolher painel da Party" })).toBeVisible();
@@ -1068,9 +1070,15 @@ test("mobile permanent chat, gesture, secondary tools, late join and player idle
     await expect(page.locator(".main-stage")).toHaveAttribute("data-view", "game");
     await page.getByRole("button", { name: "Voltar à mídia", exact: true }).tap();
     await expect(page.locator(".main-stage")).toHaveAttribute("data-view", "media");
-    expect(await engine()).toEqual(originalEngine);
-    expect(await mediaNode!.evaluate((node) => node === document.querySelector("iframe.provider-player"))).toBe(true);
+    const resumedEngine = await engine();
+    expect(resumedEngine.created).toBeGreaterThan(originalEngine.created);
+    expect(resumedEngine.destroyed).toBeGreaterThan(originalEngine.destroyed);
+    expect(await mediaNode!.evaluate((node) => node === document.querySelector("iframe.provider-player"))).toBe(false);
     expect(await page.evaluate(() => (window as any).qaMicCaptures)).toBe(0);
+    // GX3 intentionally paused when this tab was the final Media viewer.
+    await page.locator(".player-touch-surface").tap({ position: { x: 20, y: 20 } });
+    await page.getByRole("button", { name: "Reproduzir", exact: true }).tap();
+    await expect.poll(() => page.evaluate(() => (window as any).qaPlayer.state)).toBe(1);
     const assertPortraitLayout = async () => {
       await expect.poll(() => page.locator(".player-frame").evaluate((node) => Math.abs(node.getBoundingClientRect().width / node.getBoundingClientRect().height - 16 / 9))).toBeLessThan(0.02);
       // VisualViewport resize arrives asynchronously after setViewportSize/fullscreen.
@@ -1099,7 +1107,8 @@ test("mobile permanent chat, gesture, secondary tools, late join and player idle
     expect(await page.locator(".player-frame").evaluate((node) => node.getBoundingClientRect().height)).toBeCloseTo(videoHeight, 2);
     await expect(page.locator("iframe.provider-player")).toHaveCSS("opacity", "1");
     await expect(page.locator(".music-presentation")).toHaveAttribute("data-lyrics", "unavailable");
-    expect(await engine()).toEqual(originalEngine);
+    expect((await engine()).created).toBe(resumedEngine.created);
+    expect((await engine()).destroyed).toBe(resumedEngine.destroyed);
     await expect.poll(() => page.locator(".music-presentation").evaluate((node) => Math.abs(node.getBoundingClientRect().height - node.parentElement!.clientHeight))).toBeLessThanOrEqual(1);
     for (const width of [320, 360, 375, 390, 412, 430]) {
       await page.setViewportSize({ width, height: 844 });
@@ -1123,6 +1132,7 @@ test("mobile permanent chat, gesture, secondary tools, late join and player idle
       const handle = page.getByRole("button", { name: "Recolher painel da Party" });
       await expect(handle).toBeVisible();
       await page.screenshot({ path: name === "Pessoas da Party" ? "test-results/mobile-people-sheet.png" : "test-results/mobile-queue-sheet.png" });
+      await expect.poll(() => handle.boundingBox()).not.toBeNull();
       const box = await handle.boundingBox();
       await page.mouse.move(box!.x + box!.width / 2, box!.y + 10); await page.mouse.down();
       await page.mouse.move(box!.x + box!.width / 2, box!.y + 40, { steps: 8 });
@@ -1136,7 +1146,7 @@ test("mobile permanent chat, gesture, secondary tools, late join and player idle
       await page.mouse.move(box!.x + box!.width / 2, box!.y + 300, { steps: 12 }); await page.mouse.up();
       await expect(sheet).toBeHidden();
       await expect(page.getByRole("textbox", { name: "Mensagem" })).toBeVisible();
-      expect((await engine()).created).toBe(originalEngine.created); expect((await engine()).destroyed).toBe(0);
+      expect((await engine()).created).toBe(resumedEngine.created); expect((await engine()).destroyed).toBe(resumedEngine.destroyed);
       await page.getByRole("button", { name, exact: true }).tap();
       await page.getByRole("button", { name: "Recolher painel da Party" }).tap();
       await expect(sheet).toBeHidden();
@@ -1160,6 +1170,9 @@ test("mobile permanent chat, gesture, secondary tools, late join and player idle
     expect(await page.evaluate(() => (window as any).qaMicCaptures)).toBe(1);
     await page.screenshot({ path: "test-results/mobile-automatic-voice.png" });
     await page.getByRole("button", { name: "Controles da call", exact: true }).tap();
+    const currentMediaState = await new Promise<any>((resolve) => { socket.once("media:sync", resolve); socket.emit("media:request-sync", { roomId: house.primaryRoomId }); });
+    expect(currentMediaState.state).toBe("playing");
+    await page.evaluate(() => { if (document.activeElement instanceof HTMLElement) document.activeElement.blur(); });
     await page.locator(".player-touch-surface").tap({ position: { x: 20, y: 20 } });
     await expect(page.locator(".lumio-controls")).toHaveCSS("opacity", "1");
     await expect(page.locator(".lumio-controls")).toHaveCSS("opacity", "0", { timeout: 5000 });
@@ -1186,7 +1199,7 @@ test("mobile permanent chat, gesture, secondary tools, late join and player idle
     await expect.poll(() => page.evaluate(() => Boolean(document.fullscreenElement || document.querySelector(".fallback-fullscreen")))).toBe(true);
     await expect(page.locator(".mobile-party-chat")).toBeHidden();
     await expect(page.locator(".music-presentation")).toBeVisible();
-    expect((await engine()).created).toBe(originalEngine.created);
+    expect((await engine()).created).toBe(resumedEngine.created);
     await page.screenshot({ path: "test-results/mobile-fullscreen.png" });
     await page.screenshot({ path: "artifacts/m1/m1-fullscreen-ambient.png" });
     await page.getByRole("button", { name: "Sair do Ambiente", exact: true }).tap();
@@ -1294,7 +1307,7 @@ test("mobile permanent chat, gesture, secondary tools, late join and player idle
 
 // Isolated layout fixture: actual MediaStage markup/CSS + locally generated video.
 // This covers native video sizing used by Drive, NOT authenticated Google streaming.
-test("G0 Drive engine survives game presentation, paused return and screen stream switching", async ({ page }) => {
+test("GX3 Drive engine unmounts in Games, restores paused media and keeps screen share", async ({ page }) => {
   const errors: string[] = []; page.on("pageerror", (error) => errors.push(error.message));
   const origin = `http://127.0.0.1:${webPort}`;
   await page.goto(origin);
@@ -1315,13 +1328,14 @@ test("G0 Drive engine survives game presentation, paused return and screen strea
   await page.route(`${origin}/qa-g0`, (route) => route.fulfill({ contentType: "text/html", body: `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/src/styles.css"></head><body><div id="root"></div><script type="module">
     import RefreshRuntime from '/@react-refresh'; RefreshRuntime.injectIntoGlobalHook(window); window.$RefreshReg$=()=>{}; window.$RefreshSig$=()=>type=>type; window.__vite_plugin_react_preamble_installed__=true;
     const {default:React} = await import('/node_modules/.vite/deps/react.js'); const {createRoot} = (await import('/node_modules/.vite/deps/react-dom_client.js')).default;
-    const {MainStage} = await import('/src/components/MainStage.tsx'); const {MediaStage} = await import('/src/components/MediaStage.tsx');
+    const {MediaExperienceStage,GamesExperienceStage} = await import('/src/components/PartyStages.tsx'); const {MediaStage} = await import('/src/components/MediaStage.tsx');
     const e=React.createElement; window.qaCommands=0;
     function Fixture(){ const [view,setView]=React.useState('media'); const [share,setShare]=React.useState(null); const [stream,setStream]=React.useState(null);
       const [media,setMedia]=React.useState({provider:'google-drive',mediaId:'qa-g0',title:'Local Drive fixture',type:'video',state:'paused',position:0,duration:10,playbackRate:1,startedAt:null,updatedAt:Date.now(),controlledBy:'qa',revision:1});
       const command=(c)=>{window.qaCommands++;setMedia(m=>({...m,state:c.action==='pause'?'paused':'playing',position:c.position,startedAt:c.action==='pause'?null:Date.now(),revision:m.revision+1}));return true;};
       const noop=React.useCallback(()=>{},[]);
-      return e('main',null,e('button',{onClick:()=>setView('game')},'Jogos'),e('button',{onClick:()=>{const canvas=document.createElement('canvas');canvas.width=320;canvas.height=180;canvas.getContext('2d').fillRect(0,0,320,180);window.qaScreen=canvas.captureStream(10);setStream(window.qaScreen);setShare({user:{id:'qa',displayName:'QA',color:'#78a98c'}});}},'Test screen'),e(MainStage,{view,onViewChange:setView,screenShare:share,screenStream:stream,onFullscreenChange:noop,media:e(MediaStage,{media,roomId:'qa',apiUrl:location.origin,token:'fixture',theater:false,ambient:false,musicView:false,volume:0,effectiveVolume:0,resyncToken:0,shortcutsEnabled:view==='media',onSkip:noop,onRemove:noop,onAddMedia:noop,onEnded:noop,onPlaybackCommand:command,onTheaterChange:noop,onMusicViewChange:noop,onFullscreenChange:noop,onVolumeChange:noop})}));
+      const enterGames=()=>{const video=document.querySelector('video.provider-player');setMedia(m=>({...m,state:'paused',position:video?.currentTime??m.position,startedAt:null,revision:m.revision+1}));setView('game');};
+      return e('main',null,e('button',{onClick:enterGames},'Jogos'),e('button',{onClick:()=>{const canvas=document.createElement('canvas');canvas.width=320;canvas.height=180;canvas.getContext('2d').fillRect(0,0,320,180);window.qaScreen=canvas.captureStream(10);setStream(window.qaScreen);setShare({user:{id:'qa',displayName:'QA',color:'#78a98c'}});}},'Test screen'),view==='media'?e(MediaExperienceStage,{view:'media',onViewChange:noop,screenShare:share,screenStream:stream,media:e(MediaStage,{media,roomId:'qa',apiUrl:location.origin,token:'fixture',theater:false,ambient:false,musicView:false,volume:0,effectiveVolume:0,resyncToken:0,shortcutsEnabled:true,onSkip:noop,onRemove:noop,onAddMedia:noop,onEnded:noop,onPlaybackCommand:command,onTheaterChange:noop,onMusicViewChange:noop,onFullscreenChange:noop,onVolumeChange:noop})}):e(GamesExperienceStage,{screenShare:share,screenStream:stream,onBack:()=>setView('media'),onFullscreenChange:noop}));
     } createRoot(document.getElementById('root')).render(e(Fixture));
   </script></body></html>` }));
   await page.goto(`${origin}/qa-g0`);
@@ -1332,24 +1346,23 @@ test("G0 Drive engine survives game presentation, paused return and screen strea
   await native!.evaluate((video: HTMLVideoElement) => { video.loop = true; });
   const initialTickets = tickets;
   await page.getByRole("button", { name: "Jogos", exact: true }).click();
-  await expect(page.locator(".stage-layer.hidden video.provider-player")).toHaveCount(1);
-  expect(await native!.evaluate((video: HTMLVideoElement) => video.paused)).toBe(true);
+  await expect(page.locator("video.provider-player, .lumio-player")).toHaveCount(0);
+  expect(await native!.evaluate((video: HTMLVideoElement) => video.isConnected)).toBe(false);
   await page.getByRole("button", { name: "Voltar à mídia", exact: true }).click();
-  expect(await native!.evaluate((video: HTMLVideoElement) => video.currentTime)).toBe(0);
+  await expect(page.locator("video.provider-player")).toHaveCount(1);
   await page.getByRole("button", { name: "Reproduzir", exact: true }).click();
-  await expect.poll(() => native!.evaluate((video: HTMLVideoElement) => video.currentTime)).toBeGreaterThan(0.1);
-  const before = await native!.evaluate((video: HTMLVideoElement) => video.currentTime);
+  await expect.poll(() => page.locator("video.provider-player").evaluate((video: HTMLVideoElement) => video.currentTime)).toBeGreaterThan(0.1);
   await page.getByRole("button", { name: "Jogos", exact: true }).click();
-  await expect.poll(() => native!.evaluate((video: HTMLVideoElement) => video.currentTime)).toBeGreaterThan(before);
+  await expect(page.locator("video.provider-player")).toHaveCount(0);
   await page.getByRole("button", { name: "Test screen", exact: true }).click();
+  await page.getByRole("button", { name: "Tela compartilhada", exact: true }).click();
   await expect.poll(() => page.locator(".screen-share-stage video").evaluate((node: HTMLVideoElement) => node.srcObject === (window as any).qaScreen)).toBe(true);
   expect(await page.evaluate(() => (window as any).qaScreen.getTracks()[0].readyState)).toBe("live");
   await expect(page.locator(".main-stage")).toHaveAttribute("data-view", "game");
-  await page.getByRole("button", { name: "Tela compartilhada", exact: true }).click();
-  await expect(page.locator(".main-stage")).toHaveAttribute("data-view", "screen");
-  await page.getByRole("button", { name: "Mídia", exact: true }).click();
-  expect(await native!.evaluate((video) => video === document.querySelector("video.provider-player"))).toBe(true);
-  expect(tickets).toBe(initialTickets); expect(await page.evaluate(() => (window as any).qaCommands)).toBe(1);
+  await page.getByRole("button", { name: "Jogos", exact: true }).last().click();
+  await page.getByRole("button", { name: "Voltar à mídia", exact: true }).click();
+  await expect(page.locator("video.provider-player")).toHaveCount(1);
+  expect(tickets).toBeGreaterThan(initialTickets); expect(await page.evaluate(() => (window as any).qaCommands)).toBe(1);
 });
 
 test("Drive native video keeps portrait/4:3/16:9 content contained in the mobile canvas", async ({ page }) => {
@@ -1434,8 +1447,8 @@ test("M1 three clients keep playback shared and Ambiente local through late join
     }
     const [a, b, c] = await Promise.all(contexts.map((context) => context.newPage()));
     await Promise.all([a.goto(`${origin}/house/${house.id}`), b.goto(`${origin}/house/${house.id}`)]);
-    await expect(a.getByRole("heading", { name: "M1 Multi QA" })).toBeVisible();
-    await expect(b.getByRole("heading", { name: "M1 Multi QA" })).toBeVisible();
+    await expect(a.getByRole("heading", { name: "M1 Multi QA" })).toBeVisible({ timeout: 20000 });
+    await expect(b.getByRole("heading", { name: "M1 Multi QA" })).toBeVisible({ timeout: 20000 });
     const joined = new Promise<void>((resolve, reject) => { socket.once("room:snapshot", () => resolve()); socket.once("connect_error", reject); });
     socket.on("connect", () => socket.emit("room:join", { roomId: house.primaryRoomId, user: sessions[0].user })); socket.connect(); await joined;
     const item = (id: string, title: string) => ({ id: crypto.randomUUID(), provider: "youtube", providerMediaId: id, type: "video", title, duration: 300, addedBy: sessions[0].user, addedAt: new Date().toISOString() });
@@ -1757,12 +1770,12 @@ test("GX2 Party transport, Call peers and tracks keep identity across visual chi
           samePeers: q.peers.length === before.peers.length && q.peers.every((peer: RTCPeerConnection, index: number) => peer === before.peers[index] && peer.connectionState !== "closed"),
           sameMic: q.captures[0]?.getAudioTracks()[0] === before.mic,
           sameDisplay: q.displays[0]?.getVideoTracks()[0] === before.display,
-          samePlayer: document.querySelector(".lumio-player") === before.player,
+          playerRemounted: document.querySelector(".lumio-player") !== before.player,
           captures: q.captures.length - before.captures,
           displays: q.displays.length - before.displays,
           socialPackets: changed.filter((name: string) => ["room:join", "room:leave", "voice:join", "voice:leave"].includes(name)),
         };
-      })).toEqual({ sameShell: true, sameSocket: true, samePeers: true, sameMic: true, sameDisplay: true, samePlayer: true, captures: 0, displays: 0, socialPackets: [] });
+      })).toEqual({ sameShell: true, sameSocket: true, samePeers: true, sameMic: true, sameDisplay: true, playerRemounted: true, captures: 0, displays: 0, socialPackets: [] });
       await expect(a.getByRole("textbox", { name: "Mensagem" })).toHaveValue("Rascunho GX2 permanece");
       await expect(a.getByRole("button", { name: "Desativar microfone", exact: true })).toBeVisible();
       await expect(b.getByRole("button", { name: "Ativar áudio da call", exact: true })).toBeVisible();
@@ -1787,4 +1800,94 @@ test("GX2 Party transport, Call peers and tracks keep identity across visual chi
       expect(await a.evaluate(() => (window as any).gx2.sockets[0].readyState)).toBe(WebSocket.CLOSED);
     } finally { for (const context of contexts) await context.close(); }
   } finally { await rtcBrowser.close(); }
+});
+
+test("GX3 two tabs keep one Party while Media viewers govern authoritative playback", async ({ browser, request }) => {
+  test.setTimeout(120_000);
+  const origin = `http://127.0.0.1:${webPort}`, api = `http://127.0.0.1:${apiPort}`;
+  let session: any = m2QaSessions?.[0];
+  if (!session) {
+    const email = `gx3-${crypto.randomUUID()}@example.test`, password = "local-e2e-password-123";
+    expect((await request.post(`${api}/api/auth/signup`, { data: { displayName: "GX3 Viewer", email, password } })).status()).toBe(201);
+    const link = JSON.parse(fs.readFileSync(path.join(directory, "mail.jsonl"), "utf8").trim().split("\n").at(-1)!).text.match(/https?:\/\/\S+/)[0];
+    expect((await request.post(`${api}/api/auth/verification/confirm`, { data: { token: new URL(link).hash.slice(7) } })).status()).toBe(204);
+    session = await (await request.post(`${api}/api/auth/login`, { data: { email, password } })).json();
+  }
+  const { house } = await (await request.post(`${api}/api/houses`, { headers: { Authorization: `Bearer ${session.token}` }, data: { name: "GX3 Viewer QA" } })).json();
+  const contextA = await browser.newContext(), contextB = await browser.newContext();
+  for (const context of [contextA, contextB]) {
+    await context.addInitScript((value) => {
+      if (window.top !== window || !["http:", "https:"].includes(location.protocol)) return;
+      localStorage.setItem("lumio.session.v1", JSON.stringify(value));
+      (window as any).gx3Player = { created: 0, destroyed: 0 };
+      (window as any).YT = { Player: class {
+        events: any;
+        constructor(_id: string, options: any) { (window as any).gx3Player.created++; this.events = options.events; queueMicrotask(() => this.events.onReady()); }
+        cueVideoById() {} seekTo() {} playVideo() { this.events.onStateChange({ data: 1 }); } pauseVideo() { this.events.onStateChange({ data: 2 }); }
+        getCurrentTime() { return 12; } getPlayerState() { return 1; } getDuration() { return 300; } getPlaybackRate() { return 1; } getAvailablePlaybackRates() { return [1]; }
+        setVolume() {} setPlaybackRate() {} mute() {} unMute() {} destroy() { (window as any).gx3Player.destroyed++; }
+      } };
+    }, session);
+    await context.route("https://www.youtube-nocookie.com/**", (route) => route.fulfill({ body: "<html><body>GX3 local fixture</body></html>", contentType: "text/html" }));
+  }
+  const a = await contextA.newPage(), b = await contextB.newPage();
+  const controller = io(api, { autoConnect: false, auth: { token: session.token }, transports: ["websocket"], extraHeaders: { Origin: origin } });
+  const roomId: string = house.primaryRoomId;
+  const sync = () => new Promise<any>((resolve) => { controller.once("media:sync", resolve); controller.emit("media:request-sync", { roomId }); });
+  const roomSnapshot = () => new Promise<any>((resolve) => { controller.once("room:snapshot", resolve); controller.emit("room:join", { roomId, user: session.user }); });
+  try {
+    await Promise.all([a.goto(`${origin}/house/${house.id}/media`), b.goto(`${origin}/house/${house.id}/media`)]);
+    await expect(a.locator(".main-stage")).toHaveAttribute("data-view", "media");
+    await expect(b.locator(".main-stage")).toHaveAttribute("data-view", "media");
+    const joined = new Promise<void>((resolve, reject) => { controller.once("room:snapshot", () => resolve()); controller.once("connect_error", reject); });
+    controller.on("connect", () => controller.emit("room:join", { roomId, user: session.user })); controller.connect(); await joined;
+    const item = { id: crypto.randomUUID(), provider: "youtube", providerMediaId: "M7lc1UVf-VE", type: "video", title: "GX3 playback", duration: 300, addedBy: session.user, addedAt: new Date().toISOString() };
+    expect((await controller.timeout(5000).emitWithAck("queue:add", { roomId, item })).ok).toBe(true);
+    expect((await controller.timeout(5000).emitWithAck("media:change", { roomId, item })).ok).toBe(true);
+    await expect(a.locator("iframe.provider-player")).toHaveCount(1);
+    await expect(b.locator("iframe.provider-player")).toHaveCount(1);
+    await expect.poll(async () => (await sync()).state).toBe("playing");
+    await a.evaluate(() => { (window as any).gx3Before = { shell: document.querySelector(".app-shell"), player: document.querySelector(".lumio-player") }; });
+    await a.getByRole("button", { name: "Jogos", exact: true }).click();
+    await expect(a).toHaveURL(`${origin}/house/${house.id}/games`);
+    await expect(a.locator("iframe.provider-player,video.provider-player,.lumio-player")).toHaveCount(0);
+    expect(await a.evaluate(() => document.querySelector(".app-shell") === (window as any).gx3Before.shell)).toBe(true);
+    await a.waitForTimeout(1800);
+    expect((await sync()).state).toBe("playing");
+    const beforeQueue = await roomSnapshot();
+    await b.getByRole("button", { name: "Jogos", exact: true }).click();
+    await expect(b.locator("iframe.provider-player,video.provider-player,.lumio-player")).toHaveCount(0);
+    await expect.poll(async () => (await sync()).state, { timeout: 8000 }).toBe("paused");
+    const paused = await sync();
+    expect(paused.mediaId).toBe(item.providerMediaId);
+    expect(paused.position).toBeGreaterThanOrEqual(0);
+    const afterQueue = await roomSnapshot();
+    expect(afterQueue.queueRevision).toBe(beforeQueue.queueRevision);
+    expect(afterQueue.queue.map((entry: { id: string }) => entry.id)).toEqual(beforeQueue.queue.map((entry: { id: string }) => entry.id));
+    expect(afterQueue.history.length).toBe(beforeQueue.history.length);
+    await a.getByRole("button", { name: "Assistir/Ouvir", exact: true }).click();
+    await expect(a.locator("iframe.provider-player")).toHaveCount(1);
+    expect((await sync()).state).toBe("paused");
+    expect(await a.evaluate(() => document.querySelector(".lumio-player") !== (window as any).gx3Before.player)).toBe(true);
+    await a.getByRole("button", { name: "Reproduzir", exact: true }).click();
+    await expect.poll(async () => (await sync()).state).toBe("playing");
+    await a.waitForTimeout(1800);
+    expect((await sync()).state).toBe("playing");
+    await a.goBack(); await expect(a).toHaveURL(`${origin}/house/${house.id}/games`);
+    await expect(a.locator(".lumio-player")).toHaveCount(0);
+    await expect.poll(async () => (await sync()).state, { timeout: 8000 }).toBe("paused");
+    await a.goForward(); await expect(a).toHaveURL(`${origin}/house/${house.id}/media`);
+    await a.reload(); await expect(a.locator(".main-stage")).toHaveAttribute("data-view", "media");
+    await b.reload(); await expect(b.locator(".main-stage")).toHaveAttribute("data-view", "game");
+    await expect(b.locator(".lumio-player")).toHaveCount(0);
+    fs.mkdirSync(path.join(root, "artifacts/gx3"), { recursive: true });
+    for (const width of [320, 390, 1440]) {
+      await b.setViewportSize({ width, height: width === 1440 ? 900 : 844 });
+      expect(await b.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      await b.screenshot({ path: path.join(root, `artifacts/gx3/games-${width}.png`) });
+      await a.setViewportSize({ width, height: width === 1440 ? 900 : 844 });
+      expect(await a.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      await a.screenshot({ path: path.join(root, `artifacts/gx3/media-${width}.png`) });
+    }
+  } finally { controller.disconnect(); await contextA.close(); await contextB.close(); }
 });

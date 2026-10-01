@@ -92,7 +92,7 @@ export class YouTubeProvider implements MediaProviderAdapter {
     if (media.state === "playing" && this.player?.getPlayerState() !== 1) this.play();
     if (["paused", "ended"].includes(media.state)) this.pause();
   }
-  destroy() { this.destroyed = true; this.player?.destroy(); this.player = null; this.state = "idle"; }
+  destroy() { this.destroyed = true; this.player?.pauseVideo(); this.player?.destroy(); this.player = null; this.state = "idle"; }
 }
 
 export class DriveProvider implements MediaProviderAdapter {

@@ -1003,13 +1003,24 @@ svg { flex:none; }
 .mobile-party .lumio-player:not(:fullscreen):not(.fallback-fullscreen) .music-presentation { flex-direction:row; padding:10px 12px 74px; gap:12px; text-align:left; }
 .mobile-party .lumio-player:not(:fullscreen):not(.fallback-fullscreen) .music-cover { width:clamp(44px,18vw,84px); height:clamp(44px,18vw,84px); flex:0 0 auto; }
 
-/* G0: activity presentation changes; Party services and the playback engine stay mounted. */
+/* GX3: the Party shell persists, but only the active experience mounts its stage. */
 .games-entry { display:inline-flex; align-items:center; justify-content:center; gap:6px; min-height:44px; padding:0 10px; border-radius:8px; color:var(--text-soft); background:transparent; }
 .games-entry.active { color:var(--primary); background:rgba(120,169,140,.12); }
+.party-experience-nav { display:flex; align-items:center; gap:3px; border:1px solid var(--border); border-radius:11px; padding:3px; }
+.party-experience-nav button { display:inline-flex; align-items:center; justify-content:center; gap:6px; min-height:40px; padding:0 10px; border-radius:8px; color:var(--text-soft); background:transparent; white-space:nowrap; }
+.party-experience-nav button.active { color:var(--primary); background:rgba(120,169,140,.12); }
+.party-experience-nav button:focus-visible { outline:2px solid var(--primary); outline-offset:2px; }
+.initial-experience { display:flex; flex-wrap:wrap; gap:8px 18px; border:1px solid var(--border); border-radius:10px; padding:10px 12px; }
+.initial-experience legend { padding:0 4px; color:var(--text-soft); }
+.initial-experience label { display:inline-flex; align-items:center; gap:6px; min-height:36px; }
+.initial-experience input { accent-color:var(--primary); }
 .games-entry:focus-visible,.game-hub button:focus-visible { outline:2px solid var(--primary); outline-offset:3px; }
 .party-content>.main-stage.is-game,.party-workspace.drawer-open .party-content>.main-stage.is-game { width:100%; }
 .main-stage.is-game { display:grid; grid-template-columns:minmax(0,1fr); min-height:360px; gap:12px; padding:12px; border:1px solid var(--border); border-radius:14px; background:var(--surface); }
-.main-stage.is-game:has(.game-media-visible) { grid-template-columns:minmax(0,1fr) minmax(200px,320px); }
+.games-experience { grid-template-columns:minmax(0,1fr); }
+.games-experience .games-screen-layer { grid-area:2/1; min-height:0; }
+.games-experience:not(:has(.stage-switcher)) .games-screen-layer { grid-area:1/1; }
+@media (max-width:700px) { .party-experience-nav button { padding:0 7px; font-size:12px; } .party-experience-nav button span { display:none; } }
 .game-layer { grid-area:1/1; min-height:0; min-width:0; animation:gameReveal .16s ease-out; }
 .game-hub { display:flex; height:100%; min-height:0; flex-direction:column; container-type:inline-size; container-name:lumio-game; }
 .game-hub>header { display:flex; flex-shrink:0; align-items:center; justify-content:space-between; gap:8px; }
@@ -1020,28 +1031,16 @@ svg { flex:none; }
 .game-hub h2 { margin:0; color:var(--text); font-size:clamp(22px,3vw,36px); line-height:1.15; }
 .game-hub p { margin:0; color:var(--text-soft); }
 .game-hub-note { max-width:360px; color:var(--muted); font-size:13px; line-height:1.5; }
-.game-media-visible { grid-area:1/2; align-self:center; width:100%; height:200px; min-width:200px; }
-.game-media-visible .universal-player:not(:fullscreen):not(.fallback-fullscreen),.game-media-visible .lumio-player:not(:fullscreen):not(.fallback-fullscreen) .player-frame { width:100%; height:200px; aspect-ratio:auto; min-height:200px; }
-.game-media-visible .lumio-controls { padding:10px; }
-.game-media-visible .player-frame { border:0; }
-.game-media-visible .lumio-time { font-size:10px; }
-.game-media-visible .lumio-volume,.game-media-visible .lumio-rate,.game-media-visible .lumio-control-row>button:not(:first-child) { display:none; }
 .main-stage.is-game .stage-switcher { position:static; grid-column:1/-1; grid-row:1; justify-self:center; transform:none; }
-.main-stage.is-game:has(.stage-switcher) .game-layer,.main-stage.is-game:has(.stage-switcher) .game-media-visible { grid-row:2; }
+.main-stage.is-game:has(.stage-switcher) .game-layer { grid-row:2; }
 .main-stage.is-game:fullscreen,.main-stage.game-fallback-fullscreen { width:100%; height:100%; max-width:none; margin:0; padding:max(12px,env(safe-area-inset-top)) max(12px,env(safe-area-inset-right)) max(12px,env(safe-area-inset-bottom)) max(12px,env(safe-area-inset-left)); border-radius:0; background:var(--bg); }
 .main-stage.game-fallback-fullscreen { position:fixed; z-index:1000; inset:0; height:100dvh; }
 .mobile-party.game-mode .party-content,.mobile-party.game-mode.theater-shell .party-content { flex:0 1 clamp(260px,50%,520px); width:100%; height:auto; aspect-ratio:auto; box-sizing:border-box; align-items:stretch; justify-content:stretch; }
 .mobile-party.game-mode .party-content>.main-stage.is-game,.mobile-party.game-mode .party-workspace.drawer-open .party-content>.main-stage.is-game { width:100%; height:100%; min-height:0; aspect-ratio:auto; padding:8px; }
-.mobile-party .main-stage.is-game:has(.game-media-visible) { grid-template-columns:minmax(0,1fr); grid-template-rows:minmax(0,1fr) 200px; gap:6px; }
 .mobile-party .main-stage.is-game .game-layer { height:auto; aspect-ratio:auto; overflow:auto; }
-.mobile-party .game-media-visible { grid-area:2/1; width:100%; height:200px; max-width:360px; justify-self:center; }
 .mobile-party .main-stage.is-game:has(.stage-switcher) { grid-template-rows:auto minmax(0,1fr); }
-.mobile-party .main-stage.is-game:has(.stage-switcher):has(.game-media-visible) { grid-template-rows:auto minmax(0,1fr) 200px; }
-.mobile-party .main-stage.is-game:has(.stage-switcher) .game-media-visible { grid-row:3; }
 .mobile-party .game-hub-intro { justify-content:flex-start; padding:12px 4px; }
 .mobile-party .game-hub-symbol { width:42px; height:42px; border-radius:12px; flex-shrink:0; }
-.mobile-party .main-stage:has(.game-media-visible) .game-hub-symbol,.mobile-party .main-stage:has(.game-media-visible) .game-hub .eyebrow { display:none; }
-.mobile-party .main-stage:has(.game-media-visible) .game-hub-intro { padding:8px 4px; gap:6px; }
 .mobile-party .games-entry { padding:0 6px; font-size:12px; gap:4px; }
 @media (orientation:landscape) { .mobile-party.game-mode .party-content { height:100%; } }
 @keyframes gameReveal { from { opacity:0; transform:translateY(3px); } to { opacity:1; transform:none; } }
@@ -1130,7 +1129,6 @@ svg { flex:none; }
   .draw-game:has(.draw-board) .draw-bottom { grid-area:3/2; }
   .draw-game:has(.draw-board) .draw-leave { grid-area:4/2; }
   .draw-game:has(.draw-board) .draw-error { grid-column:1/-1; }
-  .main-stage.is-game:has(.draw-game):has(.game-media-visible) .game-layer { height:100%; overflow-y:auto; }
   @container lumio-game (max-width:560px) {
     .draw-game:has(.draw-board) { display:flex; }
     .draw-game:has(.draw-board) .draw-board { display:block; }
@@ -1139,10 +1137,7 @@ svg { flex:none; }
 }
 .mobile-party.game-mode:has(.draw-game) .party-content { flex:0 1 74%; min-height:220px; }
 .mobile-party .main-stage.is-game:has(.draw-game) { overflow-y:auto; align-content:start; }
-.mobile-party .main-stage.is-game:has(.draw-game):has(.game-media-visible) { grid-template-rows:minmax(220px,1fr) 200px; overflow:hidden; align-content:stretch; }
-.mobile-party .main-stage.is-game:has(.draw-game):has(.stage-switcher):has(.game-media-visible) { grid-template-rows:auto minmax(220px,1fr) 200px; }
 .mobile-party .main-stage.is-game:has(.draw-game) .game-layer { overflow:visible; }
-.mobile-party .main-stage.is-game:has(.draw-game):has(.game-media-visible) .game-layer { overflow-y:auto; height:100%; }
 .mobile-party .draw-game { gap:6px; }.mobile-party .draw-heading h2 { font-size:20px; }.mobile-party .draw-toolbar { gap:4px; }
 .mobile-party .draw-toolbar .draw-tool-group:first-child { order:-2; }
 .mobile-party .draw-toolbar .draw-history { order:-1; margin-left:0; }
@@ -1170,8 +1165,6 @@ svg { flex:none; }
   .mobile-party .main-stage:fullscreen .draw-bottom,.mobile-party .main-stage.game-fallback-fullscreen .draw-bottom { grid-area:3/2; }
   .mobile-party .main-stage:fullscreen .draw-feed,.mobile-party .main-stage.game-fallback-fullscreen .draw-feed { max-height:34px; }
   .mobile-party .main-stage:fullscreen .draw-leave,.mobile-party .main-stage.game-fallback-fullscreen .draw-leave { grid-area:4/2; }
-  .mobile-party .main-stage.is-game:fullscreen:has(.draw-game):has(.game-media-visible),.mobile-party .main-stage.game-fallback-fullscreen:has(.draw-game):has(.game-media-visible) { grid-template-columns:minmax(0,1fr) 200px; grid-template-rows:minmax(0,1fr); }
-  .mobile-party .main-stage:fullscreen .game-media-visible,.mobile-party .main-stage.game-fallback-fullscreen .game-media-visible { grid-area:1/2; }
 }
 
 /* G3: the same mounted Chat/board adapt to role; configuration is session state. */
@@ -1206,8 +1199,6 @@ svg { flex:none; }
   .mobile-party .party-workspace[data-game-role]:not([data-game-role=neutral]) .draw-heading h2 { font-size:15px; }
   .mobile-party .party-workspace[data-game-role]:not([data-game-role=neutral]) .draw-word { min-height:28px; }
   .mobile-party .draw-scoreboard strong small { display:inline; }
-  .mobile-party.game-mode .party-workspace[data-game-role=guesser]:has(.game-media-visible) .party-content { flex-basis:calc(200px + var(--visual-height,100dvh) * .27); }
-  .mobile-party .party-workspace[data-game-role=guesser] .main-stage.is-game:has(.draw-game):has(.game-media-visible) { grid-template-rows:minmax(0,1fr) 200px; }
 }
 @media(max-width:900px) and (orientation:portrait) {
   html[data-compact-viewport] .mobile-party .party-workspace[data-game-role=guesser]:has(.chat-form:focus-within) .main-stage:not(:fullscreen):not(.game-fallback-fullscreen) .game-hub>header { display:none; }
@@ -1360,6 +1351,12 @@ html[data-compact-viewport] .mobile-party.game-mode:has(.chat-form:focus-within)
 .house-party-summary p { display:flex; align-items:start; gap:8px; margin:8px 0 0; color:var(--text-soft); font-size:14px; line-height:1.5; overflow-wrap:anywhere; }
 .house-party-summary svg { flex:none; width:18px; height:18px; margin-top:2px; }
 .house-card-v2>button { display:flex; justify-content:center; align-items:center; gap:10px; min-height:46px; width:100%; }
+.house-open-actions { display:flex; gap:8px; width:100%; }
+.house-open-actions button { display:inline-flex; align-items:center; justify-content:center; gap:8px; min-height:46px; padding:0 12px; border-radius:9px; white-space:nowrap; }
+.house-open-actions .entry-primary,.house-open-actions .house-open-idle { flex:1; min-width:0; }
+.house-open-games { border:1px solid var(--border-strong); color:var(--text-soft); background:transparent; }
+.house-open-games:focus-visible { outline:2px solid var(--primary); outline-offset:2px; }
+@media (max-width:360px) { .house-open-actions { flex-wrap:wrap; } .house-open-actions button { flex:1; } }
 .house-open-idle { border:1px solid var(--border-strong); }
 .house-card-v2>footer { display:flex; flex-wrap:wrap; gap:4px 16px; margin-top:14px; }
 .house-card-v2>footer button { display:flex; align-items:center; gap:6px; min-height:44px; padding:4px 0; background:transparent; color:var(--text-soft); font-size:13px; }

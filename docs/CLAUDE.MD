@@ -122,7 +122,7 @@ Só encerre o processo depois de confirmar que ele pertence ao projeto.
 
 ## Party Experience V2
 
-- A UI da Party diferencia entrada, reconnect e indisponibilidade prolongada; o primeiro snapshot recebido após reconnect é autoritativo. Não desmonte `MainStage`/`MediaStage` durante quedas breves.
+- A UI da Party diferencia entrada, reconnect e indisponibilidade prolongada; o primeiro snapshot recebido após reconnect é autoritativo. Quedas breves não devem desmontar a experiência. A navegação explícita `/media`↔`/games`, porém, desmonta o provider Media sem derrubar o Party shell.
 - Os overlays lazy (Media Hub e configurações da Call) possuem limites `Suspense` próprios para não substituir o player na primeira abertura. Drawers alternam apenas conteúdo lateral.
 - A presença usa o grace period de cinco segundos do servidor; avisos efêmeros de entrada/saída vêm de diferenças entre snapshots, sem novo protocolo de UX.
 - O chat preserva scroll de leitura, marca mensagens não lidas somente com drawer fechado e envia `typing` por início/fim da atividade, sem emitir a cada tecla.
@@ -137,7 +137,7 @@ Só encerre o processo depois de confirmar que ele pertence ao projeto.
 
 ## Desenhe e Adivinhe G1
 
-- GameHub carrega o jogo lazy dentro do MainStage; MediaStage, call, chat e fila permanecem os mesmos. Sair da apresentação não encerra participação.
+- GameHub vive em `GamesExperienceStage`; `MediaStage` vive apenas em `MediaExperienceStage`. Call, Chat, fila e Game runtime pertencem à Party e sobrevivem à troca de rotas. Sair da apresentação não encerra participação.
 - `DrawGameRuntime` mantém uma sessão efêmera por Party, com fases, ordem e score autoritativos. Não persista jogos sem necessidade explícita.
 - Segredo/opções são projeções por usuário: somente drawer ativo. Resultado revela a resposta por regra; guesses corretos nunca são ecoados durante desenho.
 - Canvas 4:3 lógico, Pointer Events e coordenadas normalizadas; pontos em refs e envio incremental limitado. Não sincronizar PNG/base64 ou estado React por ponto.

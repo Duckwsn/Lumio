@@ -265,6 +265,8 @@ export const eventNames = {
   roomMode: "room:mode",
   roomSettings: "room:settings",
   mediaRequestSync: "media:request-sync",
+  mediaViewerEnter: "experience:media:enter",
+  mediaViewerLeave: "experience:media:leave",
   voteSkip: "vote:skip",
   chatMessage: "chat:message",
   voiceJoin: "voice:join",
@@ -355,6 +357,8 @@ export interface ClientToServerEvents {
   "room:mode": (input: z.infer<typeof modeChangeSchema>) => void;
   "room:settings": (input: z.infer<typeof roomSettingsInputSchema>) => void;
   "media:request-sync": (input: { roomId: string }) => void;
+  "experience:media:enter": (input: { roomId: string }) => void;
+  "experience:media:leave": (input: { roomId: string }) => void;
   "vote:skip": (input: { roomId: string }) => void;
   "chat:message": (input: z.infer<typeof chatInputSchema>) => void;
   "presence:update": (input: z.infer<typeof presenceInputSchema>) => void;

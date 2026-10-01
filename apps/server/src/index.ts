@@ -58,6 +58,7 @@ import { bootFailureFields, type BootStage } from "./bootDiagnostics.js";
 import { PartyGames } from "./partyGames.js";
 import { projectHouseActivity, safeMediaTitle } from "./houseActivity.js";
 import { projectLibraryMedia, publicHistory } from "./socialLibrary.js";
+import { MediaViewerRegistry } from "./mediaViewerRegistry.js";
 
 // npm workspaces execute this package with apps/server as the working directory.
 // Resolve the project-level environment file from this module so dev and dist agree.
@@ -105,7 +106,39 @@ const saveAuth = (userId: string) => authRepository?.saveUser(userId) ?? Promise
 const socialRepository = db ? new PrismaSocialRepository(db, social, (id) => auth.getUser(id)) : null;
 const saveHouse = (houseId: string) => deletingHouses.has(houseId) ? Promise.reject(new Error("Casa em exclusão.")) : socialRepository?.saveHouse(houseId) ?? Promise.resolve();
 const mediaRepository = db ? new PrismaMediaRepository(db, store, (id) => auth.getUser(id)) : null;
-const saveMedia = (roomId: string) => deletingRooms.has(roomId) ? Promise.reject(new Error("Party em exclusão.")) : mediaRepository?.saveHouse(roomId) ?? Promise.resolve();
+const saveMedia = (roomId: string) => {
+  if (deletingRooms.has(roomId)) return Promise.reject(new Error("Party em exclusão."));
+  scheduleUnviewedMedia(roomId);
+  return mediaRepository?.saveHouse(roomId) ?? Promise.resolve();
+};
+type EmptyMediaMarker = { mediaId: string; revision: number; queueItemId: string | null };
+const emptyMediaMarkers = new Map<string, EmptyMediaMarker>();
+const mediaViewers = new MediaViewerRegistry(async (roomId) => {
+  const expected = emptyMediaMarkers.get(roomId);
+  emptyMediaMarkers.delete(roomId);
+  if (!expected || deletingRooms.has(roomId) || mediaViewers.count(roomId)) return;
+  const media = store.pauseIfCurrent(roomId, expected);
+  if (!media) return;
+  try { await saveMedia(roomId); }
+  catch { log("error", "last_media_viewer_pause_persist_failed", { roomId }); return; }
+  io.to(roomId).emit("media:sync", media);
+  emitActivityForRoom(roomId);
+}, 1500);
+const enterMediaViewer = (roomId: string, socketId: string) => { emptyMediaMarkers.delete(roomId); mediaViewers.enter(roomId, socketId); };
+const scheduleUnviewedMedia = (roomId: string) => {
+  if (mediaViewers.count(roomId)) return;
+  const room = store.getRoom(roomId);
+  if (!room || room.currentMedia.state !== "playing" || !room.currentMedia.mediaId) return;
+  emptyMediaMarkers.set(roomId, { mediaId: room.currentMedia.mediaId, revision: room.currentMedia.revision, queueItemId: room.currentItem?.id ?? null });
+  mediaViewers.arm(roomId);
+};
+const leaveMediaViewer = (roomId: string, socketId: string) => {
+  if (!mediaViewers.count(roomId)) return;
+  if (mediaViewers.leave(roomId, socketId) !== 0) return;
+  const room = store.getRoom(roomId);
+  if (!room) return;
+  emptyMediaMarkers.set(roomId, { mediaId: room.currentMedia.mediaId, revision: room.currentMedia.revision, queueItemId: room.currentItem?.id ?? null });
+};
 const persistMediaForResponse = async (roomId: string, response: express.Response) => {
   try { await saveMedia(roomId); return true; }
   catch { response.status(503).json({ message: "Mídia indisponível no momento." }); return false; }
@@ -535,6 +568,7 @@ app.delete("/api/houses/:houseId", async (request, response) => {
     if (result === "FORBIDDEN") return response.status(403).json({ message: "Somente o host pode excluir esta Casa." });
     social.deleteHouse(houseId);
     store.deleteHouse(houseId);
+    mediaViewers.clear(roomId); emptyMediaMarkers.delete(roomId);
     games.delete(roomId);
     googleDrive.revokeRoom(roomId);
     for (const entry of activeDriveStreams.get(roomId) ?? []) entry.controller.abort();
@@ -864,7 +898,7 @@ const emitHomeToSocket = (socket: Socket<ClientToServerEvents, ServerToClientEve
 const emitHomeForHouse = (houseId: string) => { for (const socket of io.sockets.sockets.values()) { const user = socket.data.user as User | undefined; if (user && social.isMember(houseId, user.id)) emitHomeToSocket(socket, user.id); } };
 const emitActivityForRoom = (roomId: string) => { const house = social.getByRoom(roomId); if (house) emitHomeForHouse(house.id); };
 const emitHouse = (houseId: string) => { const house = social.getHouse(houseId); if (!house) return; for (const socket of io.sockets.sockets.values()) { const user = socket.data.user as User | undefined; const details = user && social.details(houseId, user.id); if (details) socket.emit("house:update", details); } emitHomeForHouse(houseId); };
-const disconnectHouseMember = (houseId: string, userId: string) => { const house = social.getHouse(houseId); if (!house) return; games.leave(house.primaryRoomId, userId); for (const socket of io.sockets.sockets.values()) { if ((socket.data.user as User | undefined)?.id === userId) { emitHomeToSocket(socket, userId); if (socket.data.joinedRoomId === house.primaryRoomId) { socket.emit("member:removed", { houseId, message: "Você não faz mais parte desta Casa." }); socket.data.revoked = true; socket.leave(house.primaryRoomId); setTimeout(() => socket.disconnect(true), 50); } } } const key = `${house.primaryRoomId}:${userId}`; const timer = offlineTimers.get(key); if (timer) clearTimeout(timer); offlineTimers.delete(key); store.removeMember(house.primaryRoomId, userId); emitSnapshot(house.primaryRoomId); };
+const disconnectHouseMember = (houseId: string, userId: string) => { const house = social.getHouse(houseId); if (!house) return; games.leave(house.primaryRoomId, userId); for (const socket of io.sockets.sockets.values()) { if ((socket.data.user as User | undefined)?.id === userId) { emitHomeToSocket(socket, userId); if (socket.data.joinedRoomId === house.primaryRoomId) { leaveMediaViewer(house.primaryRoomId, socket.id); socket.emit("member:removed", { houseId, message: "Você não faz mais parte desta Casa." }); socket.data.revoked = true; socket.leave(house.primaryRoomId); setTimeout(() => socket.disconnect(true), 50); } } } const key = `${house.primaryRoomId}:${userId}`; const timer = offlineTimers.get(key); if (timer) clearTimeout(timer); offlineTimers.delete(key); store.removeMember(house.primaryRoomId, userId); emitSnapshot(house.primaryRoomId); };
 const roomConnections = new Map<string, Map<string, Set<string>>>();
 const offlineTimers = new Map<string, NodeJS.Timeout>();
 const activeUserSockets = new Map<string, Set<string>>();
@@ -934,6 +968,7 @@ io.on("connection", (socket) => {
     if (!house || !social.isMember(house.id, user.id)) return socket.emit("server:error", "Você não faz parte desta Casa.");
     if (joinedRoomId && joinedRoomId !== roomId) {
       const oldRoomId = joinedRoomId;
+      leaveMediaViewer(oldRoomId, socket.id);
       leaveCall(oldRoomId, user, socket.id);
       if (screenOwnerSockets.get(oldRoomId) === socket.id) { screenOwnerSockets.delete(oldRoomId); store.stopScreenShare(oldRoomId, user.id); io.to(oldRoomId).emit("screen:state", null); }
       socket.leave(oldRoomId);
@@ -956,6 +991,7 @@ io.on("connection", (socket) => {
 
   socket.on(eventNames.roomLeave, (roomId) => {
     if (joinedRoomId !== roomId) return;
+    leaveMediaViewer(roomId, socket.id);
     log("info", "party_left", { userId: user.id, connectionId: socket.id, roomId });
     leaveCall(roomId, user, socket.id);
     if (screenOwnerSockets.get(roomId) === socket.id) { screenOwnerSockets.delete(roomId); store.stopScreenShare(roomId, user.id); }
@@ -975,6 +1011,18 @@ io.on("connection", (socket) => {
     const house = joinedRoomId && social.getByRoom(joinedRoomId);
     if (!joinedRoomId || !house || input?.roomId !== joinedRoomId || !social.isMember(house.id, user.id)) return reply({ ok: false, message: "Entre nesta Party para jogar." });
     reply(games.action(joinedRoomId, user, input));
+  });
+
+  socket.on(eventNames.mediaViewerEnter, (input) => {
+    const parsed = z.object({ roomId: z.string().min(1) }).safeParse(input);
+    if (!parsed.success || parsed.data.roomId !== joinedRoomId || deletingRooms.has(parsed.data.roomId)) return;
+    const house = social.getByRoom(parsed.data.roomId);
+    if (!house || !social.isMember(house.id, user.id)) return;
+    enterMediaViewer(parsed.data.roomId, socket.id);
+  });
+  socket.on(eventNames.mediaViewerLeave, (input) => {
+    const parsed = z.object({ roomId: z.string().min(1) }).safeParse(input);
+    if (parsed.success && parsed.data.roomId === joinedRoomId) leaveMediaViewer(parsed.data.roomId, socket.id);
   });
 
   socket.on(eventNames.chatMessage, (rawInput) => {
@@ -1117,6 +1165,7 @@ io.on("connection", (socket) => {
   socket.on(eventNames.queueAdvance, async (rawInput, respond) => {
     const parsed = queueAdvanceSchema.safeParse(rawInput);
     if (!parsed.success || parsed.data.roomId !== joinedRoomId) return respond?.({ ok: false, advanced: false, message: "Pedido inválido." });
+    if (mediaViewers.count(parsed.data.roomId) === 0) return respond?.({ ok: false, advanced: false, message: "Nenhum espectador de mídia ativo." });
     const current = store.getRoom(parsed.data.roomId)?.currentMedia;
     const effective = current && store.getEffectiveMedia(current);
     const atEnd = Boolean(effective && effective.duration > 0 && effective.state === "playing" && effective.position >= effective.duration - 2);
@@ -1266,6 +1315,7 @@ io.on("connection", (socket) => {
 
   socket.on("disconnect", () => {
     if (shuttingDown) return;
+    if (joinedRoomId) leaveMediaViewer(joinedRoomId, socket.id);
     log("info", "socket_disconnected", { userId: user.id, connectionId: socket.id, roomId: joinedRoomId ?? "none", activeSockets: io.engine.clientsCount });
     homeStateBySocket.delete(socket.id);
     const userSockets = activeUserSockets.get(user.id); userSockets?.delete(socket.id);
@@ -1317,6 +1367,7 @@ const shutdown = (signal: "SIGINT" | "SIGTERM") => {
   for (const entries of activeDriveStreams.values()) for (const entry of entries) entry.controller.abort();
   for (const timer of [...offlineTimers.values(), ...accountOfflineTimers.values()]) clearTimeout(timer);
   offlineTimers.clear(); accountOfflineTimers.clear();
+  mediaViewers.clearAll(); emptyMediaMarkers.clear();
   io.disconnectSockets(true);
   const deadline = setTimeout(() => { log("error", "server_shutdown_timeout"); httpServer.closeAllConnections(); process.exitCode = 1; }, 5_000);
   deadline.unref();

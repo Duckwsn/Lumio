@@ -23,7 +23,7 @@ Landing pública
   -> conectar Party realtime
 ```
 
-O Home não deve inicializar Socket.IO, WebRTC, busca de mídia ou componentes pesados da Party. Esses recursos pertencem à rota `/house/:houseId` e devem continuar lazy-loaded quando possível.
+O Home não deve inicializar Socket.IO, WebRTC, busca de mídia ou componentes pesados da Party. Esses recursos pertencem às rotas `/house/:houseId/media` e `/house/:houseId/games` e devem continuar lazy-loaded quando possível.
 Na Landing pública, a demonstração da Party é apenas visual e local: sem socket, player/provider, WebRTC, permissões ou dados privados. Os recursos anunciados devem existir no produto; a instalação PWA só recebe botão quando o navegador oferece um prompt funcional.
 
 ## Regras de backend
@@ -51,9 +51,9 @@ Na Landing pública, a demonstração da Party é apenas visual e local: sem soc
 
 ## Invariantes de mídia
 
-- MainStage é a fronteira de apresentação da Party: mídia, tela compartilhada ou Jogos. Abrir o Hub é estado local; não criar outra sala, socket, call/chat ou sessão compartilhada para explorar o catálogo. GameRuntime e GameSession só entram quando houver gameplay.
-- Trocas de experiência preservam o mesmo MediaStage/provider, fila e sync. Chat, voz e presença pertencem à Party, não ao palco. Não use componentes ocultos que limpem seus efeitos para preservar um engine ativo; React Activity não está disponível no React 18 atual.
-- YouTube não deve tocar oculto em Jogos: mantenha o único iframe numa região visível e separada, com tamanho mínimo, sem sobreposição pelo Hub. Drive pode continuar em background. Fullscreen pertence à superfície Lumio da experiência; sair de fullscreen não deve trocar Jogos por mídia.
+- GX3 substituiu MainStage por `MediaExperienceStage` e `GamesExperienceStage`, selecionados pelas rotas dedicadas. Trocar experiência não cria outra Party/socket/call/chat nem envia game leave/join; participação continua voluntária.
+- Trocas de experiência preservam fila, mídia e sync autoritativos, Chat, Call e presença. O provider local é desmontado ao sair de `/media` e recriado ao voltar; não mantenha iframe YouTube nem vídeo Drive ocultos em Jogos. A pausa após o último Media viewer é decisão do servidor, com registro efêmero por socket e proteção de revisão/ocorrência.
+- Tela compartilhada pertence à Party/Call e pode ser apresentada em ambas as experiências; não conta como Media viewer. Fullscreen pertence à superfície da experiência; sair de fullscreen não deve trocar Jogos por mídia.
 - Ambiente é apresentação local do mesmo engine; o iframe oficial do YouTube permanece visível também nessa apresentação. Trocar Ambiente/Vídeo/fullscreen nunca muda `mediaId`, `revision` ou a sessão da Call. Metadados de apresentação vêm da mídia atual, sem inferir artista/álbum/letras ou expor URL temporária do Drive.
 
 - Existe uma única Party, uma única fila e um único UniversalPlayer.
@@ -155,7 +155,7 @@ Uma tarefa está pronta quando:
 ## Houses V2 / resumo de atividade
 
 - Home continua usando apenas o socket autenticado leve e GET/refresh; nunca faz `room:join`, Call ou captura de dispositivo para mostrar atividade. `HouseSummary.partyActivity` é projeção pública no servidor, não snapshot de Game/Room/Drive.
-- Party ativa significa pelo menos uma identidade com `inParty`; online na Casa é eixo separado. Resumo: share ativo > jogo em fase de partida > mídia tocando > Party ocupada. Lobby/resultado não equivalem a jogo em andamento; “Partida X ativa” não afirma que todos veem o jogo, pois MainStage é local.
+- Party ativa significa pelo menos uma identidade com `inParty`; online na Casa é eixo separado. Resumo: share ativo > jogo em fase de partida > mídia tocando > Party ocupada. Lobby/resultado não equivalem a jogo em andamento; “Partida X ativa” não afirma que todos veem o jogo, pois a experiência local vem da rota.
 - Mudanças de mídia relevantes para Home emitem resumo, mas seek/playhead, strokes, timer, cartas, typing e speaking não. Deduplicate payload por socket. Em reconnect, indique que o último resumo está desatualizado até receber projeção nova; restart não restaura game/share efêmeros.
 - O card recebe somente até três membros públicos e rótulo público de atividade. Não transportar secretWord/answers/hands, tokens, tickets, grants, URLs de stream ou metadados privados. Sem migration/presence persistida por heartbeat. Veja `POST_1_0_S1_HOUSES_V2_REPORT.md`.
 

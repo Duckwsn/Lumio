@@ -2,7 +2,7 @@ import { usePartyCallResources } from "./usePartyCallResources";
 import { usePartyTransport, type PartySocket } from "./usePartyTransport";
 
 /**
- * Persistent social resource boundary above MainStage. The transport is active
+ * Persistent social resource boundary above the routed experience stage. The transport is active
  * only for a resolved House/Room identity; Call refs are inert on Home. A visual
  * child may remount without re-entering the Party or reallocating RTC resources.
  */
