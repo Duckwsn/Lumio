@@ -3,6 +3,7 @@ import { quizCategories, quizCounts, quizDifficulties, type QuizAction, type Qui
 import type { GameConnection } from "../components/GameHub";
 import { GameScoreboard } from "./GameScoreboard";
 import { GameConnectionNotice, GameLobbyStatus } from "./GameFeedback";
+import { GameActionBar, GameHud, GameResult, GameShell, GameStage, GameTimer } from "./GameDesignSystem";
 
 export function QuizGame({ socket, roomId, userId }: GameConnection) {
   const [state, setState] = useState<QuizSnapshot | null>(null), [error, setError] = useState(""), [busy, setBusy] = useState(false), [now, setNow] = useState(Date.now());
@@ -34,21 +35,21 @@ export function QuizGame({ socket, roomId, userId }: GameConnection) {
   const remaining = Math.max(0, Math.ceil((state.endsAt - now - offset.current) / 1000));
   const configure = (change: Partial<Pick<QuizSnapshot, "category" | "difficulty" | "questionCount">>) => act({ ...base, type: "configure", category: state.category, difficulty: state.difficulty, questionCount: state.questionCount as 5 | 10 | 15 | 20, ...change } as QuizAction);
   const playing = state.phase === "QUESTION" || state.phase === "REVEAL", locked = state.ownAnswer !== undefined;
-  return <section className="quiz-game" data-phase={state.phase} aria-label="Quiz">
-    <header className="quiz-heading"><div><h2 ref={heading} tabIndex={-1}>Quiz</h2><p>{playing ? `Pergunta ${state.round} de ${state.questionCount}` : state.phase === "LOBBY" ? `${state.players.filter((p) => p.online).length}/12 jogadores` : "Partida concluída"}</p><small>{quizCategories[state.category]} · {quizDifficulties[state.difficulty]}</small></div>{playing ? <div><time aria-label="Tempo restante" className={remaining <= 5 ? "is-ending" : ""}>{remaining}s</time>{me ? <small>{me.score} pontos</small> : null}</div> : null}</header>
+  return <GameShell game="quiz" className="quiz-game" data-phase={state.phase} aria-label="Quiz">
+    <GameHud className="quiz-heading"><div><h2 ref={heading} tabIndex={-1}>Quiz</h2><p>{playing ? `Pergunta ${state.round} de ${state.questionCount}` : state.phase === "LOBBY" ? `${state.players.filter((p) => p.online).length}/12 jogadores` : "Partida concluída"}</p><small>{quizCategories[state.category]} · {quizDifficulties[state.difficulty]}</small></div>{playing ? <div><GameTimer seconds={remaining} />{me ? <small>{me.score} pontos</small> : null}</div> : null}</GameHud>
     {error ? <p role="alert" className="draw-error">{error}</p> : null}
     <GameConnectionNotice reconnecting={reconnecting} />
-    {playing && state.question ? <>
+    {playing && state.question ? <GameStage className="quiz-play-stage">
       <h3 className="quiz-question">{state.question.prompt}</h3>
       <div className="quiz-answers">{state.question.answers.map((answer, option) => <button key={option} className={state.reveal ? option === state.reveal.correctIndex ? "correct" : option === state.ownAnswer ? "incorrect" : "" : option === state.ownAnswer ? "selected" : ""} aria-pressed={state.ownAnswer === option} disabled={unavailable || locked || !me?.online || state.phase !== "QUESTION" || remaining <= 0 || !socket.connected} onClick={() => { void act({ ...base, type: "answer", option }); }}><span className="quiz-option-letter">{String.fromCharCode(65 + option)}</span><span>{answer}</span>{state.reveal ? <small>{option === state.reveal.correctIndex ? "✓ Correta · " : ""}{state.reveal.distribution[option]} respostas</small> : state.ownAnswer === option ? <small>Enviada</small> : null}</button>)}</div>
       <p className="quiz-answer-status" role="status">{state.phase === "REVEAL" ? me ? state.ownAnswer === undefined ? "Não respondeu · +0" : state.reveal?.ownCorrect ? `Você acertou · +${state.reveal.ownPoints}` : "Você errou · +0" : "Resultado da pergunta" : locked ? "Resposta enviada. Aguarde o resultado." : me?.online ? "Toque em uma alternativa para responder." : "Observando · participe na próxima partida."}</p>
       {state.phase === "QUESTION" ? <small>{state.answeredCount}/{state.eligibleCount} responderam · evite contar a resposta no Chat ou na voz.</small> : <GameScoreboard players={state.players} userId={userId} />}
-    </> : <>
-      {state.phase === "RESULT" ? <div className="quiz-finale"><h3>{state.winnerIds.length ? `${state.players.filter((p) => state.winnerIds.includes(p.id)).map((p) => p.displayName).join(" e ")} · ${state.winnerIds.length > 1 ? "vitória compartilhada!" : "vitória!"}` : "Partida encerrada · faltam jogadores"}</h3></div> : null}
+    </GameStage> : <>
+      {state.phase === "RESULT" ? <GameResult className="quiz-finale"><h3>{state.winnerIds.length ? `${state.players.filter((p) => state.winnerIds.includes(p.id)).map((p) => p.displayName).join(" e ")} · ${state.winnerIds.length > 1 ? "vitória compartilhada!" : "vitória!"}` : "Partida encerrada · faltam jogadores"}</h3></GameResult> : null}
       <GameScoreboard players={state.players} userId={userId} />
       {state.phase === "LOBBY" ? <fieldset className="quiz-config" disabled={!host || !me?.online || unavailable}><legend>Partida</legend><div role="group" aria-label="Quantidade de perguntas">{quizCounts.map((count) => <button key={count} aria-pressed={state.questionCount === count} onClick={() => { void configure({ questionCount: count }); }}>{count}</button>)}</div><label>Categoria<select value={state.category} onChange={(e) => { void configure({ category: e.target.value as QuizSnapshot["category"] }); }}>{Object.entries(quizCategories).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><label>Dificuldade<select value={state.difficulty} onChange={(e) => { void configure({ difficulty: e.target.value as QuizSnapshot["difficulty"] }); }}>{Object.entries(quizDifficulties).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label></fieldset> : null}
       <GameLobbyStatus host={host} hostName={state.players.find((p) => p.id === state.hostId)?.displayName} count={state.players.filter((p) => p.online).length} />
-      <div className="draw-lobby-actions"><button disabled={unavailable} onClick={() => { void act({ ...base, type: me?.online ? "leave" : "join" }); }}>{me?.online ? "Sair do jogo" : "Participar"}</button>{host ? <button className="primary-button" disabled={unavailable || !me?.online || state.players.filter((p) => p.online).length < 2} onClick={() => { void act({ ...base, type: state.phase === "LOBBY" ? "start" : "rematch" }); }}>{state.phase === "LOBBY" ? "Iniciar partida" : "Jogar novamente"}</button> : null}</div>
+      <GameActionBar className="draw-lobby-actions"><button disabled={unavailable} onClick={() => { void act({ ...base, type: me?.online ? "leave" : "join" }); }}>{me?.online ? "Sair do jogo" : "Participar"}</button>{host ? <button className="primary-button" disabled={unavailable || !me?.online || state.players.filter((p) => p.online).length < 2} onClick={() => { void act({ ...base, type: state.phase === "LOBBY" ? "start" : "rematch" }); }}>{state.phase === "LOBBY" ? "Iniciar partida" : "Jogar novamente"}</button> : null}</GameActionBar>
     </>}
-  </section>;
+  </GameShell>;
 }

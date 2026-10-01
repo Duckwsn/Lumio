@@ -27,9 +27,9 @@ export function MediaExperienceStage({ media, screenShare, screenStream, view, o
   </section>;
 }
 
-export function GamesExperienceStage({ connection, chat, screenShare, screenStream, onBack, onFullscreenChange }: {
+export function GamesExperienceStage({ connection, chat, screenShare, screenStream, onFullscreenChange }: {
   connection?: GameConnection; chat?: ReactNode; screenShare: ScreenShareState; screenStream: MediaStream | null;
-  onBack: () => void; onFullscreenChange: (active: boolean) => void;
+  onFullscreenChange: (active: boolean) => void;
 }) {
   const stageRef = useRef<HTMLElement>(null);
   const [screenVisible, setScreenVisible] = useState(false);
@@ -42,17 +42,15 @@ export function GamesExperienceStage({ connection, chat, screenShare, screenStre
     const keydown = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || event.defaultPrevented || document.querySelector('[role="dialog"], .party-drawer, .main-menu-popover, .profile-popover, .mobile-call-menu')) return;
       if (event.target instanceof Element && event.target.closest("input, textarea, select, [contenteditable=true]")) return;
-      event.preventDefault();
-      if (gameFullscreen) { setFallbackFullscreen(false); if (document.fullscreenElement === stageRef.current) void document.exitFullscreen(); }
-      else if (screenVisible) setScreenVisible(false);
-      else onBack();
+      if (gameFullscreen) { event.preventDefault(); setFallbackFullscreen(false); if (document.fullscreenElement === stageRef.current) void document.exitFullscreen(); }
+      else if (screenVisible) { event.preventDefault(); setScreenVisible(false); }
     };
     window.addEventListener("keydown", keydown);
     return () => window.removeEventListener("keydown", keydown);
-  }, [gameFullscreen, screenVisible, onBack]);
+  }, [gameFullscreen, screenVisible]);
   return <section ref={stageRef} className={`main-stage is-game games-experience ${fallbackFullscreen ? "game-fallback-fullscreen" : ""}`} data-view="game" aria-label="Palco de jogos">
     {screenShare ? <div className="stage-switcher" role="group" aria-label="Escolher visualização"><button className={screenVisible ? "active" : ""} onClick={() => setScreenVisible(true)}><ScreenShare size={16} aria-hidden="true" /> Tela compartilhada</button><button className={!screenVisible ? "active" : ""} onClick={() => setScreenVisible(false)}>Jogos</button></div> : null}
-    {screenShare && screenVisible ? <div className="stage-layer active games-screen-layer"><SharedScreen state={screenShare} stream={screenStream} /></div> : <div className="stage-layer game-layer"><GameHub connection={connection} onBack={onBack} onFullscreen={toggleFullscreen} fullscreen={gameFullscreen} fullscreenChat={gameFullscreen ? chat : null} /></div>}
+    {screenShare && screenVisible ? <div className="stage-layer active games-screen-layer"><SharedScreen state={screenShare} stream={screenStream} /></div> : <div className="stage-layer game-layer"><GameHub connection={connection} onFullscreen={toggleFullscreen} fullscreen={gameFullscreen} fullscreenChat={gameFullscreen ? chat : null} /></div>}
     {fullscreenError ? <p className="fullscreen-error" role="alert">{fullscreenError}</p> : null}
     {fallbackFullscreen ? <span className="fullscreen-fallback-note">Tela ampliada — tela cheia nativa indisponível neste navegador</span> : null}
     {gameFullscreen ? <span className="fullscreen-rotate-hint">Gire o celular para jogar em paisagem</span> : null}

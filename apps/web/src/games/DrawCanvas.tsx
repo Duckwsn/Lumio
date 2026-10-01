@@ -4,6 +4,7 @@ import type { Socket } from "socket.io-client";
 import { BOARD_HEIGHT, BOARD_WIDTH, normalizedPoint, paintBoard, paintStroke } from "./drawing";
 import { Brush, Eraser, Undo2, Trash2 } from "lucide-react";
 import { isDrawingUndo } from "./drawingShortcut";
+import { GameStage } from "./GameDesignSystem";
 
 export function DrawCanvas({ snapshot, socket, enabled, act }: { snapshot: DrawSnapshot; socket: Socket<ServerToClientEvents, ClientToServerEvents>; enabled: boolean; act: (action: GameAction, callback?: (ack: GameAck) => void) => void }) {
   const canvas = useRef<HTMLCanvasElement>(null);
@@ -63,7 +64,7 @@ export function DrawCanvas({ snapshot, socket, enabled, act }: { snapshot: DrawS
     return () => { window.clearInterval(timer); socket.off("game:draw", receive); active.current = null; };
   }, [socket]);
   useEffect(() => { if (!enabled) active.current = null; }, [enabled]);
-  return <div className="draw-board">
+  return <GameStage className="draw-board">
     <canvas ref={canvas} tabIndex={enabled ? 0 : -1} width={BOARD_WIDTH} height={BOARD_HEIGHT} aria-label={enabled ? "Tela de desenho — desenhe com mouse, toque ou caneta" : "Desenho compartilhado da rodada"} data-board-revision={snapshot.boardRevision}
       onPointerDown={(event) => {
         if (!enabled || active.current || event.button !== 0) return;
@@ -83,5 +84,5 @@ export function DrawCanvas({ snapshot, socket, enabled, act }: { snapshot: DrawS
       <div className="draw-tool-group draw-history"><button aria-label="Desfazer" title="Desfazer (Ctrl/Cmd+Z)" onClick={undo}><Undo2 size={18} /><span>Desfazer</span></button><button aria-label="Limpar tela" title="Limpar tela" onClick={() => setConfirmClear(true)}><Trash2 size={18} /></button></div>
       {confirmClear ? <div ref={clearBox} className="draw-clear-confirm" role="alertdialog" aria-label="Limpar todo o desenho?" onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); setConfirmClear(false); } }}><span>Limpar todo o desenho?</span><button onClick={() => setConfirmClear(false)}>Cancelar</button><button onClick={() => { active.current = null; act({ ...payload(), type: "clear" }, (ack) => { if (!ack.ok) resync(); }); setConfirmClear(false); }}>Confirmar limpeza</button></div> : null}
     </div> : null}
-  </div>;
+  </GameStage>;
 }

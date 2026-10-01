@@ -6,8 +6,9 @@ import { DrawScoreboard } from "./DrawScoreboard";
 import { usePartyGameChat } from "./PartyGameChat";
 import { drawTargets, drawThemes } from "@lumio/shared";
 import { GameConnectionNotice, GameLobbyStatus } from "./GameFeedback";
+import { GameActionBar, GameHud, GameLobby, GameResult, GameShell, GameTimer } from "./GameDesignSystem";
 
-export function DrawGame({ socket, roomId, userId, children, onGames, onMedia }: { socket: Socket<ServerToClientEvents, ClientToServerEvents>; roomId: string; userId: string; children?: ReactNode; onGames?: () => void; onMedia?: () => void }) {
+export function DrawGame({ socket, roomId, userId, children, onGames }: { socket: Socket<ServerToClientEvents, ClientToServerEvents>; roomId: string; userId: string; children?: ReactNode; onGames?: () => void }) {
   const [state, setState] = useState<DrawSnapshot | null>(null), [error, setError] = useState(""), [time, setTime] = useState(Date.now());
   const latest = useRef<DrawSnapshot | null>(null), clockOffset = useRef(0);
   const [reconnecting, setReconnecting] = useState(!socket.connected), [busy, setBusy] = useState(false);
@@ -54,20 +55,20 @@ export function DrawGame({ socket, roomId, userId, children, onGames, onMedia }:
   const nextDrawer = state.nextDrawerId;
   const topScore = Math.max(0, ...state.players.map((p) => p.score));
   const winners = state.players.filter((p) => state.winnerIds.includes(p.id)).map((p) => p.displayName).join(" e ");
-  return <section className={`draw-game ${drawer ? "is-drawer" : "is-guesser"}`} aria-label="Desenhe e Adivinhe">
-    <header className="draw-heading"><div><h2 ref={heading} tabIndex={-1}>Desenhe e Adivinhe</h2><p role="status">{state.phase === "LOBBY" ? `${state.players.filter((p) => p.online).length}/12 jogadores` : state.phase === "GAME_RESULT" ? "Partida concluída" : `Rodada ${state.round} · ${drawerName} ${state.phase === "CHOOSING_WORD" ? "escolhe" : "desenha"}`}</p><span className="draw-match-meta">{drawThemes[state.theme]} · Meta {state.targetScore}</span></div>{playing ? <div className="draw-clock"><time className={remaining <= 10 ? "is-ending" : ""} aria-label="Tempo restante">{Math.floor(remaining / 60)}:{String(remaining % 60).padStart(2, "0")}</time>{me ? <small>{me.score}/{state.targetScore} · #{1 + state.players.filter((p) => p.score > me.score).length}</small> : null}{(state.roundPoints?.[userId] ?? 0) > 0 ? <small className="draw-award">+{state.roundPoints?.[userId]} {drawer ? "pelo desenho" : "pelo acerto"}</small> : null}</div> : null}</header>
+  return <GameShell game="draw" className={`draw-game ${drawer ? "is-drawer" : "is-guesser"}`} aria-label="Desenhe e Adivinhe">
+    <GameHud className="draw-heading"><div><h2 ref={heading} tabIndex={-1}>Desenhe e Adivinhe</h2><p role="status">{state.phase === "LOBBY" ? `${state.players.filter((p) => p.online).length}/12 jogadores` : state.phase === "GAME_RESULT" ? "Partida concluída" : `Rodada ${state.round} · ${drawerName} ${state.phase === "CHOOSING_WORD" ? "escolhe" : "desenha"}`}</p><span className="draw-match-meta">{drawThemes[state.theme]} · Meta {state.targetScore}</span></div>{playing ? <div className="draw-clock"><GameTimer seconds={remaining} unit="clock" />{me ? <small>{me.score}/{state.targetScore} · #{1 + state.players.filter((p) => p.score > me.score).length}</small> : null}{(state.roundPoints?.[userId] ?? 0) > 0 ? <small className="draw-award">+{state.roundPoints?.[userId]} {drawer ? "pelo desenho" : "pelo acerto"}</small> : null}</div> : null}</GameHud>
     {error ? <p className="draw-error" role="alert">{error}</p> : null}
     <GameConnectionNotice reconnecting={reconnecting} />
     <div className="draw-content" {...(choosing ? { inert: "" } : {})}>
-    {!playing ? <div className="draw-lobby">
-      {state.phase === "GAME_RESULT" ? <div className="draw-finale"><span>{state.resultReason === "target" ? `Meta ${state.targetScore} alcançada` : "Partida encerrada · faltam jogadores"}</span><h3>{winners ? `${winners} · ${state.winnerIds.length > 1 ? "vitória compartilhada!" : "vitória!"}` : "Até a próxima partida!"}</h3><p>{topScore} pontos</p></div> : null}
+    {!playing ? <GameLobby className="draw-lobby">
+      {state.phase === "GAME_RESULT" ? <GameResult className="draw-finale"><span>{state.resultReason === "target" ? `Meta ${state.targetScore} alcançada` : "Partida encerrada · faltam jogadores"}</span><h3>{winners ? `${winners} · ${state.winnerIds.length > 1 ? "vitória compartilhada!" : "vitória!"}` : "Até a próxima partida!"}</h3><p>{topScore} pontos</p></GameResult> : null}
       <DrawScoreboard state={state} userId={userId} />
       {state.phase === "LOBBY" ? <fieldset className="draw-match-config" disabled={!host || !me?.online || unavailable}><legend>Partida</legend><div role="group" aria-label="Meta de pontos">{drawTargets.map((target) => <button key={target} type="button" aria-pressed={state.targetScore === target} onClick={() => act({ ...base, type: "configure", targetScore: target, theme: state.theme })}>{target}</button>)}</div><label>Tema<select aria-label="Tema" value={state.theme} onChange={(event) => act({ ...base, type: "configure", targetScore: state.targetScore as 50 | 100 | 150 | 200, theme: event.target.value as typeof state.theme })}>{Object.entries(drawThemes).map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select></label></fieldset> : null}
       <GameLobbyStatus host={host} hostName={state.players.find((p) => p.id === state.hostId)?.displayName} count={state.players.filter((p) => p.online).length} />
-      <div className="draw-lobby-actions">{!me?.online ? <button disabled={unavailable} onClick={() => act({ ...base, type: "join" })}>Participar</button> : <button disabled={unavailable} onClick={() => act({ ...base, type: "leave" })}>Sair do jogo</button>}
+      <GameActionBar className="draw-lobby-actions">{!me?.online ? <button disabled={unavailable} onClick={() => act({ ...base, type: "join" })}>Participar</button> : <button disabled={unavailable} onClick={() => act({ ...base, type: "leave" })}>Sair do jogo</button>}
       {host ? <button className="primary-button" disabled={unavailable || !me?.online || state.players.filter((p) => p.online).length < 2} onClick={() => act({ ...base, type: state.phase === "GAME_RESULT" ? "rematch" : "start" })}>{state.phase === "GAME_RESULT" ? "Jogar novamente" : "Iniciar partida"}</button> : <span>Aguardando o coordenador.</span>}
-      {state.phase === "GAME_RESULT" ? <><button onClick={onGames}>Voltar aos jogos</button><button onClick={onMedia}>Voltar à mídia</button></> : null}</div>
-    </div> : <>
+      {state.phase === "GAME_RESULT" ? <button onClick={onGames}>Voltar aos jogos</button> : null}</GameActionBar>
+    </GameLobby> : <>
       <div className="draw-word" aria-live="polite">{state.phase === "ROUND_RESULT" ? <strong>Era: {state.revealedWord || "Rodada pulada"}</strong> : state.phase === "CHOOSING_WORD" ? <span>{drawerName} está escolhendo…</span> : <strong>{state.secretWord ?? state.maskedWord}</strong>}</div>
       <DrawCanvas snapshot={state} socket={socket} enabled={!reconnecting && drawer && state.phase === "DRAWING" && socket.connected && remaining > 0} act={act} />
       <div className="draw-bottom">
@@ -86,5 +87,5 @@ export function DrawGame({ socket, roomId, userId, children, onGames, onMedia }:
       if (event.shiftKey && document.activeElement === buttons[0]) { event.preventDefault(); buttons.at(-1)?.focus(); }
       else if (!event.shiftKey && document.activeElement === buttons.at(-1)) { event.preventDefault(); buttons[0]?.focus(); }
     }}><div><h3>Escolha o que você vai desenhar</h3><time aria-label="Tempo para escolher">{remaining}s</time></div><div className="draw-choices">{state.choices?.map((word, option) => <button key={word} disabled={unavailable || remaining <= 0} onClick={() => act({ ...base, type: "choose", option })}>{word}</button>)}</div></div></div> : null}
-  </section>;
+  </GameShell>;
 }

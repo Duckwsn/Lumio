@@ -69,10 +69,10 @@ test("S1 Houses: Home observes two Party browsers, three games, six widths, deta
         await home.screenshot({ path: "artifacts/s1/s1-home-desktop.png" });
         for (const width of [320, 360, 375, 390, 412, 430]) { await home.setViewportSize({ width, height: 844 }); expect(await home.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true); const box = await home.locator(".house-card-v2 .house-open-actions > button").first().boundingBox(); expect(box!.height).toBeGreaterThanOrEqual(44); await home.screenshot({ path: `artifacts/s1/s1-home-${width}.png` }); }
       }
-      await a.getByRole("button", { name: "Voltar à mídia", exact: true }).click(); await b.getByRole("button", { name: "Voltar à mídia", exact: true }).click();
+      await a.getByRole("button", { name: "Assistir/Ouvir", exact: true }).click(); await b.getByRole("button", { name: "Assistir/Ouvir", exact: true }).click();
       await expect(home.locator(".house-party-summary")).toContainText(`Partida de ${label} ativa`, { timeout: 5000 });
       await a.getByRole("button", { name: "Jogos", exact: true }).click(); await a.getByRole("button", { name: "Encerrar sessão de jogo", exact: true }).click(); await a.getByRole("button", { name: "Confirmar encerramento", exact: true }).click();
-      await expect(home.locator(".house-party-summary")).toContainText("Na Party"); await a.getByRole("button", { name: "Voltar à mídia", exact: true }).click();
+      await expect(home.locator(".house-party-summary")).toContainText("Na Party"); await a.getByRole("button", { name: "Assistir/Ouvir", exact: true }).click();
     }
     await home.setViewportSize({ width: 1440, height: 900 });
     await home.getByRole("button", { name: "Casa e membros", exact: true }).click(); await expect(home.getByRole("dialog")).toBeVisible(); await home.screenshot({ path: "artifacts/s1/s1-house-detail-desktop.png" });
@@ -117,10 +117,14 @@ test("G5 three authenticated browsers: private cards, full match, six widths, wi
       page.on("pageerror", (error) => errors.push(error.message));
       await page.goto(`${origin}/house/${house.id}`); await page.getByRole("button", { name: "Jogos", exact: true }).click();
       await expect(page.locator(".game-catalog>button")).toHaveCount(3);
+      await expect(page.getByRole("button", { name: "Voltar à mídia", exact: true })).toHaveCount(0);
+      if (i === 0) { await page.keyboard.press("Escape"); await expect(page.locator(".main-stage")).toHaveAttribute("data-view", "game"); }
       if (i === 0) {
         for (const width of [320, 360, 375, 390, 412, 430]) {
           await page.setViewportSize({ width, height: 844 });
           expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+          const stage = (await page.locator(".main-stage").boundingBox())!, lastCard = (await page.locator(".game-catalog>button").last().boundingBox())!;
+          expect(lastCard.y + lastCard.height).toBeLessThanOrEqual(stage.y + stage.height);
           if ([320, 390, 430].includes(width)) await page.screenshot({ path: `test-results/g6-hub-${width}.png` });
         }
         await page.setViewportSize({ width: 390, height: 844 });
@@ -311,7 +315,7 @@ test("G4 three authenticated clients: safe Quiz, lock/reconnect, navigation, six
     await a.getByRole("button", { name: "Voltar aos jogos", exact: true }).click(); await a.getByRole("button", { name: "Encerrar sessão de jogo", exact: true }).click(); await a.getByRole("button", { name: "Confirmar encerramento", exact: true }).click();
     await expect(a.getByRole("button", { name: "Confirmar encerramento", exact: true })).toHaveCount(0);
     await a.getByRole("button", { name: /Desenhe e Adivinhe/ }).click(); await a.getByRole("button", { name: "Participar", exact: true }).click(); await a.screenshot({ path: "test-results/g4-draw-navigation-mobile.png" });
-    await a.getByRole("button", { name: "Voltar aos jogos", exact: true }).click(); await a.getByRole("button", { name: "Voltar à mídia", exact: true }).click(); await a.getByRole("button", { name: "Jogos", exact: true }).click(); await a.getByRole("button", { name: /Desenhe e Adivinhe/ }).click(); await expect(a.getByRole("button", { name: "Sair do jogo", exact: true })).toBeVisible();
+    await a.getByRole("button", { name: "Voltar aos jogos", exact: true }).click(); await a.getByRole("button", { name: "Assistir/Ouvir", exact: true }).click(); await a.getByRole("button", { name: "Jogos", exact: true }).click(); await a.getByRole("button", { name: /Desenhe e Adivinhe/ }).click(); await expect(a.getByRole("button", { name: "Sair do jogo", exact: true })).toBeVisible();
     await b.getByRole("button", { name: "Voltar aos jogos", exact: true }).click(); await b.getByRole("button", { name: /Desenhe e Adivinhe/ }).click(); await b.screenshot({ path: "test-results/g4-draw-navigation-desktop.png" });
     expect(errors).toEqual([]);
   } finally { await Promise.all(contexts.map((ctx) => ctx.close())); }
@@ -871,8 +875,8 @@ test("automatic voice: three real RTC clients, explicit capture, denial, deafen,
     await expect.poll(() => packets(b), { timeout: 20000 }).toBeGreaterThan(receivedBeforeGames);
     expect(await a.evaluate(() => ({ peers: (window as any).qaVoice.peers.length, captures: (window as any).qaVoice.captures }))).toEqual(voiceBeforeGames);
     await a.screenshot({ path: "test-results/g0-desktop-games.png" });
-    await a.getByRole("button", { name: "Voltar à mídia", exact: true }).click();
-    await b.getByRole("button", { name: "Voltar à mídia", exact: true }).click();
+    await a.getByRole("button", { name: "Assistir/Ouvir", exact: true }).click();
+    await b.getByRole("button", { name: "Assistir/Ouvir", exact: true }).click();
     await expect(a.getByRole("button", { name: "Assistir/Ouvir", exact: true })).toBeFocused();
     await connected(a, 1); await connected(b, 1);
     await join(c);
@@ -915,7 +919,7 @@ test("automatic voice: three real RTC clients, explicit capture, denial, deafen,
       const surface = await a.locator(selector).elementHandle();
       await a.getByRole("button", { name: "Voltar aos jogos", exact: true }).click();
       await expect(a.locator(".game-active-session")).toContainText("Partida em andamento");
-      await a.getByRole("button", { name: "Voltar à mídia", exact: true }).click();
+      await a.getByRole("button", { name: "Assistir/Ouvir", exact: true }).click();
       await a.getByRole("button", { name: "Jogos", exact: true }).click();
       await a.getByRole("button", { name: "Retornar à partida", exact: true }).click();
       await expect(a.locator(selector)).toHaveAttribute("data-phase", phase);
@@ -933,7 +937,7 @@ test("automatic voice: three real RTC clients, explicit capture, denial, deafen,
       await a.getByRole("button", { name: "Confirmar encerramento", exact: true }).click();
       for (const page of [b, c]) await page.getByRole("button", { name: "Voltar aos jogos", exact: true }).click();
     }
-    for (const page of [a, b, c]) await page.getByRole("button", { name: "Voltar à mídia", exact: true }).click();
+    for (const page of [a, b, c]) await page.getByRole("button", { name: "Assistir/Ouvir", exact: true }).click();
     await expect.poll(() => c.evaluate(async () => {
       let sources = 0;
       for (const peer of (window as any).qaVoice.peers as RTCPeerConnection[]) (await peer.getStats()).forEach((stat) => { if (stat.type === "inbound-rtp" && stat.kind === "audio" && stat.packetsReceived > 0) sources++; });
@@ -1068,7 +1072,7 @@ test("mobile permanent chat, gesture, secondary tools, late join and player idle
     await page.getByRole("button", { name: "Sair da tela cheia de Jogos", exact: true }).tap();
     await expect(page.locator(".mobile-party-chat")).toBeVisible();
     await expect(page.locator(".main-stage")).toHaveAttribute("data-view", "game");
-    await page.getByRole("button", { name: "Voltar à mídia", exact: true }).tap();
+    await page.getByRole("button", { name: "Assistir/Ouvir", exact: true }).tap();
     await expect(page.locator(".main-stage")).toHaveAttribute("data-view", "media");
     const resumedEngine = await engine();
     expect(resumedEngine.created).toBeGreaterThan(originalEngine.created);
@@ -1335,7 +1339,7 @@ test("GX3 Drive engine unmounts in Games, restores paused media and keeps screen
       const command=(c)=>{window.qaCommands++;setMedia(m=>({...m,state:c.action==='pause'?'paused':'playing',position:c.position,startedAt:c.action==='pause'?null:Date.now(),revision:m.revision+1}));return true;};
       const noop=React.useCallback(()=>{},[]);
       const enterGames=()=>{const video=document.querySelector('video.provider-player');setMedia(m=>({...m,state:'paused',position:video?.currentTime??m.position,startedAt:null,revision:m.revision+1}));setView('game');};
-      return e('main',null,e('button',{onClick:enterGames},'Jogos'),e('button',{onClick:()=>{const canvas=document.createElement('canvas');canvas.width=320;canvas.height=180;canvas.getContext('2d').fillRect(0,0,320,180);window.qaScreen=canvas.captureStream(10);setStream(window.qaScreen);setShare({user:{id:'qa',displayName:'QA',color:'#78a98c'}});}},'Test screen'),view==='media'?e(MediaExperienceStage,{view:'media',onViewChange:noop,screenShare:share,screenStream:stream,media:e(MediaStage,{media,roomId:'qa',apiUrl:location.origin,token:'fixture',theater:false,ambient:false,musicView:false,volume:0,effectiveVolume:0,resyncToken:0,shortcutsEnabled:true,onSkip:noop,onRemove:noop,onAddMedia:noop,onEnded:noop,onPlaybackCommand:command,onTheaterChange:noop,onMusicViewChange:noop,onFullscreenChange:noop,onVolumeChange:noop})}):e(GamesExperienceStage,{screenShare:share,screenStream:stream,onBack:()=>setView('media'),onFullscreenChange:noop}));
+      return e('main',null,e('nav',{'aria-label':'Experiência da Party'},e('button',{onClick:()=>setView('media')},'Assistir/Ouvir'),e('button',{onClick:enterGames},'Jogos')),e('button',{onClick:()=>{const canvas=document.createElement('canvas');canvas.width=320;canvas.height=180;canvas.getContext('2d').fillRect(0,0,320,180);window.qaScreen=canvas.captureStream(10);setStream(window.qaScreen);setShare({user:{id:'qa',displayName:'QA',color:'#78a98c'}});}},'Test screen'),view==='media'?e(MediaExperienceStage,{view:'media',onViewChange:noop,screenShare:share,screenStream:stream,media:e(MediaStage,{media,roomId:'qa',apiUrl:location.origin,token:'fixture',theater:false,ambient:false,musicView:false,volume:0,effectiveVolume:0,resyncToken:0,shortcutsEnabled:true,onSkip:noop,onRemove:noop,onAddMedia:noop,onEnded:noop,onPlaybackCommand:command,onTheaterChange:noop,onMusicViewChange:noop,onFullscreenChange:noop,onVolumeChange:noop})}):e(GamesExperienceStage,{screenShare:share,screenStream:stream,onFullscreenChange:noop}));
     } createRoot(document.getElementById('root')).render(e(Fixture));
   </script></body></html>` }));
   await page.goto(`${origin}/qa-g0`);
@@ -1348,7 +1352,7 @@ test("GX3 Drive engine unmounts in Games, restores paused media and keeps screen
   await page.getByRole("button", { name: "Jogos", exact: true }).click();
   await expect(page.locator("video.provider-player, .lumio-player")).toHaveCount(0);
   expect(await native!.evaluate((video: HTMLVideoElement) => video.isConnected)).toBe(false);
-  await page.getByRole("button", { name: "Voltar à mídia", exact: true }).click();
+  await page.getByRole("button", { name: "Assistir/Ouvir", exact: true }).click();
   await expect(page.locator("video.provider-player")).toHaveCount(1);
   await page.getByRole("button", { name: "Reproduzir", exact: true }).click();
   await expect.poll(() => page.locator("video.provider-player").evaluate((video: HTMLVideoElement) => video.currentTime)).toBeGreaterThan(0.1);
@@ -1360,7 +1364,7 @@ test("GX3 Drive engine unmounts in Games, restores paused media and keeps screen
   expect(await page.evaluate(() => (window as any).qaScreen.getTracks()[0].readyState)).toBe("live");
   await expect(page.locator(".main-stage")).toHaveAttribute("data-view", "game");
   await page.getByRole("button", { name: "Jogos", exact: true }).last().click();
-  await page.getByRole("button", { name: "Voltar à mídia", exact: true }).click();
+  await page.getByRole("button", { name: "Assistir/Ouvir", exact: true }).click();
   await expect(page.locator("video.provider-player")).toHaveCount(1);
   expect(tickets).toBeGreaterThan(initialTickets); expect(await page.evaluate(() => (window as any).qaCommands)).toBe(1);
 });
@@ -1759,7 +1763,7 @@ test("GX2 Party transport, Call peers and tracks keep identity across visual chi
         const page = step % 2 ? b : a;
         await page.getByRole("button", { name: "Jogos", exact: true }).click();
         await expect(page.locator(".main-stage")).toHaveAttribute("data-view", "game");
-        await page.getByRole("button", { name: "Voltar à mídia", exact: true }).click();
+        await page.getByRole("button", { name: "Assistir/Ouvir", exact: true }).click();
       }
       for (const page of [a, b]) expect(await page.evaluate(() => {
         const q = (window as any).gx2, before = q.before;

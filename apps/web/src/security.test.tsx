@@ -51,7 +51,7 @@ test("GX3 Media experience owns the only provider surface", () => {
   assert.match(html, /media-experience/);
 });
 test("GX3 Games experience has no hidden YouTube, Drive or MediaStage", () => {
-  const html = renderToStaticMarkup(createElement(GamesExperienceStage, { screenShare: null, screenStream: null, onBack: () => undefined, onFullscreenChange: () => undefined }));
+  const html = renderToStaticMarkup(createElement(GamesExperienceStage, { screenShare: null, screenStream: null, onFullscreenChange: () => undefined }));
   assert.match(html, /games-experience/);
   assert.doesNotMatch(html, /<iframe|<video|game-media-visible|lumio-player/);
 });
@@ -66,11 +66,13 @@ test("S1 Home distinguishes Party occupancy, online members and escaped activity
   const stale = renderToStaticMarkup(createElement(HomePage, { ...props, houses: [house], connected: false })); assert.match(stale, /último estado recebido/);
 });
   test("Game Hub shows three real games with original vector identity and concise accessible copy", () => {
-  const html = renderToStaticMarkup(createElement(GameHub, { onBack: () => undefined, onFullscreen: () => undefined, fullscreen: false }));
+  const html = renderToStaticMarkup(createElement(GameHub, { onFullscreen: () => undefined, fullscreen: false }));
   assert.equal((html.match(/class="draw-entry"/g) ?? []).length, 1);
     assert.equal((html.match(/class="quiz-entry"/g) ?? []).length, 1);
     assert.equal((html.match(/class="cards-entry"/g) ?? []).length, 1);
     assert.match(html, /Lumio Cartas/); assert.match(html, /2–8 jogadores/);
   assert.match(html, /draw-game-icon/); assert.match(html, /2–12 jogadores/);
+  assert.match(html, /aria-label="Lumio Cartas 2–8 jogadores"/);
+  assert.doesNotMatch(html, /Voltar à mídia/);
   for (const text of ["Em breve", "Na mesma Party", "Desenhe, adivinhe e ria"]) assert.equal(html.includes(text), false);
 });

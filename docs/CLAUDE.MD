@@ -172,3 +172,9 @@ Só encerre o processo depois de confirmar que ele pertence ao projeto.
 - Instâncias físicas têm UUID opaco; preserve 96 IDs únicos entre compra, descarte e mãos, inclusive reciclagem/leave. Ordem e efeitos só no servidor, sem stacking/challenge. Declaração Última! é atômica com play/play_drawn; escolha de cor confirma a carta reservada, sem estender deadline.
 - Revisão/session/round exatos, ownership, fase, turno, prazo e cor validados no servidor; não repetir ações automaticamente após timeout de ack. Desconexão mantém mão; saída explícita devolve cartas e invalida participação. Timer visual não publica ticks de socket.
 - Mão mobile usa scroll horizontal local e toque para selecionar/confirmar. Não remonte Party, Chat, Call ou mídia. Fixtures determinísticas só em harness isolado local; nunca aceitar deck/seed do cliente ou criar endpoint de debug. Consulte `POST_1_0_G5_LUMIO_CARD_GAME_REPORT.md`.
+
+## GX4.1 / Game Design System
+
+- A camada `apps/web/src/games/GameDesignSystem.tsx` é apenas visual e composável. Games mantêm seus runtimes, projeções privadas, timers/turnos autoritativos, participação explícita e classes legadas usadas pelo E2E. Não levar lógica, Socket.IO, RTC, Call, Chat nem Media provider para `GameShell`.
+- Tokens CSS ficam em `.game-hub`; o Hub adapta 3/2/1 colunas. O nome acessível do cartão permanece “Nome N–M jogadores”, mesmo com descrição visual. `GameTimer` apenas apresenta segundos, sem `aria-live` por tick. Confira `GAME_DESIGN_SYSTEM.md` e o relatório GX4.1 antes de evoluir Draw/Quiz/Cartas.
+- O seletor `.party-experience-nav` é o único caminho de Mídia↔Jogos. Não adicionar botão redundante “Voltar à mídia” ou Escape que troque a rota; o breadcrumb “Voltar aos jogos” só retorna ao Hub.

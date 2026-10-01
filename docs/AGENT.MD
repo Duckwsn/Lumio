@@ -241,6 +241,13 @@ Uma tarefa está pronta quando:
 - Configure/start/rematch/end validam autoridade e revisão exata. Answer permite revisão não-futura apenas da mesma session/round, uma vez por ativo online, antes do deadline; cliente não determina acerto/pontos. Reconnect conserva lock, espectadores/offline não bloqueiam early finish.
 - Banco PT-BR estável é privado; seleção sem repetição na partida, ordem de quatro alternativas única para todos. Não importar banco no frontend. Timer visual não envia eventos por segundo. Consulte `POST_1_0_G4_PARTY_GAMES_EXPANSION_QUIZ_REPORT.md` para fórmula, limites e QA manual.
 
+## GX4.1 — Game Design System
+
+- `apps/web/src/games/GameDesignSystem.tsx` e `gameDesignSystem.css` são apresentação composável para Hub/Draw/Quiz/Cartas. `GameShell`, `GameHud`, `GameStage`, `GameLobby`, `GameActionBar`, `GameResult`, `GameTimer` e `GamePhase` não podem possuir socket, RTC, regras, resultado calculado nem estado privado; recebem somente projeções já autorizadas pelos jogos.
+- Preserve as classes de teste/compatibilidade (`draw-*`, `quiz-*`, `card-*`), hierarquia do canvas 4:3, mão privada horizontal, deadlines server-side, Chat/Call únicos, rotas GX3 e Media provider exclusivo da rota de mídia. `GameTimer` só formata segundos; não publica ticks nem redefine prazo.
+- CSS scoped em `.game-hub`; não sobrescrever tema global da Party. Catálogo acessível mantém nome curto “Nome N–M jogadores” mesmo com descrição visual. Ver `docs/GAME_DESIGN_SYSTEM.md` e `docs/POST_1_0_GX4_1_GAME_DESIGN_SYSTEM_REPORT.md` antes de GX4.2–GX4.4.
+- A navegação Mídia/Jogos pertence exclusivamente ao seletor `.party-experience-nav`. Não reintroduzir “Voltar à mídia” no GameHub/resultado nem usar Escape para trocar rota; “Voltar aos jogos” só retorna ao Hub.
+
 ## Social Library M2
 
 - Biblioteca, favoritos e coleções pertencem à Casa e usam identidade `provider + providerMediaId`; ações de fila continuam sob autoridade da Party. Histórico social agrega somente ocorrências de reprodução efetiva, preservando ocorrências internas para Previous.
