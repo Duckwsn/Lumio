@@ -2,6 +2,7 @@ import { lazy, Suspense } from "react";
 import { createRoot } from "react-dom/client";
 import "./styles.css";
 import "./games/gameDesignSystem.css";
+import "./games/drawV4.css";
 import { LandingPage } from "./components/LandingPage";
 import { PwaUpdateNotice, registerPwa, installPwaReloadHandler } from "./components/PwaExperience";
 

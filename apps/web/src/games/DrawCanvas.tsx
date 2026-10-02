@@ -6,14 +6,14 @@ import { Brush, Eraser, Undo2, Trash2 } from "lucide-react";
 import { isDrawingUndo } from "./drawingShortcut";
 import { GameStage } from "./GameDesignSystem";
 
-export function DrawCanvas({ snapshot, socket, enabled, act }: { snapshot: DrawSnapshot; socket: Socket<ServerToClientEvents, ClientToServerEvents>; enabled: boolean; act: (action: GameAction, callback?: (ack: GameAck) => void) => void }) {
+export function DrawCanvas({ snapshot, socket, enabled, showToolbar = enabled, controlsDisabled = false, act }: { snapshot: DrawSnapshot; socket: Socket<ServerToClientEvents, ClientToServerEvents>; enabled: boolean; showToolbar?: boolean; controlsDisabled?: boolean; act: (action: GameAction, callback?: (ack: GameAck) => void) => void }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const board = useRef<DrawStroke[]>([]), boardRevision = useRef(0);
   const boardIdentity = useRef("");
   const active = useRef<{ stroke: DrawStroke; sent: number; pointer: number } | null>(null);
   const [tool, setTool] = useState<"brush" | "eraser">("brush"), [color, setColor] = useState<(typeof drawColors)[number]>(drawColors[0]), [width, setWidth] = useState(.012);
   const latest = useRef({ snapshot, act, enabled }); latest.current = { snapshot, act, enabled };
-  const [confirmClear, setConfirmClear] = useState(false);
+  const [confirmClear, setConfirmClear] = useState(false), [clearing, setClearing] = useState(false);
   const clearBox = useRef<HTMLDivElement>(null);
   const payload = () => { const s = latest.current.snapshot; return { roomId: s.roomId, sessionId: s.sessionId, roundId: s.roundId, revision: s.revision }; };
   const resync = () => latest.current.act({ ...payload(), type: "sync" });
@@ -37,7 +37,7 @@ export function DrawCanvas({ snapshot, socket, enabled, act }: { snapshot: DrawS
     window.addEventListener("keydown", keydown);
     return () => window.removeEventListener("keydown", keydown);
   }, []);
-  useEffect(() => { setConfirmClear(false); }, [snapshot.roundId, enabled]);
+  useEffect(() => { setConfirmClear(false); setClearing(false); }, [snapshot.roundId, enabled]);
   useEffect(() => { if (confirmClear) clearBox.current?.querySelector<HTMLButtonElement>("button")?.focus(); }, [confirmClear]);
   useEffect(() => {
     const identity = `${snapshot.sessionId}:${snapshot.roundId}`;
@@ -64,8 +64,9 @@ export function DrawCanvas({ snapshot, socket, enabled, act }: { snapshot: DrawS
     return () => { window.clearInterval(timer); socket.off("game:draw", receive); active.current = null; };
   }, [socket]);
   useEffect(() => { if (!enabled) active.current = null; }, [enabled]);
-  return <GameStage className="draw-board">
-    <canvas ref={canvas} tabIndex={enabled ? 0 : -1} width={BOARD_WIDTH} height={BOARD_HEIGHT} aria-label={enabled ? "Tela de desenho — desenhe com mouse, toque ou caneta" : "Desenho compartilhado da rodada"} data-board-revision={snapshot.boardRevision}
+  return <>
+    <GameStage className={`draw-board ${enabled ? `draw-board-${tool}` : "draw-board-view"}`}>
+    <canvas ref={canvas} tabIndex={enabled ? 0 : -1} width={BOARD_WIDTH} height={BOARD_HEIGHT} aria-label={enabled ? "Área de desenho — desenhe com mouse, toque ou caneta" : "Desenho compartilhado da rodada"} data-board-revision={snapshot.boardRevision}
       onPointerDown={(event) => {
         if (!enabled || active.current || event.button !== 0) return;
         event.preventDefault(); event.currentTarget.setPointerCapture(event.pointerId);
@@ -77,12 +78,13 @@ export function DrawCanvas({ snapshot, socket, enabled, act }: { snapshot: DrawS
         const ctx = event.currentTarget.getContext("2d"); if (ctx) paintStroke(ctx, a.stroke, offset);
         if (a.stroke.points.length - a.sent >= 32) flush();
       }} onPointerUp={(event) => { if (active.current?.pointer !== event.pointerId) return; flush(); active.current = null; if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId); }} onPointerCancel={(event) => { if (active.current?.pointer !== event.pointerId) return; flush(); active.current = null; }} />
-    {enabled ? <div className="draw-toolbar" role="group" aria-label="Ferramentas de desenho">
-      <div className="draw-tool-group"><button aria-label="Pincel" title="Pincel" aria-pressed={tool === "brush"} onClick={() => setTool("brush")}><Brush size={18} /></button><button aria-label="Borracha" title="Borracha" aria-pressed={tool === "eraser"} onClick={() => setTool("eraser")}><Eraser size={18} /></button></div>
-      <div className="draw-colors">{drawColors.map((value, index) => <button key={value} style={{ background: value }} aria-label={`Cor ${["grafite", "marfim", "verde", "vermelho", "amarelo", "azul", "violeta"][index]}`} aria-pressed={color === value} onClick={() => { setColor(value); setTool("brush"); }}>{color === value ? "✓" : ""}</button>)}</div>
-      <label><span>Espessura</span><select aria-label="Espessura" value={width} onChange={(e) => setWidth(Number(e.target.value))}><option value={.006}>Fina</option><option value={.012}>Média</option><option value={.025}>Grossa</option></select></label>
-      <div className="draw-tool-group draw-history"><button aria-label="Desfazer" title="Desfazer (Ctrl/Cmd+Z)" onClick={undo}><Undo2 size={18} /><span>Desfazer</span></button><button aria-label="Limpar tela" title="Limpar tela" onClick={() => setConfirmClear(true)}><Trash2 size={18} /></button></div>
-      {confirmClear ? <div ref={clearBox} className="draw-clear-confirm" role="alertdialog" aria-label="Limpar todo o desenho?" onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); setConfirmClear(false); } }}><span>Limpar todo o desenho?</span><button onClick={() => setConfirmClear(false)}>Cancelar</button><button onClick={() => { active.current = null; act({ ...payload(), type: "clear" }, (ack) => { if (!ack.ok) resync(); }); setConfirmClear(false); }}>Confirmar limpeza</button></div> : null}
+    </GameStage>
+    {showToolbar ? <div className="draw-toolbar" role="group" aria-label="Ferramentas de desenho">
+      <div className="draw-tool-group draw-tool-choice" role="group" aria-label="Ferramenta"><button disabled={!enabled} aria-label="Pincel" title="Pincel" aria-pressed={tool === "brush"} onClick={() => setTool("brush")}><Brush size={18} /><span>Pincel</span></button><button disabled={!enabled} aria-label="Borracha" title="Borracha" aria-pressed={tool === "eraser"} onClick={() => setTool("eraser")}><Eraser size={18} /><span>Borracha</span></button></div>
+      <div className="draw-colors" role="group" aria-label="Cores do pincel">{drawColors.map((value, index) => <button key={value} type="button" disabled={!enabled} style={{ background: value }} aria-label={`Cor ${["grafite", "marfim", "verde", "vermelho", "amarelo", "azul", "violeta"][index]}`} title={["Grafite", "Marfim", "Verde", "Vermelho", "Amarelo", "Azul", "Violeta"][index]} aria-pressed={color === value && tool === "brush"} onClick={() => { setColor(value); setTool("brush"); }}>{color === value && tool === "brush" ? "✓" : ""}</button>)}</div>
+      <label className="draw-size"><span>Espessura</span><select disabled={!enabled} aria-label="Espessura" value={width} onChange={(e) => setWidth(Number(e.target.value))}><option value={.006}>Fina</option><option value={.012}>Média</option><option value={.025}>Grossa</option></select><span className="draw-size-preview" aria-hidden="true" style={{ width: `${Math.max(5, width * 800)}px`, height: `${Math.max(5, width * 800)}px` }} /></label>
+      <div className="draw-tool-group draw-history" role="group" aria-label="Histórico e limpeza"><button disabled={!enabled || controlsDisabled} aria-label="Desfazer" title="Desfazer (Ctrl/Cmd+Z)" onClick={undo}><Undo2 size={18} /><span>Desfazer</span></button><button className="draw-clear-trigger" disabled={!enabled || controlsDisabled} aria-label="Limpar tela" title="Limpar tela" onClick={() => setConfirmClear(true)}><Trash2 size={18} /><span>Limpar</span></button></div>
+      {confirmClear ? <div ref={clearBox} className="draw-clear-confirm" role="alertdialog" aria-label="Limpar todo o desenho?" onKeyDown={(event) => { if (event.key === "Escape" && !clearing) { event.preventDefault(); event.stopPropagation(); setConfirmClear(false); } }}><span>Limpar todo o desenho?</span><button disabled={clearing} onClick={() => setConfirmClear(false)}>Cancelar</button><button disabled={clearing} onClick={() => { active.current = null; setClearing(true); act({ ...payload(), type: "clear" }, (ack) => { setClearing(false); if (ack.ok) setConfirmClear(false); else resync(); }); }}>{clearing ? "Limpando…" : "Confirmar limpeza"}</button></div> : null}
     </div> : null}
-  </GameStage>;
+  </>;
 }

@@ -322,7 +322,7 @@ test("G4 three authenticated clients: safe Quiz, lock/reconnect, navigation, six
 });
 
 test("G2 three-user Draw Game: integrated chat, privacy, shortcuts, score, mobile and fullscreen", async ({ browser, request }) => {
-  test.setTimeout(180000);
+  test.setTimeout(300000);
   const origin = `http://127.0.0.1:${webPort}`, api = `http://127.0.0.1:${apiPort}`;
   const sessions = [];
   for (const displayName of ["Draw Ana", "Draw Bia", "Draw Caio"]) {
@@ -340,7 +340,11 @@ test("G2 three-user Draw Game: integrated chat, privacy, shortcuts, score, mobil
   try {
     for (let i = 0; i < 3; i++) await contexts[i].addInitScript((session) => localStorage.setItem("lumio.session.v1", JSON.stringify(session)), sessions[i]);
     const [a, b, c] = await Promise.all(contexts.map((context) => context.newPage()));
-    const errors: string[] = []; for (const page of [a, b, c]) page.on("pageerror", (error) => errors.push(error.message));
+    const errors: string[] = [], capturedLogs: string[] = [];
+    for (const page of [a, b, c]) {
+      page.on("pageerror", (error) => errors.push(error.message));
+      if (page !== a) page.on("console", (message) => capturedLogs.push(message.text()));
+    }
     for (const page of [a, b, c]) {
       await page.goto(`${origin}/house/${house.id}`);
       await page.getByRole("button", { name: "Jogos", exact: true }).click();
@@ -366,10 +370,37 @@ test("G2 three-user Draw Game: integrated chat, privacy, shortcuts, score, mobil
       const box = await a.getByRole("dialog", { name: "Escolha o que você vai desenhar" }).boundingBox();
       expect(box!.x).toBeGreaterThanOrEqual(0); expect(box!.x + box!.width).toBeLessThanOrEqual(width);
     }
+    await a.setViewportSize({ width: 640, height: 450 });
+    await expect(a.getByRole("dialog", { name: "Escolha o que você vai desenhar" })).toBeVisible();
+    expect(await a.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await a.screenshot({ path: "test-results/gx421-zoom200-real-word-choice.png" });
     await a.setViewportSize({ width: 390, height: 844 });
     await a.screenshot({ path: "test-results/g6-draw-word-choice.png" });
-    const choice = a.locator(".draw-choices button").first(); const word = (await choice.textContent())!; await choice.click();
+    const choiceWords = await a.locator(".draw-choices button").allTextContents();
+    const word = [...choiceWords].sort((left, right) => right.length - left.length)[0];
+    await a.locator(".draw-choices button").filter({ hasText: word }).click();
     for (const page of [b, c]) { await expect(page.locator(".draw-word")).not.toContainText(word); await expect(page.getByRole("textbox", { name: "Seu palpite" })).toBeVisible(); }
+    await expect(a.locator(".draw-word")).toHaveText(word);
+    for (const page of [b, c]) {
+      await expect(page.locator(".draw-choices button")).toHaveCount(0);
+      const carriers = await page.evaluate((terms) => {
+        const pattern = (term: string) => new RegExp(`(^|[^\\p{L}])${term}($|[^\\p{L}])`, "iu");
+        const hasTerm = (value: string) => terms.some((term) => pattern(term).test(value));
+        const elements = [...document.querySelectorAll<HTMLElement>("*")];
+        const stores = [localStorage, sessionStorage].map((store) => Array.from({ length: store.length }, (_, index) => `${store.key(index)}:${store.getItem(store.key(index)!)}`).join(" "));
+        return {
+          textContent: hasTerm(document.body.textContent ?? ""),
+          value: elements.some((element) => "value" in element && hasTerm(String((element as HTMLInputElement).value))),
+          attributes: elements.some((element) => [...element.attributes].some((attribute) => hasTerm(attribute.value))),
+          descriptions: elements.some((element) => (element.getAttribute("aria-describedby") ?? "").split(/\s+/).some((id) => id && hasTerm(document.getElementById(id)?.textContent ?? ""))),
+          localStorage: hasTerm(stores[0]), sessionStorage: hasTerm(stores[1]),
+        };
+      }, choiceWords);
+      expect(Object.values(carriers).every((found) => !found)).toBe(true);
+      const accessible = await page.locator("body").ariaSnapshot();
+      for (const term of choiceWords) expect(accessible.toLocaleLowerCase("pt-BR").includes(term.toLocaleLowerCase("pt-BR"))).toBe(false);
+    }
+    expect(capturedLogs.some((message) => choiceWords.some((term) => message.toLocaleLowerCase("pt-BR").includes(term.toLocaleLowerCase("pt-BR"))))).toBe(false);
     const board = (page: typeof a) => page.locator(".draw-board canvas").evaluate((node: HTMLCanvasElement) => node.toDataURL());
     const blank = await board(b);
     const canvas = a.locator(".draw-board canvas"); await canvas.scrollIntoViewIfNeeded();
@@ -381,6 +412,21 @@ test("G2 three-user Draw Game: integrated chat, privacy, shortcuts, score, mobil
     await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
     await expect.poll(() => board(b)).not.toBe(blank); await expect.poll(() => board(c)).toBe(await board(b));
     expect(await board(a)).toBe(await board(b));
+    const pixel = (page: typeof a, x: number, y: number) => page.locator(".draw-board canvas").evaluate((node: HTMLCanvasElement, coords) => [...node.getContext("2d")!.getImageData(Math.floor(coords.x * node.width), Math.floor(coords.y * node.height), 1, 1).data].join(","), { x, y });
+    const ghostPixel = await pixel(b, .85, .15);
+    const beforeCancel = await board(b);
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [point(.1, .7)] });
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [point(.2, .7)] });
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [point(.2, .7), point(.85, .15)] });
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [point(.25, .7), point(.85, .15)] });
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchCancel", touchPoints: [] });
+    await expect.poll(() => board(b)).not.toBe(beforeCancel);
+    expect(await pixel(b, .85, .15)).toBe(ghostPixel);
+    const afterCancel = await board(b);
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [point(.7, .2)] });
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    await expect.poll(() => board(b)).not.toBe(afterCancel);
+    await expect.poll(() => board(c)).toBe(await board(b));
     const drawn = await board(b);
     const canvasBeforeReconnect = await a.locator(".draw-board canvas").elementHandle();
     await contexts[0].setOffline(true); await expect(a.locator(".game-connection-notice")).toBeVisible();
@@ -396,6 +442,18 @@ test("G2 three-user Draw Game: integrated chat, privacy, shortcuts, score, mobil
     const desktopGuess = (await b.getByRole("textbox", { name: "Seu palpite" }).boundingBox())!;
     expect(desktopBoard.y + desktopBoard.height).toBeLessThanOrEqual(632); expect(desktopGuess.y + desktopGuess.height).toBeLessThanOrEqual(632);
     expect(await board(b)).toBe(drawn);
+    const zoomContext = await browser.newContext({ viewport: { width: 640, height: 450 } });
+    try {
+      await zoomContext.addInitScript((session) => localStorage.setItem("lumio.session.v1", JSON.stringify(session)), sessions[1]);
+      const zoomPage = await zoomContext.newPage();
+      await zoomPage.goto(`${origin}/house/${house.id}`);
+      await zoomPage.getByRole("button", { name: "Jogos", exact: true }).click();
+      await zoomPage.getByRole("button", { name: /Desenhe e Adivinhe/ }).click();
+      await expect(zoomPage.getByRole("textbox", { name: "Seu palpite" })).toBeVisible();
+      expect(await zoomPage.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      await zoomPage.getByRole("textbox", { name: "Seu palpite" }).scrollIntoViewIfNeeded();
+      await zoomPage.screenshot({ path: "test-results/gx421-zoom200-real-guesser.png" });
+    } finally { await zoomContext.close(); }
     await a.getByRole("button", { name: "Borracha", exact: true }).click(); await canvas.scrollIntoViewIfNeeded();
     const erase = (await canvas.boundingBox())!;
     await a.mouse.move(erase.x + erase.width * .3, erase.y + erase.height * .3); await a.mouse.down();
@@ -551,6 +609,15 @@ test("G3 configurable target match: mobile roles preserve Chat, geometry, rotati
           await expect(a.getByLabel("Espessura", { exact: true })).toBeVisible();
           await a.screenshot({ path: `test-results/g6-draw-drawer-${width}.png` }); await b.screenshot({ path: `test-results/g6-draw-guesser-${width}.png` });
         }
+        for (const page of [a, b]) await page.setViewportSize({ width: 320, height: 568 });
+        const shortDrawer = (await a.locator(".draw-board canvas").boundingBox())!;
+        const shortGuesser = (await b.locator(".draw-board canvas").boundingBox())!;
+        expect(shortDrawer.height).toBeGreaterThan(100);
+        expect(shortGuesser.height).toBeGreaterThan(80);
+        expect((await b.getByRole("textbox", { name: "Seu palpite" }).boundingBox())!.y + 44).toBeLessThanOrEqual(568);
+        for (const page of [a, b]) expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+        await a.screenshot({ path: "test-results/gx42-drawer-320x568.png" });
+        await b.screenshot({ path: "test-results/gx42-guesser-320x568.png" });
         for (const page of [a, b]) await page.setViewportSize({ width: 390, height: 844 });
         await b.setViewportSize({ width: 390, height: 500 });
         await b.getByRole("textbox", { name: "Seu palpite" }).focus();
@@ -1894,4 +1961,108 @@ test("GX3 two tabs keep one Party while Media viewers govern authoritative playb
       await a.screenshot({ path: path.join(root, `artifacts/gx3/media-${width}.png`) });
     }
   } finally { controller.disconnect(); await contextA.close(); await contextB.close(); }
+});
+
+test("GX4.2.1 Draw visual stress fixture: 12 players, score extremes, critical timer, zoom and reduced motion", async ({ browser }) => {
+  test.setTimeout(90_000);
+  const origin = `http://127.0.0.1:${webPort}`;
+  const desktop = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+  const open = async (page: typeof desktop, role: "drawer" | "guesser", phase = "DRAWING") => {
+    await page.goto(`${origin}/qa/draw-freeze.html?role=${role}&phase=${phase}`);
+    await expect(page.locator(".draw-v4")).toBeVisible();
+  };
+  try {
+    await open(desktop, "drawer");
+    const scores = desktop.getByRole("list", { name: "Placar do jogo" });
+    await expect(scores.locator("li")).toHaveCount(12);
+    for (const name of ["Alexandre de Albuquerque", "JogadorComUmNomeMuitoGrande"]) await expect(scores).toContainText(name);
+    for (const score of [0, 2, 48, 100, 198, 205]) await expect(scores.getByLabel(`${score} de 200 pontos`, { exact: true })).toHaveCount(1);
+    await expect(scores.locator("li").filter({ hasText: "Desenha" })).toHaveCount(1);
+    await expect(scores.locator("li").filter({ hasText: "Acertou ✓" })).toHaveCount(2);
+    await expect(desktop.locator(".game-timer")).toHaveClass(/is-ending/);
+    const criticalBoard = (await desktop.locator(".draw-board").boundingBox())!;
+    const criticalHud = (await desktop.locator(".draw-heading").boundingBox())!;
+    const criticalContrast = await desktop.locator(".game-timer").evaluate((element) => {
+      const foreground = (getComputedStyle(element).color.match(/\d+/g) ?? []).slice(0, 3).map(Number);
+      const luminance = (channels: number[]) => channels.map((channel) => { const value = channel / 255; return value <= .04045 ? value / 12.92 : ((value + .055) / 1.055) ** 2.4; }).reduce((sum, value, index) => sum + value * [.2126, .7152, .0722][index], 0);
+      const [light, dark] = [luminance(foreground), luminance([24, 44, 34])].sort((a, b) => b - a);
+      return (light + .05) / (dark + .05);
+    });
+    expect(criticalContrast).toBeGreaterThan(4.5);
+    await desktop.screenshot({ path: "test-results/gx421-12-desktop-drawer.png" });
+    await desktop.goto(`${origin}/qa/draw-freeze.html?role=drawer&phase=DRAWING&timer=11`);
+    await expect(desktop.locator(".draw-v4")).toBeVisible();
+    const normalBoard = (await desktop.locator(".draw-board").boundingBox())!;
+    const normalHud = (await desktop.locator(".draw-heading").boundingBox())!;
+    expect(Math.abs(criticalBoard.y - normalBoard.y)).toBeLessThan(1);
+    expect(Math.abs(criticalHud.height - normalHud.height)).toBeLessThan(1);
+    await open(desktop, "drawer");
+    const desktopScorePanel = desktop.locator(".draw-bottom");
+    expect(await desktopScorePanel.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
+    await desktopScorePanel.evaluate((element) => { element.scrollTop = element.scrollHeight; });
+    await expect(scores.locator("li").last()).toContainText("Alexandre de Albuquerque");
+    await scores.locator("li").last().scrollIntoViewIfNeeded();
+    const lastDesktopScore = (await scores.locator("li").last().boundingBox())!;
+    expect(lastDesktopScore.y).toBeGreaterThanOrEqual(0);
+    expect(lastDesktopScore.y + lastDesktopScore.height).toBeLessThanOrEqual(900);
+    await desktop.screenshot({ path: "test-results/gx421-12-desktop-score-bottom.png" });
+    await open(desktop, "guesser");
+    await desktop.screenshot({ path: "test-results/gx421-12-desktop-guesser.png" });
+    await open(desktop, "drawer", "GAME_RESULT");
+    await expect(desktop.getByText("205 pontos")).toBeVisible();
+    await desktop.screenshot({ path: "test-results/gx421-score-result-desktop.png" });
+
+    const mobile = await browser.newPage({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+    await open(mobile, "drawer");
+    await mobile.screenshot({ path: "test-results/gx421-12-mobile-before-score.png" });
+    await expect(mobile.locator(".draw-v4-active")).toBeVisible();
+    await expect(mobile.locator(".draw-score-toggle")).toBeVisible();
+    await mobile.locator(".draw-score-toggle").click();
+    await expect(mobile.getByRole("list", { name: "Placar do jogo" }).locator("li")).toHaveCount(12);
+    expect(await mobile.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await mobile.screenshot({ path: "test-results/gx421-12-mobile-drawer.png" });
+    const mobileScorePanel = mobile.locator(".draw-scoreboard");
+    expect(await mobileScorePanel.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
+    await mobileScorePanel.evaluate((element) => { element.scrollTop = element.scrollHeight; });
+    await mobile.screenshot({ path: "test-results/gx421-12-mobile-score-bottom.png" });
+    await open(mobile, "guesser");
+    await mobile.locator(".draw-score-toggle").click();
+    await mobile.screenshot({ path: "test-results/gx421-12-mobile-guesser.png" });
+    await open(mobile, "drawer", "CHOOSING_WORD");
+    await expect(mobile.getByRole("dialog", { name: "Escolha o que você vai desenhar" })).toBeVisible();
+    await mobile.screenshot({ path: "test-results/gx421-word-choice-mobile.png" });
+    await open(mobile, "drawer", "GAME_RESULT");
+    await mobile.screenshot({ path: "test-results/gx421-score-result-mobile.png" });
+    await mobile.setViewportSize({ width: 320, height: 568 });
+    await open(mobile, "drawer");
+    const wordBox = (await mobile.locator(".draw-word").boundingBox())!;
+    const scoreBox = (await mobile.locator(".draw-score-toggle").boundingBox())!;
+    expect(wordBox.x + wordBox.width).toBeLessThanOrEqual(scoreBox.x);
+    await mobile.screenshot({ path: "test-results/gx421-12-drawer-320x568.png" });
+
+    const reduced = await browser.newPage({ viewport: { width: 390, height: 844 }, reducedMotion: "reduce" });
+    await open(reduced, "drawer");
+    await expect(reduced.locator(".game-timer")).toHaveClass(/is-ending/);
+    expect(await reduced.locator(".game-timer").evaluate((element) => getComputedStyle(element).animationName)).toBe("none");
+    await reduced.screenshot({ path: "test-results/gx421-critical-reduced-motion.png" });
+    await open(reduced, "drawer", "CHOOSING_WORD");
+    expect(await reduced.locator(".draw-choice-dialog").evaluate((element) => getComputedStyle(element).animationName)).toBe("none");
+    await reduced.close();
+
+    const zoom = await browser.newPage({ viewport: { width: 640, height: 450 } });
+    for (const [role, phase] of [["drawer", "DRAWING"], ["guesser", "DRAWING"], ["drawer", "CHOOSING_WORD"]] as const) {
+      await open(zoom, role, phase);
+      expect(await zoom.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      await expect(zoom.locator(".game-timer")).toBeVisible();
+      await expect(zoom.locator(".draw-word")).toBeVisible();
+      if (phase === "CHOOSING_WORD") await expect(zoom.getByRole("dialog", { name: "Escolha o que você vai desenhar" })).toBeVisible();
+      else if (role === "drawer") await expect(zoom.getByRole("group", { name: "Ferramentas de desenho" })).toBeVisible();
+      else await expect(zoom.getByRole("textbox", { name: "Seu palpite" })).toBeVisible();
+      await zoom.screenshot({ path: `test-results/gx421-zoom200-${role}-${phase}.png` });
+    }
+    await zoom.close();
+    await mobile.close();
+  } finally {
+    await desktop.close();
+  }
 });

@@ -59,6 +59,13 @@ test("three authenticated real sockets: private choices, drawing, scoring, advan
   for (const index of [1, 2]) { assert.equal(states[index]!.choices, undefined); assert.equal(states[index]!.secretWord, undefined); }
   const secret = states[0]!.choices![0]; assert.equal((await send(0, "choose", { option: 0 })).ok, true);
   await until(() => states.every((s) => s?.phase === "DRAWING"));
+  assert.equal(states[0]!.secretWord, secret);
+  for (const index of [1, 2]) {
+    assert.equal(states[index]!.secretWord, undefined);
+    assert.equal(states[index]!.choices, undefined);
+    assert.ok(states[index]!.maskedWord.length > 0);
+    assert.ok(!JSON.stringify(states[index]).includes(secret));
+  }
   const drawing = { strokeId: "integration-stroke", offset: 0, tool: "brush", color: "#26332c", width: .012, points: [{ x: .2, y: .2 }, { x: .8, y: .8 }] };
   assert.equal((await send(1, "stroke", drawing)).ok, false); assert.equal((await send(0, "stroke", drawing)).ok, true);
   await until(() => deltas.every((items) => items.length === 1)); assert.deepEqual(deltas[2][0].stroke.points, drawing.points);

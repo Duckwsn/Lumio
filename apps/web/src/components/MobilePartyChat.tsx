@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { ListVideo, Plus, Users } from "lucide-react";
+import { ChevronDown, ChevronUp, ListVideo, Plus, Users } from "lucide-react";
 import { gamePresentationRole, usePartyGameChat } from "../games/PartyGameChat";
 
 export function useMobileParty() {
@@ -11,9 +11,13 @@ export function useMobileParty() {
 // Structural chat: never a sheet. Fullscreen/drawer roles hide it without unmounting.
 export function MobilePartyChat({ children, hidden, userId = "", onPeople, onQueue, onAdd }: { children: ReactNode; hidden: boolean; userId?: string; onPeople: () => void; onQueue: () => void; onAdd: () => void }) {
   const game = usePartyGameChat();
-  const concealed = hidden || gamePresentationRole(game?.game ?? null, game?.selected ?? false, userId) === "drawer";
-  return <section className="mobile-party-chat" hidden={concealed} aria-label="Chat da Party">
-    <header className="mobile-chat-heading"><strong>Chat da Party</strong><div><button type="button" onClick={onPeople} aria-label="Pessoas da Party"><Users size={18} /></button><button type="button" onClick={onQueue} aria-label="Fila da Party"><ListVideo size={18} /></button><button type="button" onClick={onAdd} aria-label="Adicionar mídia"><Plus size={18} /></button></div></header>
+  const [conversationExpanded, setConversationExpanded] = useState(false);
+  const role = gamePresentationRole(game?.game ?? null, game?.selected ?? false, userId);
+  const drawGuesser = role === "guesser" && Boolean(game?.game?.players.some((player) => player.id === userId && player.online));
+  useEffect(() => { setConversationExpanded(false); }, [game?.game?.roundId]);
+  const concealed = hidden || role === "drawer";
+  return <section className={`mobile-party-chat ${drawGuesser ? conversationExpanded ? "draw-chat-expanded" : "draw-chat-compact" : ""}`} hidden={concealed} aria-label="Chat da Party">
+    <header className="mobile-chat-heading"><strong>{drawGuesser ? "Palpite e Chat" : "Chat da Party"}</strong><div>{drawGuesser ? <button type="button" onClick={() => setConversationExpanded((value) => !value)} aria-label={conversationExpanded ? "Recolher conversa" : "Abrir conversa"} aria-expanded={conversationExpanded} title={conversationExpanded ? "Recolher conversa" : "Abrir conversa"}>{conversationExpanded ? <ChevronDown size={18} /> : <ChevronUp size={18} />}</button> : null}<button type="button" onClick={onPeople} aria-label="Pessoas da Party"><Users size={18} /></button><button type="button" onClick={onQueue} aria-label="Fila da Party"><ListVideo size={18} /></button><button type="button" onClick={onAdd} aria-label="Adicionar mídia"><Plus size={18} /></button></div></header>
     <div className="mobile-chat-body">{children}</div>
   </section>;
 }
