@@ -2,6 +2,19 @@ import crypto from "node:crypto";
 import { gameActionSchema, type GameAction, type DrawPlayer, type DrawSnapshot, type DrawDelta, type GameAck, type User } from "@lumio/shared";
 import { allDrawWords, drawWordBanks } from "./drawWords.js";
 export const normalizeGuess = (text: string) => text.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim().replace(/\s+/g, " ");
+/** A bounded one-edit typo check. The result is acknowledged only to the guesser. */
+export function isNearGuess(rawGuess: string, rawWord: string) {
+  const guess = normalizeGuess(rawGuess), word = normalizeGuess(rawWord);
+  if (word.length < 4 || guess === word || Math.abs(guess.length - word.length) > 1) return false;
+  if (guess.length === word.length) {
+    const misses = [...guess].reduce<number[]>((items, char, index) => char === word[index] ? items : [...items, index], []);
+    return misses.length === 1 || misses.length === 2 && misses[1] === misses[0] + 1 && guess[misses[0]] === word[misses[1]] && guess[misses[1]] === word[misses[0]];
+  }
+  const shorter = guess.length < word.length ? guess : word, longer = guess.length < word.length ? word : guess;
+  let offset = 0;
+  for (let index = 0; index < shorter.length; index++) if (shorter[index] !== longer[index + offset]) { if (offset) return false; offset = 1; if (shorter[index] !== longer[index + offset]) return false; }
+  return true;
+}
 type Session = Omit<DrawSnapshot, "serverNow" | "maskedWord" | "choices" | "secretWord" | "revealedWord"> & { choices: string[]; word: string; cursor: number; usedWords: Set<string>; active: Set<string>; disconnected: Map<string, number>; touched: number; points: number; canvasMinRevision: number };
 export const guessPoints = (remainingFraction: number, previousCorrect: number) => 6 + Math.floor(4 * Math.max(0, Math.min(1, remainingFraction))) - Math.min(2, previousCorrect);
 export function matchWinners(players: readonly DrawPlayer[]) { const top = Math.max(0, ...players.map((p) => p.score)); return players.filter((p) => p.score === top).map((p) => p.id); }
@@ -46,7 +59,7 @@ export class DrawGameRuntime {
   }
   action(room: string, user: User, raw: unknown): GameAck {
     const parsed = gameActionSchema.safeParse(raw); if (!parsed.success || parsed.data.roomId !== room) return { ok: false, message: "Ação de jogo inválida." };
-    const a = parsed.data; let s = this.sessions.get(room); const time = this.now();
+    const a = parsed.data; let s = this.sessions.get(room); const time = this.now(); let near = false;
     const key = `${room}:${user.id}:${a.type === "stroke" ? "draw" : a.type === "guess" ? "guess" : "control"}`;
     const rate = this.rates.get(key); const limit = a.type === "stroke" ? 35 : a.type === "guess" ? 4 : 8;
     if (rate && rate.until > time && rate.count >= limit) return { ok: false, message: "Aguarde antes de tentar novamente." };
@@ -98,7 +111,11 @@ export class DrawGameRuntime {
           if (drawer) { const reward = Math.min(2, 6 - (s.roundPoints[drawer.id] ?? 0)); drawer.score += reward; s.roundPoints[drawer.id] = (s.roundPoints[drawer.id] ?? 0) + reward; }
           this.feed(s, `${p.displayName} acertou!`);
           if (s.players.filter((entry) => s!.active.has(entry.id) && entry.online && entry.id !== s!.drawerId).every((entry) => entry.guessed)) this.finish(s);
-        } else this.feed(s, normalizeGuess(a.text).includes(normalizeGuess(s.word)) ? `${p.displayName} enviou um palpite.` : `${p.displayName}: ${a.text}`);
+        } else {
+          const containsAnswer = normalizeGuess(a.text).includes(normalizeGuess(s.word));
+          near = isNearGuess(a.text, s.word);
+          this.feed(s, containsAnswer ? `${p.displayName} enviou um palpite.` : `${p.displayName}: ${a.text}`);
+        }
       } else {
         if (s.phase !== "DRAWING" || user.id !== s.drawerId) return { ok: false, message: "Só o desenhista pode desenhar." };
         if (a.type === "stroke") {
@@ -117,7 +134,7 @@ export class DrawGameRuntime {
         if (a.type === "undo" || a.type === "clear") s.canvasMinRevision = s.revision;
       }
     }
-    this.notify(room); return { ok: true };
+    this.notify(room); return { ok: true, ...(near ? { message: "Quase! Seu palpite está próximo." } : {}) };
   }
   leave(room: string, user: string) {
     const s = this.sessions.get(room); if (!s) return;

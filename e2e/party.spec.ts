@@ -434,9 +434,7 @@ test("G2 three-user Draw Game: integrated chat, privacy, shortcuts, score, mobil
     expect(await board(a)).toBe(drawn); await expect(a.locator(".mobile-party-chat")).toBeHidden();
     await contexts[0].setOffline(false); await expect(a.locator(".game-connection-notice")).toHaveCount(0, { timeout: 15000 });
     expect(await board(a)).toBe(drawn);
-    await b.getByRole("button", { name: "Conversar", exact: true }).click();
-    await expect(b.getByRole("textbox", { name: "Mensagem", exact: true })).toHaveValue("rascunho normal preservado");
-    await b.getByRole("button", { name: "Palpitar", exact: true }).click();
+    await expect(b.getByRole("textbox", { name: "Seu palpite" })).toHaveValue("rascunho normal preservado");
     await b.setViewportSize({ width: 1262, height: 632 });
     const desktopBoard = (await b.locator(".draw-board canvas").boundingBox())!;
     const desktopGuess = (await b.getByRole("textbox", { name: "Seu palpite" }).boundingBox())!;
@@ -470,9 +468,7 @@ test("G2 three-user Draw Game: integrated chat, privacy, shortcuts, score, mobil
     await a.screenshot({ path: "test-results/g2-drawer-mobile.png" }); await b.screenshot({ path: "test-results/g6-draw-guesser-desktop.png" });
     await b.reload(); await b.getByRole("button", { name: "Jogos", exact: true }).click(); await b.getByRole("button", { name: /Desenhe e Adivinhe/ }).click();
     await expect.poll(() => board(b)).toBe(drawn); await expect(b.locator(".draw-word")).not.toContainText(word);
-    await b.getByRole("button", { name: "Conversar", exact: true }).click();
-    await b.getByRole("textbox", { name: "Mensagem", exact: true }).fill("rascunho normal preservado");
-    await b.getByRole("button", { name: "Palpitar", exact: true }).click();
+    await b.getByRole("textbox", { name: "Seu palpite" }).fill("rascunho normal preservado");
     for (const width of [320, 360, 375, 390, 412, 430]) {
       await a.setViewportSize({ width, height: 844 }); await canvas.scrollIntoViewIfNeeded();
       const box = (await canvas.boundingBox())!; expect(box.width).toBeGreaterThanOrEqual(width - 40); expect(Math.abs(box.width / box.height - 4 / 3)).toBeLessThan(.02);
@@ -484,11 +480,9 @@ test("G2 three-user Draw Game: integrated chat, privacy, shortcuts, score, mobil
       expect(await board(a)).toBe(drawn);
       await a.screenshot({ path: `test-results/g2-mobile-${width}.png` });
     }
-    await b.getByRole("button", { name: "Conversar", exact: true }).click();
-    await b.getByRole("textbox", { name: "Mensagem" }).fill("Chat independente do jogo"); await b.getByRole("button", { name: "Enviar mensagem", exact: true }).click();
-    await b.getByRole("textbox", { name: "Mensagem" }).fill("rascunho normal preservado");
-    await b.getByRole("button", { name: "Palpitar", exact: true }).click();
-    await expect(c.getByText("Chat independente do jogo", { exact: true })).toBeVisible();
+    await b.getByRole("textbox", { name: "Seu palpite" }).fill("Chat integrado ao jogo"); await b.getByRole("button", { name: "Enviar palpite", exact: true }).click();
+    await expect(c.locator(".draw-activity-feed")).toContainText("Chat integrado ao jogo");
+    await b.getByRole("textbox", { name: "Seu palpite" }).fill("rascunho normal preservado");
     await a.getByRole("button", { name: "Tela cheia de Jogos", exact: true }).click(); await expect(a.locator(".mobile-party-chat")).toBeHidden();
     expect(await board(a)).toBe(drawn);
     await a.getByRole("button", { name: "Sair da tela cheia de Jogos", exact: true }).click();
@@ -502,27 +496,34 @@ test("G2 three-user Draw Game: integrated chat, privacy, shortcuts, score, mobil
     expect(await board(c)).toBe(drawn);
     await a.getByRole("button", { name: "Confirmar limpeza", exact: true }).click(); await expect.poll(() => board(c)).toBe(blank);
     await b.getByRole("textbox", { name: "Seu palpite" }).fill("resposta incorreta"); await b.getByRole("button", { name: "Enviar palpite", exact: true }).click();
-    await expect(c.getByText("Draw Bia: resposta incorreta", { exact: true })).toBeVisible();
+    await expect(c.locator(".draw-activity-feed")).toContainText("Draw Bia: resposta incorreta");
+    const typo = `${word.slice(0, -1)}${word.endsWith("x") ? "z" : "x"}`;
+    await b.getByRole("textbox", { name: "Seu palpite" }).fill(typo); await b.getByRole("button", { name: "Enviar palpite", exact: true }).click();
+    await expect(b.getByRole("status").filter({ hasText: "Quase! Seu palpite está próximo." })).toBeVisible();
+    await expect(c.locator(".draw-activity-feed")).toContainText(typo);
+    await expect(c.locator(".composer-near")).toHaveCount(0);
     await b.getByRole("textbox", { name: "Seu palpite" }).fill(word); await b.getByRole("button", { name: "Enviar palpite", exact: true }).click();
-    await expect(b.getByText("Você acertou!", { exact: true })).toBeVisible(); await expect(c.locator(".draw-word")).not.toContainText(word);
-    await expect(c.locator(".game-chat-event")).not.toContainText([word]);
-    await expect(a.locator(".draw-clock small").first()).toContainText("2/100");
-    await expect(a.locator(".draw-award")).toHaveText("+2 pelo desenho");
+    await expect(b.locator(".draw-role-tag")).toContainText("Você acertou"); await expect(c.locator(".draw-word")).not.toContainText(word);
+    await expect(c.locator(".draw-activity-feed")).not.toContainText(word);
+    await expect(a.locator(".draw-award")).toHaveText("+2 pts");
+    await expect(a.locator(".draw-earned")).toContainText("pelos acertos no seu desenho");
     await expect(b.getByRole("list", { name: "Placar do jogo" }).locator("li").first()).toContainText("Draw Bia");
     await expect(b.getByRole("list", { name: "Placar do jogo" }).locator("li").first().locator(".draw-score-gain")).toBeVisible();
-    await expect(b.getByRole("textbox", { name: "Mensagem", exact: true })).toHaveValue("rascunho normal preservado");
+    await expect(b.getByRole("textbox", { name: "Mensagem", exact: true })).toBeEmpty();
     await b.getByRole("textbox", { name: "Mensagem", exact: true }).fill("Já acertei, posso conversar");
     await b.getByRole("button", { name: "Enviar mensagem", exact: true }).click();
-    await expect(c.getByText("Já acertei, posso conversar", { exact: true })).toBeVisible();
+    await expect(c.locator(".draw-activity-feed")).toContainText("Já acertei, posso conversar");
     await c.setViewportSize({ width: 390, height: 500 });
     await expect(c.locator(".app-shell")).toHaveClass(/mobile-party/);
     await expect(c.getByRole("textbox", { name: "Seu palpite" })).toBeVisible();
     await expect.poll(async () => { const box = await c.getByRole("textbox", { name: "Seu palpite" }).boundingBox(); return box!.y + box!.height; }).toBeLessThanOrEqual(500);
+    const shortGuesserBoard = (await c.locator(".draw-board").boundingBox())!;
+    expect(Math.abs(shortGuesserBoard.width / shortGuesserBoard.height - 4 / 3)).toBeLessThan(.03);
     await c.screenshot({ path: "test-results/g2-guesser-mobile.png" });
     expect(await c.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await c.setViewportSize({ width: 844, height: 390 });
     await c.getByRole("button", { name: "Tela cheia de Jogos", exact: true }).click();
-    const fullscreenComposer = c.locator(".game-fullscreen-composer");
+    const fullscreenComposer = c.locator(".draw-guess-composer");
     await expect(fullscreenComposer.getByRole("textbox", { name: "Seu palpite" })).toBeVisible();
     await expect.poll(async () => { const box = await fullscreenComposer.getByRole("textbox", { name: "Seu palpite" }).boundingBox(); return box!.y + box!.height; }).toBeLessThanOrEqual(390);
     await fullscreenComposer.getByRole("textbox", { name: "Seu palpite" }).fill(word); await fullscreenComposer.getByRole("button", { name: "Enviar palpite", exact: true }).click();
@@ -536,7 +537,7 @@ test("G2 three-user Draw Game: integrated chat, privacy, shortcuts, score, mobil
     await c.getByRole("button", { name: "Sair do jogo", exact: true }).click();
     await c.getByRole("textbox", { name: "Mensagem", exact: true }).fill("Observando e conversando");
     await c.getByRole("button", { name: "Enviar mensagem", exact: true }).click();
-    await expect(a.getByText("Observando e conversando", { exact: true })).toBeVisible();
+    await expect(a.locator(".draw-activity-feed")).toContainText("Observando e conversando");
     await expect(a.getByText("Partida concluída", { exact: true })).toBeVisible({ timeout: 10000 });
     await a.screenshot({ path: "test-results/g2-game-result.png" });
     expect(errors).toEqual([]);
@@ -601,7 +602,7 @@ test("G3 configurable target match: mobile roles preserve Chat, geometry, rotati
           drawerHeights[width] = db.height; guesserHeights[width] = gb.height;
           expect(db.height).toBeGreaterThan(gb.height * 1.08);
           expect(Math.abs(db.width / db.height - 4 / 3)).toBeLessThan(.02);
-          const messages = (await b.locator(".mobile-party-chat .messages").boundingBox())!;
+          const messages = (await b.locator(".draw-activity-feed").boundingBox())!;
           expect(messages.height).toBeGreaterThan(190);
           expect((await b.getByRole("textbox", { name: "Seu palpite" }).boundingBox())!.y + 44).toBeLessThanOrEqual(844);
           for (const page of [a, b]) expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
@@ -614,6 +615,8 @@ test("G3 configurable target match: mobile roles preserve Chat, geometry, rotati
         const shortGuesser = (await b.locator(".draw-board canvas").boundingBox())!;
         expect(shortDrawer.height).toBeGreaterThan(100);
         expect(shortGuesser.height).toBeGreaterThan(80);
+        const shortGuesserShell = (await b.locator(".draw-board").boundingBox())!;
+        expect(Math.abs(shortGuesserShell.width / shortGuesserShell.height - 4 / 3)).toBeLessThan(.03);
         expect((await b.getByRole("textbox", { name: "Seu palpite" }).boundingBox())!.y + 44).toBeLessThanOrEqual(568);
         for (const page of [a, b]) expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
         await a.screenshot({ path: "test-results/gx42-drawer-320x568.png" });
@@ -621,10 +624,12 @@ test("G3 configurable target match: mobile roles preserve Chat, geometry, rotati
         for (const page of [a, b]) await page.setViewportSize({ width: 390, height: 844 });
         await b.setViewportSize({ width: 390, height: 500 });
         await b.getByRole("textbox", { name: "Seu palpite" }).focus();
-        expect((await b.locator(".mobile-party-chat .messages").boundingBox())!.height).toBeGreaterThan(65);
+        expect((await b.locator(".draw-activity-feed").boundingBox())!.height).toBeGreaterThan(65);
         const composer = (await b.getByRole("textbox", { name: "Seu palpite" }).boundingBox())!; expect(composer.y + composer.height).toBeLessThanOrEqual(500);
         const shortBoard = (await b.locator(".draw-board canvas").boundingBox())!, shortStage = (await b.locator(".main-stage").boundingBox())!;
         expect(shortBoard.y + shortBoard.height).toBeLessThanOrEqual(shortStage.y + shortStage.height);
+        const shortBoardShell = (await b.locator(".draw-board").boundingBox())!;
+        expect(Math.abs(shortBoardShell.width / shortBoardShell.height - 4 / 3)).toBeLessThan(.03);
         await b.screenshot({ path: "test-results/g3-guesser-keyboard.png" }); await b.setViewportSize({ width: 390, height: 844 });
         await a.setViewportSize({ width: 844, height: 390 }); await a.getByRole("button", { name: "Tela cheia de Jogos", exact: true }).click();
         await a.screenshot({ path: "test-results/g3-drawer-landscape.png" });
@@ -632,17 +637,15 @@ test("G3 configurable target match: mobile roles preserve Chat, geometry, rotati
       }
       if (round === 2) {
         expect(await b.evaluate(() => (window as any).g3ChatNode === document.querySelector(".mobile-party-chat"))).toBe(true);
-        await c.getByRole("button", { name: "Conversar", exact: true }).click();
-        await c.getByRole("textbox", { name: "Mensagem", exact: true }).fill("mensagem recebida enquanto Bia desenha");
-        await c.getByRole("button", { name: "Enviar mensagem", exact: true }).click();
-        await c.getByRole("button", { name: "Palpitar", exact: true }).click();
+        await c.getByRole("textbox", { name: "Seu palpite", exact: true }).fill("mensagem recebida enquanto Bia desenha");
+        await c.getByRole("button", { name: "Enviar palpite", exact: true }).click();
       }
       for (const page of guessers) await send(page, word);
       await expect(drawer.locator(".draw-word")).toHaveText(`Era: ${word}`);
       if (round === 2) {
-        await expect(b.locator(".mobile-party-chat")).toBeVisible();
-        await expect(b.getByRole("textbox", { name: "Mensagem", exact: true })).toHaveValue("rascunho antes de desenhar G3");
-        await expect(b.getByText("mensagem recebida enquanto Bia desenha", { exact: true })).toBeVisible();
+        await expect(b.locator(".mobile-party-chat")).toBeHidden();
+        await expect(b.getByRole("textbox", { name: "Mensagem", exact: true })).toBeEmpty();
+        await expect(b.locator(".draw-activity-feed")).toContainText("mensagem recebida enquanto Bia desenha");
         expect(await b.evaluate(() => (window as any).g3ChatNode === document.querySelector(".mobile-party-chat"))).toBe(true);
         await b.screenshot({ path: "test-results/g3-round-result.png" });
       }
@@ -2037,7 +2040,7 @@ test("GX4.2.1 Draw visual stress fixture: 12 players, score extremes, critical t
     await open(mobile, "drawer");
     const wordBox = (await mobile.locator(".draw-word").boundingBox())!;
     const scoreBox = (await mobile.locator(".draw-score-toggle").boundingBox())!;
-    expect(wordBox.x + wordBox.width).toBeLessThanOrEqual(scoreBox.x);
+    expect(wordBox.y >= scoreBox.y + scoreBox.height || scoreBox.y >= wordBox.y + wordBox.height || wordBox.x + wordBox.width <= scoreBox.x || scoreBox.x + scoreBox.width <= wordBox.x).toBe(true);
     await mobile.screenshot({ path: "test-results/gx421-12-drawer-320x568.png" });
 
     const reduced = await browser.newPage({ viewport: { width: 390, height: 844 }, reducedMotion: "reduce" });

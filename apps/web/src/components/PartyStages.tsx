@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { MonitorUp, Radio, ScreenShare } from "lucide-react";
-import type { ScreenShareState } from "@lumio/shared";
+import type { ChatMessage, ScreenShareState } from "@lumio/shared";
 import { GameHub, type GameConnection } from "./GameHub";
 import { useFullscreenSurface } from "./useFullscreenSurface";
 
@@ -27,8 +27,8 @@ export function MediaExperienceStage({ media, screenShare, screenStream, view, o
   </section>;
 }
 
-export function GamesExperienceStage({ connection, chat, screenShare, screenStream, onFullscreenChange }: {
-  connection?: GameConnection; chat?: ReactNode; screenShare: ScreenShareState; screenStream: MediaStream | null;
+export function GamesExperienceStage({ connection, chat, messages, screenShare, screenStream, onFullscreenChange }: {
+  connection?: GameConnection; chat?: ReactNode; messages?: ChatMessage[]; screenShare: ScreenShareState; screenStream: MediaStream | null;
   onFullscreenChange: (active: boolean) => void;
 }) {
   const stageRef = useRef<HTMLElement>(null);
@@ -50,7 +50,7 @@ export function GamesExperienceStage({ connection, chat, screenShare, screenStre
   }, [gameFullscreen, screenVisible]);
   return <section ref={stageRef} className={`main-stage is-game games-experience ${fallbackFullscreen ? "game-fallback-fullscreen" : ""}`} data-view="game" aria-label="Palco de jogos">
     {screenShare ? <div className="stage-switcher" role="group" aria-label="Escolher visualização"><button className={screenVisible ? "active" : ""} onClick={() => setScreenVisible(true)}><ScreenShare size={16} aria-hidden="true" /> Tela compartilhada</button><button className={!screenVisible ? "active" : ""} onClick={() => setScreenVisible(false)}>Jogos</button></div> : null}
-    {screenShare && screenVisible ? <div className="stage-layer active games-screen-layer"><SharedScreen state={screenShare} stream={screenStream} /></div> : <div className="stage-layer game-layer"><GameHub connection={connection} onFullscreen={toggleFullscreen} fullscreen={gameFullscreen} fullscreenChat={gameFullscreen ? chat : null} /></div>}
+    {screenShare && screenVisible ? <div className="stage-layer active games-screen-layer"><SharedScreen state={screenShare} stream={screenStream} /></div> : <div className="stage-layer game-layer"><GameHub connection={connection} onFullscreen={toggleFullscreen} fullscreen={gameFullscreen} fullscreenChat={chat} messages={messages} /></div>}
     {fullscreenError ? <p className="fullscreen-error" role="alert">{fullscreenError}</p> : null}
     {fallbackFullscreen ? <span className="fullscreen-fallback-note">Tela ampliada — tela cheia nativa indisponível neste navegador</span> : null}
     {gameFullscreen ? <span className="fullscreen-rotate-hint">Gire o celular para jogar em paisagem</span> : null}

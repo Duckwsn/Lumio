@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { GameAction, User } from "@lumio/shared";
-import { DrawGameRuntime, normalizeGuess } from "./drawGame.js";
+import { DrawGameRuntime, isNearGuess, normalizeGuess } from "./drawGame.js";
 
 const users: User[] = ["Ana", "Bia", "Caio", "Observador"].map((displayName, index) => ({ id: String(index), displayName, color: "#69a982" }));
 function fixture(count = 3, drawDuration = 1000) {
@@ -17,6 +17,29 @@ function fixture(count = 3, drawDuration = 1000) {
   return { runtime, snap, act, advance: (ms: number, tick = true) => { now += ms; if (tick) runtime.tick(); }, deltas: () => deltas, snapshots: () => snapshots };
 }
 const stroke = (id = "stroke") => ({ strokeId: id, offset: 0, tool: "brush", color: "#26332c", width: .012, points: [{ x: .1, y: .2 }, { x: .5, y: .7 }] });
+
+test("near guesses acknowledge a single typo privately without revealing the answer", () => {
+  assert.equal(isNearGuess("coracaoo", "coração"), true);
+  assert.equal(isNearGuess("coraçao", "coração"), false, "normalized exact answers are not near guesses");
+  assert.equal(isNearGuess("dinossaro", "dinossauro"), true);
+  assert.equal(isNearGuess("dinossauro", "dinossauro"), false);
+  assert.equal(isNearGuess("qualquer coisa", "dinossauro"), false);
+  assert.equal(isNearGuess("sal", "sol"), false, "short words do not expose one-letter hints");
+  const f = fixture(); f.act(0, "start");
+  const choice = f.snap().choices!.findIndex((word) => normalizeGuess(word).length >= 5);
+  assert.ok(choice >= 0);
+  f.act(0, "choose", { option: choice });
+  const answer = f.snap().secretWord!, typo = `${normalizeGuess(answer).slice(0, -1)}x`;
+  const ack = f.act(1, "guess", { text: typo });
+  assert.equal(ack.ok, true); assert.equal(ack.message, "Quase! Seu palpite está próximo.");
+  assert.ok(f.snap(2).feed.at(-1)?.text.includes(typo));
+  assert.equal(f.snap(2).players[1].guessed, false);
+  assert.equal(f.snap(2).secretWord, undefined);
+  assert.ok(!JSON.stringify(f.snap(2)).includes(answer));
+  const appended = f.act(1, "guess", { text: `${answer}x` });
+  assert.equal(appended.message, "Quase! Seu palpite está próximo.");
+  assert.equal(f.snap(2).feed.at(-1)?.text, "Bia enviou um palpite.", "A resposta incluída em texto maior não pode chegar ao feed público");
+});
 
 test("session, explicit participation, host, minimum, stable order and leave", () => {
   const f = fixture(1);

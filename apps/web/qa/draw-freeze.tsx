@@ -2,7 +2,7 @@
 import { useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import type { Socket } from "socket.io-client";
-import type { ClientToServerEvents, DrawSnapshot, GameAck, ServerToClientEvents } from "@lumio/shared";
+import type { ChatMessage, ClientToServerEvents, DrawSnapshot, GameAck, ServerToClientEvents } from "@lumio/shared";
 import { DrawGame } from "../src/games/DrawGame";
 import "../src/styles.css";
 import "../src/games/gameDesignSystem.css";
@@ -31,7 +31,7 @@ const snapshot: DrawSnapshot & { gameType: "draw" } = {
   winnerIds: [players[5].id], resultReason: "target", nextDrawerId: players[1].id,
   startedAt: now - 75_000, endsAt: now + seconds * 1000, serverNow: now,
   maskedWord: "__________", revealedWord: phase === "ROUND_RESULT" ? "dinossauro" : undefined,
-  strokes: [], feed: [], roundPoints: { [players[0].id]: 6, [players[1].id]: 9 },
+  strokes: [], feed: [{ id: 7, text: "Bia: dinossaro", createdAt: now - 5000 }, { id: 8, text: "Eva acertou!", createdAt: now - 2000 }], roundPoints: { [players[0].id]: 6, [players[1].id]: 9 },
   ...(role === "drawer" ? { secretWord: "dinossauro", choices: ["dinossauro", "borboleta", "pinguim"] } : {}),
 };
 
@@ -57,6 +57,7 @@ class FixtureSocket {
   }
 }
 const fixtureSocket = new FixtureSocket();
+const fixtureMessages: ChatMessage[] = [{ id: "qa-chat", roomId: "qa-room", user: { id: players[2].id, displayName: "Bia", color: players[2].color }, body: "Que desenho bonito!", createdAt: new Date(now - 3500).toISOString() }];
 
 function Fixture() {
   useEffect(() => {
@@ -69,11 +70,11 @@ function Fixture() {
           <div className="main-stage is-game">
             <section className="game-hub" aria-label="Jogos da Party">
               <header className="game-stage-nav"><span>Jogos / Desenhe e Adivinhe</span></header>
-              <DrawGame socket={fixtureSocket as unknown as Socket<ServerToClientEvents, ClientToServerEvents>} roomId="qa-room" userId={players[role === "drawer" ? 0 : 2].id} />
+              <DrawGame socket={fixtureSocket as unknown as Socket<ServerToClientEvents, ClientToServerEvents>} roomId="qa-room" userId={players[role === "drawer" ? 0 : 2].id} messages={fixtureMessages}><div className="party-composer"><form className="chat-form" onSubmit={(event) => event.preventDefault()}><input aria-label={role === "drawer" ? "Mensagem" : "Seu palpite"} placeholder="Mensagem ou palpite" /><button type="submit">Enviar</button></form></div></DrawGame>
             </section>
           </div>
         </section>
-        {role === "guesser" && phase !== "GAME_RESULT" ? <section className="mobile-party-chat" aria-label="Chat da Party"><header className="mobile-chat-heading"><strong>Palpite e Chat</strong></header><div className="mobile-chat-body"><div className="messages"><p>Bia acertou ✓</p></div><label>Seu palpite<input aria-label="Seu palpite" placeholder="Digite seu palpite" /></label></div></section> : null}
+        {role === "guesser" && phase !== "GAME_RESULT" ? <section className="mobile-party-chat" aria-label="Chat da Party"><header className="mobile-chat-heading"><strong>Chat da Party</strong></header><div className="mobile-chat-body"><div className="messages"><p>Bia acertou ✓</p></div></div></section> : null}
       </div>
     </main>
   </div>;
