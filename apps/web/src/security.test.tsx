@@ -64,6 +64,14 @@ test("S1 Home distinguishes Party occupancy, online members and escaped activity
   const idle = renderToStaticMarkup(createElement(HomePage, { ...props, houses: [{ ...house, partyCount: 0 }] })); assert.match(idle, /Abrir Party/); assert.doesNotMatch(idle, /Partida de Quiz ativa/);
   const empty = renderToStaticMarkup(createElement(HomePage, { ...props, houses: [], error: "Falhou" })); assert.match(empty, /Tentar novamente/); assert.doesNotMatch(empty, /Crie uma Casa ou entre/);
   const stale = renderToStaticMarkup(createElement(HomePage, { ...props, houses: [house], connected: false })); assert.match(stale, /último estado recebido/);
+  const noHouses = renderToStaticMarkup(createElement(HomePage, { ...props, houses: [] }));
+  assert.match(noHouses, /Criar Casa/); assert.doesNotMatch(noHouses, /house-featured/);
+  assert.equal((html.match(/house-featured/g) ?? []).length, 1);
+  const three = renderToStaticMarkup(createElement(HomePage, { ...props, houses: [house, { ...house, id: "y", name: "Casa Y" }, { ...house, id: "z", name: "Casa Z" }] }));
+  assert.equal((three.match(/house-featured/g) ?? []).length, 1);
+  assert.equal((three.match(/house-secondary/g) ?? []).length, 2);
+  const many = renderToStaticMarkup(createElement(HomePage, { ...props, houses: Array.from({ length: 9 }, (_, index) => ({ ...house, id: `house-${index}` })) }));
+  assert.equal((many.match(/house-secondary/g) ?? []).length, 8);
 });
   test("Game Hub shows three real games with original vector identity and concise accessible copy", () => {
   const html = renderToStaticMarkup(createElement(GameHub, { onFullscreen: () => undefined, fullscreen: false }));

@@ -40,7 +40,10 @@ test("S1 Houses: Home observes two Party browsers, three games, six widths, deta
     const { invite } = await (await request.post(`${api}/api/houses/${house.id}/invites`, { headers, data: { expiresInHours: 1, maxUses: 4 } })).json();
     await home.getByRole("button", { name: "Entrar com convite" }).click(); await home.getByLabel("Link ou código").fill(invite.code); await home.getByRole("button", { name: "Abrir convite" }).click();
     await home.getByRole("button", { name: "Entrar na Casa", exact: true }).click(); await expect(home).toHaveURL(/\/house\//);
-    await home.goto(`${origin}/app`); await expect(home.locator(".house-card-v2")).toHaveCount(1); await expect(home.locator(".house-party-summary")).toContainText("Ninguém na Party agora");
+    await home.getByRole("button", { name: "Abrir menu da Casa e Party" }).click();
+    await home.getByRole("button", { name: "Sair da Party", exact: true }).click();
+    await expect(home).toHaveURL(/\/app$/);
+    await expect(home.locator(".house-card-v2")).toHaveCount(1); await expect(home.locator(".house-party-summary")).toContainText("Ninguém na Party agora", { timeout: 12000 });
     await home.screenshot({ path: "artifacts/s1/s1-house-idle.png" });
     await request.post(`${api}/api/invites/${invite.code}/accept`, { headers: { Authorization: `Bearer ${sessions[1].token}` } });
     await Promise.all([a.goto(`${origin}/house/${house.id}`), b.goto(`${origin}/house/${house.id}`)]);
@@ -86,6 +89,13 @@ test("S1 Houses: Home observes two Party browsers, three games, six widths, deta
     const { invite: secondInvite } = await (await request.post(`${api}/api/houses/${second.id}/invites`, { headers, data: { expiresInHours: 1, maxUses: 2 } })).json();
     await request.post(`${api}/api/invites/${secondInvite.code}/accept`, { headers: { Authorization: `Bearer ${sessions[2].token}` } }); await expect(home.locator(".house-card-v2")).toHaveCount(2);
     await home.setViewportSize({ width: 1440, height: 900 }); await home.screenshot({ path: "artifacts/s1/s1-house-multiple.png" });
+    for (let index = 0; index < 7; index++) await request.post(`${api}/api/houses`, { headers: { Authorization: `Bearer ${sessions[2].token}` }, data: { name: `Outra Casa de QA ${index + 1}` } });
+    await home.reload(); await expect(home.locator(".house-card-v2")).toHaveCount(9);
+    await expect(home.locator(".house-featured")).toHaveCount(1);
+    await expect(home.locator(".house-secondary")).toHaveCount(8);
+    await home.setViewportSize({ width: 320, height: 568 });
+    expect(await home.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await home.screenshot({ path: "artifacts/s1/s1-house-nine-mobile.png", fullPage: true });
     await contexts[0].close(); await expect(home.locator(".house-card-v2").first()).toContainText("1 pessoa na Party", { timeout: 10000 });
     await contexts[1].close(); await expect(home.locator(".house-card-v2").first()).toContainText("Ninguém na Party agora", { timeout: 10000 });
     await home.locator(".house-card-v2").first().getByRole("button", { name: /Abrir Party/ }).click(); await expect(home).toHaveURL(new RegExp(`/house/${house.id}/media$`));
@@ -164,7 +174,8 @@ test("G5 three authenticated browsers: private cards, full match, six widths, wi
       if ([320, 390, 430].includes(width)) await a.screenshot({ path: `test-results/g6-cards-table-${width}.png` });
     }
     await a.setViewportSize({ width: 390, height: 844 });
-    for (const name of ["Pessoas da Party", "Fila da Party"]) { await a.getByRole("button", { name, exact: true }).tap(); await expect(a.locator(".party-drawer")).toBeVisible(); await a.getByRole("button", { name: "Recolher painel da Party", exact: true }).tap(); await expect(a.locator(".party-drawer")).toHaveCount(0); expect(await tableNode!.evaluate((node) => node === document.querySelector(".card-game"))).toBe(true); }
+    await expect(a.getByRole("button", { name: "Fila da Party", exact: true })).toHaveCount(0);
+    await a.getByRole("button", { name: "Pessoas da Party", exact: true }).tap(); await expect(a.locator(".party-drawer")).toBeVisible(); await a.getByRole("button", { name: "Recolher painel da Party", exact: true }).tap(); await expect(a.locator(".party-drawer")).toHaveCount(0); expect(await tableNode!.evaluate((node) => node === document.querySelector(".card-game"))).toBe(true);
     const play = async (page: typeof a, label: string) => {
       const card = page.getByRole("button", { name: label, exact: true }); await expect(card).toBeEnabled();
       if (page === b) await card.click(); else await card.tap(); await expect(card).toHaveAttribute("aria-pressed", "true");
@@ -247,7 +258,8 @@ test("G4 three authenticated clients: safe Quiz, lock/reconnect, navigation, six
     await expect(b.getByLabel("Categoria")).toBeDisabled();
     await a.screenshot({ path: "test-results/g4-lobby-mobile.png" }); await b.screenshot({ path: "test-results/g6-quiz-lobby.png" });
     const quizNode = await a.locator(".quiz-game").elementHandle();
-    for (const name of ["Pessoas da Party", "Fila da Party"]) { await a.getByRole("button", { name, exact: true }).click(); await expect(a.locator(".party-drawer")).toBeVisible(); await a.getByRole("button", { name: "Recolher painel da Party", exact: true }).click(); await expect(a.locator(".party-drawer")).toHaveCount(0); expect(await quizNode!.evaluate((node) => node === document.querySelector(".quiz-game"))).toBe(true); }
+    await expect(a.getByRole("button", { name: "Fila da Party", exact: true })).toHaveCount(0);
+    await a.getByRole("button", { name: "Pessoas da Party", exact: true }).click(); await expect(a.locator(".party-drawer")).toBeVisible(); await a.getByRole("button", { name: "Recolher painel da Party", exact: true }).click(); await expect(a.locator(".party-drawer")).toHaveCount(0); expect(await quizNode!.evaluate((node) => node === document.querySelector(".quiz-game"))).toBe(true);
     const chatNode = await a.locator(".mobile-party-chat").elementHandle();
     await a.locator(".mobile-party-chat").getByRole("textbox").fill("rascunho Quiz G4");
     await a.getByRole("button", { name: "Iniciar partida", exact: true }).click();
@@ -1127,12 +1139,11 @@ test("mobile permanent chat, gesture, secondary tools, late join and player idle
       await expect(page.getByRole("textbox", { name: "Mensagem" })).toBeVisible();
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth && document.documentElement.scrollHeight <= innerHeight)).toBe(true);
       await expect(page.locator("iframe.provider-player, video.provider-player, .lumio-player")).toHaveCount(0);
-      for (const name of ["Pessoas da Party", "Fila da Party"]) {
-        await page.getByRole("button", { name, exact: true }).tap();
-        await expect(page.getByRole("button", { name: "Recolher painel da Party" })).toBeVisible();
-        await page.getByRole("button", { name: "Fechar painel", exact: true }).tap();
-        await expect(page.locator(".main-stage")).toHaveAttribute("data-view", "game");
-      }
+      await expect(page.getByRole("button", { name: "Fila da Party", exact: true })).toHaveCount(0);
+      await page.getByRole("button", { name: "Pessoas da Party", exact: true }).tap();
+      await expect(page.getByRole("button", { name: "Recolher painel da Party" })).toBeVisible();
+      await page.getByRole("button", { name: "Fechar painel", exact: true }).tap();
+      await expect(page.locator(".main-stage")).toHaveAttribute("data-view", "game");
     }
     await page.setViewportSize({ width: 390, height: 844 });
     await page.screenshot({ path: "test-results/g0-mobile-games.png" });
@@ -1833,6 +1844,10 @@ test("GX2 Party transport, Call peers and tracks keep identity across visual chi
         const page = step % 2 ? b : a;
         await page.getByRole("button", { name: "Jogos", exact: true }).click();
         await expect(page.locator(".main-stage")).toHaveAttribute("data-view", "game");
+        await expect(page.locator(".now-playing")).toHaveCount(0);
+        await expect(page.getByLabel("Controles da Party").getByRole("button", { name: "Adicionar mídia" })).toHaveCount(0);
+        await expect(page.getByLabel("Controles da Party").getByRole("button", { name: /Abrir fila/ })).toHaveCount(0);
+        await expect(page.locator(".party-experience-nav [aria-current=page]")).toHaveText("Jogos");
         await page.getByRole("button", { name: "Assistir/Ouvir", exact: true }).click();
       }
       for (const page of [a, b]) expect(await page.evaluate(() => {
