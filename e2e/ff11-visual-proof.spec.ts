@@ -11,6 +11,7 @@ import { pathToFileURL } from "node:url";
 
 const root = path.resolve(__dirname, "..");
 const shots = path.join(root, "artifacts", "frontfix", "ff11", "current");
+const ff3Shots = path.join(root, "artifacts", "frontfix", "ff3", "pass2");
 const freePort = () => new Promise<number>((resolve, reject) => {
   const socket = net.createServer();
   socket.once("error", reject);
@@ -46,6 +47,7 @@ test.beforeAll(async () => {
   });
   await waitFor(origin);
   fs.mkdirSync(shots, { recursive: true });
+  fs.mkdirSync(ff3Shots, { recursive: true });
 });
 test.afterAll(async () => {
   server?.kill(); web?.kill();
@@ -107,7 +109,8 @@ test("FF1.1 current authenticated surfaces", async ({ browser, request }) => {
     await capture(a, "media-chat", 1440, 900);
     await a.getByRole("button", { name: /Abrir pessoas/ }).click();
     await capture(a, "media-people", 1440, 900);
-    await a.getByRole("button", { name: "Configurações de áudio" }).click();
+    await a.getByRole("button", { name: "Abrir controles da Party" }).click();
+    await a.getByRole("button", { name: "Call e dispositivos" }).click();
     await expect(a.getByRole("dialog")).toBeVisible();
     await capture(a, "call-controls", 1440, 900);
     await a.keyboard.press("Escape");
@@ -131,7 +134,9 @@ test("FF1.1 current authenticated surfaces", async ({ browser, request }) => {
     await capture(a, "media-active", 390, 844);
     await capture(a, "media-active", 844, 390);
     await a.setViewportSize({ width: 1440, height: 900 });
-    await a.getByRole("button", { name: "Entrar no Ambiente" }).click();
+    await a.getByRole("button", { name: "Abrir menu da Casa e Party" }).click();
+    await a.getByRole("button", { name: "Visualização: Vídeo" }).click();
+    await a.getByRole("button", { name: "Abrir menu da Casa e Party" }).click();
     await capture(a, "media-ambient", 1440, 900);
     await capture(a, "media-ambient", 390, 844);
     socket.disconnect();
@@ -143,6 +148,11 @@ test("FF1.1 current authenticated surfaces", async ({ browser, request }) => {
     }
     await capture(a, "games-hub", 1440, 900); await capture(a, "games-hub", 390, 844);
     await capture(a, "games-hub", 320, 568);
+    await a.setViewportSize({ width: 1440, height: 900 });
+    await a.getByRole("button", { name: "Abrir chat", exact: true }).click();
+    await expect(a.locator(".party-drawer.is-chat")).toBeVisible();
+    await a.screenshot({ path: path.join(ff3Shots, "games-chat-desktop.png") });
+    await a.getByRole("button", { name: "Fechar painel", exact: true }).click();
 
     for (const page of [a, b]) {
       await page.setViewportSize({ width: 1440, height: 900 });
@@ -162,6 +172,11 @@ test("FF1.1 current authenticated surfaces", async ({ browser, request }) => {
     await capture(a, "draw-drawer", 320, 568);
     await capture(a, "draw-drawer", 844, 390);
     await capture(b, "draw-guesser", 390, 844);
+    await b.getByRole("button", { name: "Abrir chat", exact: true }).click();
+    await expect(b.locator(".mobile-party-chat")).toBeVisible();
+    await expect(b.locator(".mobile-party-chat").getByRole("textbox", { name: "Seu palpite" })).toBeVisible();
+    await b.screenshot({ path: path.join(ff3Shots, "draw-chat-390.png") });
+    await b.getByRole("button", { name: "Fechar chat", exact: true }).click();
     await capture(b, "draw-guesser", 320, 568);
     await a.setViewportSize({ width: 1440, height: 900 });
     await b.setViewportSize({ width: 1440, height: 900 });

@@ -1,7 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import {
   Activity, Gamepad2, ChevronDown, ChevronUp, Headphones, History, Library, ListVideo, LogOut, Play,
-  Maximize2, MessageCircle, Mic, MicOff, Plus, Send, Settings, Share2, SkipBack, SkipForward,
+  Maximize2, Mic, MicOff, Plus, Send, Settings, Share2, SkipBack, SkipForward,
   SlidersHorizontal, Sparkles, Trash2, Users, Volume2, X, MonitorUp, ScreenShareOff,
 } from "lucide-react";
 import { io, type Socket } from "socket.io-client";
@@ -29,6 +29,7 @@ import { publishMicrophone } from "./rtc/microphone";
 import { summarizeRtcStats } from "./rtc/diagnostics";
 import { HouseSettingsDialog, InviteDialog, ProfileDialog } from "./components/SocialDialogs";
 import { MobilePartyChat, useMobileParty } from "./components/MobilePartyChat";
+import { PartySocialControls } from "./components/PartySocialControls";
 import { MobileSheetHandle } from "./components/MobileBottomSheet";
 import { Avatar } from "./components/Avatar";
 import { ConfirmDialog } from "./components/ConfirmDialog";
@@ -124,6 +125,7 @@ export function App() {
   const [showInvite, setShowInvite] = useState(false);
   const [showProfile, setShowProfile] = useState(false);
   const [rightPanelCollapsed, setRightPanelCollapsed] = useState(true);
+  const [mobileChatOpen, setMobileChatOpen] = useState(false);
   useEffect(() => { if (mobileParty && activePanel === "chat") setRightPanelCollapsed(true); }, [mobileParty, activePanel]);
   const [theaterMode, setTheaterMode] = useState(false);
   const [playerFullscreen, setPlayerFullscreen] = useState(false);
@@ -141,6 +143,8 @@ export function App() {
   const profileMenuAnchor = useRef<HTMLDivElement>(null);
   const mainMenuTrigger = useRef<HTMLButtonElement>(null);
   const profileMenuTrigger = useRef<HTMLButtonElement>(null);
+  const socialPartyTrigger = useRef<HTMLButtonElement>(null);
+  const socialChatTrigger = useRef<HTMLButtonElement>(null);
   const partyNoticeTimer = useRef<number>();
   const offlineTimer = useRef<number>();
   const hadSnapshot = useRef(false);
@@ -181,8 +185,9 @@ export function App() {
   }, [session?.token]);
   useEffect(() => { if (authStatus === "unknown") void bootstrap(); }, [authStatus, bootstrap]);
 
-  drawerStateRef.current = { open: !rightPanelCollapsed, panel: activePanel };
+  drawerStateRef.current = { open: mobileChatOpen || !rightPanelCollapsed, panel: mobileChatOpen ? "chat" : activePanel };
   useEffect(() => { if (!rightPanelCollapsed && activePanel === "chat") setUnreadChat(0); }, [rightPanelCollapsed, activePanel]);
+  useEffect(() => { if (mobileChatOpen) setUnreadChat(0); }, [mobileChatOpen]);
   const notifyParty = useCallback((message: string, tone: "info" | "success" | "error" = "info") => {
     window.clearTimeout(partyNoticeTimer.current);
     setPartyNotice({ message, tone });
@@ -628,7 +633,7 @@ export function App() {
       track.addEventListener("ended", () => { if (localStream.current !== stream || !callActiveRef.current) return; analyserCleanup.current?.(); analyserCleanup.current = null; localStream.current = null; mutedRef.current = true; setMuted(true); setMicEnabled(false); setSpeaking(false); setVoiceError("Microfone desconectado. Toque em Ativar microfone para tentar novamente."); socket.emit(eventNames.presenceUpdate, { roomId: snapshot.id, speaking: false, muted: true, deafened: deafenedRef.current }); }, { once: true });
       socket.emit(eventNames.presenceUpdate, { roomId: snapshot.id, speaking: false, muted: shouldMute, deafened: deafenedRef.current });
       void navigator.mediaDevices.enumerateDevices().then((devices) => setAudioDevices(devices.filter((device) => device.kind === "audioinput" || device.kind === "audiooutput")));
-    } catch { acquired?.getTracks().forEach((track) => track.stop()); if (generation === callGeneration.current) setVoiceError("Microfone indisponível. Você continua na call para ouvir; revise a permissão ou o dispositivo."); }
+    } catch (error) { acquired?.getTracks().forEach((track) => track.stop()); if (generation === callGeneration.current) setVoiceError(error instanceof DOMException && ["NotAllowedError", "PermissionDeniedError"].includes(error.name) ? "Microfone bloqueado. Você continua ouvindo; libere a permissão no navegador e tente novamente." : "Microfone indisponível. Você continua na call para ouvir; revise a permissão ou o dispositivo."); }
     finally { if (generation === callGeneration.current) micRequestInFlight.current = false; }
   };
   joinCallRef.current = joinCall;
@@ -798,12 +803,14 @@ export function App() {
   const leaveParty = () => {
     if (callActiveRef.current || displayStream.current) leaveCall();
     setShowMainMenu(false); setShowProfileMenu(false); setShowMediaHub(false); setShowHouseSettings(false); setShowInvite(false); setShowProfile(false); setShowCallSettings(false);
-    setConfirmClearQueue(false); setPendingQueueRemoval(null); setRightPanelCollapsed(true); setPartyNotice(null); setTypingUserIds([]); setUnreadChat(0);
+    setConfirmClearQueue(false); setPendingQueueRemoval(null); setRightPanelCollapsed(true); setMobileChatOpen(false); setPartyNotice(null); setTypingUserIds([]); setUnreadChat(0);
     localStorage.removeItem(HOUSE_KEY);
     navigate("/app");
   };
-  const openDrawer = (panel: "chat" | "members" | "queue") => { if (document.activeElement instanceof HTMLElement) drawerReturnFocus.current = document.activeElement; setActivePanel(panel); setRightPanelCollapsed(false); if (panel === "chat") setUnreadChat(0); };
+  const openDrawer = (panel: "chat" | "members" | "queue") => { if (mobileParty && mobileChatOpen) drawerReturnFocus.current = socialChatTrigger.current; else if (document.activeElement instanceof HTMLElement) drawerReturnFocus.current = document.activeElement; setMobileChatOpen(false); setActivePanel(panel); setRightPanelCollapsed(false); if (panel === "chat") setUnreadChat(0); };
   const closeDrawer = () => { setRightPanelCollapsed(true); requestAnimationFrame(() => drawerReturnFocus.current?.focus()); };
+  const closeMobileChat = () => { setMobileChatOpen(false); requestAnimationFrame(() => socialChatTrigger.current?.focus()); };
+  const toggleChat = () => { if (mobileParty) { if (mobileChatOpen) closeMobileChat(); else { setRightPanelCollapsed(true); setMobileChatOpen(true); setUnreadChat(0); } } else if (!rightPanelCollapsed && activePanel === "chat") closeDrawer(); else openDrawer("chat"); };
   const micLabel = !micEnabled || muted ? "Ativar microfone" : "Desativar microfone";
   const syncLabel = connectionState === "connected" ? "Sincronizado com a Party" : connectionState === "connecting" ? "Entrando na Party" : connectionState === "reconnecting" ? "Reconectando à Party" : "Sem conexão com a Party";
   const visiblePanel = partyExperience === "games" && activePanel === "queue" ? "chat" : activePanel;
@@ -830,6 +837,8 @@ export function App() {
           {partyExperience === "media" ? <MediaExperienceStage screenShare={snapshot.screenShare} screenStream={isSharingScreen ? localScreenStream : remoteScreenStream} view={stageView} onViewChange={setStageView} media={<MediaStage shortcutsEnabled={stageView === "media"} media={snapshot.currentMedia} roomId={snapshot.id} onSkip={nextMedia} onRemove={() => { if (currentQueueItem) setPendingQueueRemoval(currentQueueItem); }} onAddMedia={() => setShowMediaHub(true)} onPlaybackCommand={sendPlaybackCommand} onEnded={handleProviderEnded} apiUrl={API_URL} token={session.token} theater={theaterMode} onTheaterChange={setTheaterMode} ambient={ambientMode} musicView={presentationMode === "music"} onMusicViewChange={(active) => setPresentationMode(active ? "music" : "video")} onFullscreenChange={setPlayerFullscreen} volume={audioSettings.mediaVolume} effectiveVolume={mediaVolume} onVolumeChange={(value) => setAudioSettings((current) => ({ ...current, mediaVolume: value }))} resyncToken={playerResyncToken} />} /> : <GamesExperienceStage connection={socket ? { socket, roomId: snapshot.id, userId: session.user.id } : undefined} messages={snapshot.messages} chat={<PartyComposer onSend={sendChat} onTyping={(typing) => socket?.emit(eventNames.chatTyping, { roomId: snapshot.id, typing })} />} screenShare={snapshot.screenShare} screenStream={isSharingScreen ? localScreenStream : remoteScreenStream} onFullscreenChange={setGameFullscreen} />}
           {theaterMode ? <div className="theater-members" aria-label="Participantes">{snapshot.members.slice(0, 6).map((member) => <span key={member.user.id} className={member.speaking ? "speaking" : ""} title={member.user.displayName} style={{ background: member.user.color }}>{avatarLetters(member.user.displayName)}</span>)}</div> : null}
 
+          {partyExperience === "media" ? <div className="media-session-actions" role="group" aria-label="Ações de mídia"><button type="button" onClick={() => openDrawer("queue")} aria-label={`Fila da Party, ${snapshot.queue.length} itens`}><ListVideo size={17} /> Fila{snapshot.queue.length ? ` · ${snapshot.queue.length}` : ""}</button>{snapshot.currentMedia.mediaId ? <button type="button" onClick={() => setShowMediaHub(true)}><Plus size={17} /> Adicionar mídia</button> : null}</div> : null}
+
           {partyExperience === "media" ? <section className="now-playing" aria-labelledby="now-playing-title">
             <div className="now-playing-main"><span className="provider-badge">{providerLabel(snapshot.currentMedia.provider)}</span><div><p>Tocando agora</p><h2 id="now-playing-title">{snapshot.currentMedia.mediaId ? snapshot.currentMedia.title : "A Party está pronta"}</h2><span>{currentQueueItem ? `Adicionado por ${currentQueueItem.addedBy.displayName}` : "Escolha algo no Media Hub"}</span></div></div>
             {snapshot.currentMedia.mediaId ? <div className="party-media-actions">{currentQueueItem && house?.permissions.includes("LIBRARY_MANAGE") && (currentQueueItem.provider === "youtube" || currentQueueItem.provider === "google-drive") ? <NowPlayingFavorite key={`${snapshot.id}:${currentQueueItem.provider}:${currentQueueItem.providerMediaId}`} apiUrl={API_URL} token={session.token} roomId={snapshot.id} item={currentQueueItem} revision={mediaHubRevision} onError={notifyLibraryError} /> : null}{snapshot.settings.skipVotingEnabled ? <button className="skip-vote-action" onClick={voteToSkip} aria-label="Votar para pular" data-tooltip="Votar para pular"><SkipForward size={18} aria-hidden="true" /><span>{snapshot.skipVote.count}/{snapshot.skipVote.required}</span></button> : null}</div> : null}
@@ -837,7 +846,7 @@ export function App() {
         </section>
 
         {!rightPanelCollapsed && (!mobileParty || activePanel !== "chat") ? <aside className={`party-drawer ${visiblePanel === "chat" ? "is-chat" : ""}`} aria-label="Painel da Party">{mobileParty ? <MobileSheetHandle onClose={closeDrawer} /> : null}<div className="drawer-header"><div className="drawer-tabs" role="tablist" aria-label="Conteúdo da Party">{!mobileParty ? <button className={visiblePanel === "chat" ? "active" : ""} onClick={() => setActivePanel("chat")} role="tab" aria-selected={visiblePanel === "chat"}>Chat</button> : null}<button className={visiblePanel === "members" ? "active" : ""} onClick={() => setActivePanel("members")} role="tab" aria-selected={visiblePanel === "members"}>Pessoas</button>{partyExperience === "media" ? <button className={visiblePanel === "queue" ? "active" : ""} onClick={() => setActivePanel("queue")} role="tab" aria-selected={visiblePanel === "queue"}>Fila</button> : null}</div><button className="icon-button" onClick={closeDrawer} aria-label="Fechar painel" data-tooltip="Fechar"><X size={18} /></button></div>{visiblePanel === "chat" ? <ChatPanel messages={snapshot.messages} currentUser={session.user} typingNames={(house?.members ?? []).filter((member) => typingUserIds.includes(member.user.id)).map((member) => member.user.displayName)} onTyping={(typing) => socket?.emit(eventNames.chatTyping, { roomId: snapshot.id, typing })} onSend={sendChat} /> : visiblePanel === "members" ? <MembersPanel voiceMembers={snapshot.members} members={house?.members ?? snapshot.houseMembers ?? []} currentUserId={session.user.id} participantVolumes={participantVolumes} onVolume={(userId, volume) => setParticipantVolumes((current) => ({ ...current, [userId]: volume }))} /> : <div className="drawer-queue"><div className="drawer-section-title"><div><strong>Fila da Party</strong><span>{snapshot.queue.length} {snapshot.queue.length === 1 ? "item" : "itens"} · rev. {snapshot.queueRevision}</span></div><div className="drawer-title-actions"><button className={showHistory ? "active" : ""} onClick={() => setShowHistory((value) => !value)} aria-label="Alternar histórico" data-tooltip="Histórico"><History size={17} /></button>{house?.permissions.includes("QUEUE_MANAGE") && snapshot.queue.length > 1 ? <button onClick={() => setConfirmClearQueue(true)} aria-label="Limpar fila" data-tooltip="Limpar fila"><Trash2 size={16} /></button> : null}</div></div>{showHistory ? <HistoryList history={snapshot.history} /> : null}<QueueList queue={snapshot.queue} currentState={snapshot.currentMedia.state} autoplay={snapshot.settings.autoplayNext} canControl={canControlMedia} canAdd={canAddMedia} historyCount={snapshot.history.length} onPlay={async (item) => { if (!socket?.connected) throw new Error("Sem conexão com a Party."); openMediaForPlayback(); const result = await socket.timeout(10_000).emitWithAck(eventNames.mediaChange, { roomId: snapshot.id, item, revision: snapshot.queueRevision }); if (!result.ok) throw new Error(result.message ?? "Não foi possível reproduzir."); }} onRemove={setPendingQueueRemoval} onMove={moveQueueItem} onNext={nextMedia} onPrevious={previousMedia} onAdd={() => setShowMediaHub(true)} /></div>}</aside> : null}
-        {mobileParty ? <MobilePartyChat key={snapshot.id} userId={session.user.id} hidden={playerFullscreen || gameFullscreen} showMediaActions={partyExperience === "media"} onPeople={() => openDrawer("members")} onQueue={() => openDrawer("queue")} onAdd={() => setShowMediaHub(true)}><ChatPanel messages={snapshot.messages} currentUser={session.user} typingNames={(house?.members ?? []).filter((member) => typingUserIds.includes(member.user.id)).map((member) => member.user.displayName)} onTyping={(typing) => socket?.emit(eventNames.chatTyping, { roomId: snapshot.id, typing })} onSend={sendChat} composerAccessory={<MobileCallControls
+        {mobileParty ? <MobilePartyChat key={snapshot.id} userId={session.user.id} hidden={playerFullscreen || gameFullscreen} open={mobileChatOpen} onClose={closeMobileChat} onPeople={() => openDrawer("members")}><ChatPanel messages={snapshot.messages} currentUser={session.user} typingNames={(house?.members ?? []).filter((member) => typingUserIds.includes(member.user.id)).map((member) => member.user.displayName)} onTyping={(typing) => socket?.emit(eventNames.chatTyping, { roomId: snapshot.id, typing })} onSend={sendChat} forceComposer={mobileChatOpen} composerAccessory={<MobileCallControls
           micEnabled={micEnabled} muted={muted} deafened={deafened} callState={callState} voiceError={voiceError}
           micLabel={micLabel} isSharingScreen={isSharingScreen} shareOccupied={Boolean(snapshot.screenShare && !isSharingScreen)}
           canShare={isSharingScreen || typeof navigator.mediaDevices?.getDisplayMedia === "function"}
@@ -848,19 +857,7 @@ export function App() {
         />} /></MobilePartyChat> : null}
       </PartyGameWorkspace>
 
-      <footer className={`party-dock ${partyExperience === "games" ? "party-social-dock" : ""}`} aria-label="Controles da Party">
-        {voiceError || callState !== "idle" ? <span className={`dock-call-state ${voiceError ? "error" : "connected"}`} aria-live="polite"><i />{voiceError || (callState === "reconnecting" ? "Reconectando voz…" : callState === "joining" ? "Conectando voz…" : !micEnabled || muted ? "Microfone desligado" : audioSettings.microphoneMode === "ptt" ? "Segure V para falar" : speaking ? "Você está falando" : `Voz conectada · ${callQuality}`)}</span> : null}
-        {audioBlocked ? <button className="dock-call-state error" onClick={() => { void Promise.all([...remoteAudio.current.values()].map((audio) => audio.play())).then(() => setAudioBlocked(false), () => setAudioBlocked(true)); }}>Ativar áudio da call</button> : null}
-        <div className="dock-actions">
-          <button className={`dock-button dock-call-action ${micEnabled && !muted ? "active" : ""} ${voiceError ? "error" : ""}`} onClick={toggleMute} aria-pressed={micEnabled && !muted} aria-label={micLabel} data-tooltip={micLabel}>{muted || !micEnabled ? <MicOff size={20} /> : <Mic size={20} />}</button>
-          <button className={`dock-button dock-call-action ${deafened ? "danger" : ""}`} onClick={toggleDeafen} aria-pressed={deafened} aria-label={deafened ? "Ativar áudio da call" : "Desativar áudio da call"} data-tooltip={deafened ? "Ativar áudio da call" : "Desativar áudio da call"}><Headphones size={20} /></button>
-          {isSharingScreen || typeof navigator.mediaDevices?.getDisplayMedia === "function" ? <button className={`dock-button dock-call-action dock-screen-share ${isSharingScreen ? "active" : ""}`} disabled={Boolean(snapshot.screenShare && !isSharingScreen)} onClick={() => isSharingScreen ? stopScreenShare(true) : void startScreenShare()} aria-label={isSharingScreen ? "Parar compartilhamento" : "Compartilhar tela"} data-tooltip={isSharingScreen ? "Parar compartilhamento" : "Compartilhar tela"}>{isSharingScreen ? <ScreenShareOff size={20} /> : <MonitorUp size={20} />}</button> : null}
-          <button className={`dock-button ${!rightPanelCollapsed && activePanel === "chat" ? "selected" : ""}`} onClick={() => !rightPanelCollapsed && activePanel === "chat" ? closeDrawer() : openDrawer("chat")} aria-label={unreadChat ? `Abrir chat, ${unreadChat} não lidas` : "Abrir chat"} data-tooltip="Chat"><MessageCircle size={20} />{unreadChat ? <span className="dock-unread" aria-hidden="true" /> : null}</button>
-          <button className={`dock-button ${!rightPanelCollapsed && activePanel === "members" ? "selected" : ""}`} onClick={() => !rightPanelCollapsed && activePanel === "members" ? closeDrawer() : openDrawer("members")} aria-label="Ver participantes" data-tooltip="Pessoas"><Users size={20} /></button>
-          {partyExperience === "media" ? <button className={`dock-button ${!rightPanelCollapsed && activePanel === "queue" ? "selected" : ""}`} onClick={() => !rightPanelCollapsed && activePanel === "queue" ? closeDrawer() : openDrawer("queue")} aria-label={`Abrir fila, ${snapshot.queue.length} itens`} data-tooltip="Fila"><ListVideo size={20} />{snapshot.queue.length ? <span className="dock-badge">{snapshot.queue.length}</span> : null}</button> : null}
-          <button className="dock-button subtle" onClick={() => setShowCallSettings(true)} aria-label="Configurações de áudio" data-tooltip="Configurações de áudio"><SlidersHorizontal size={19} /></button>{partyExperience === "media" ? <><span className="dock-separator" /><button className="primary-action dock-add" onClick={() => setShowMediaHub(true)}><Plus size={18} /> Adicionar mídia</button></> : null}
-        </div>
-      </footer>
+      <PartySocialControls callState={callState} callQuality={callQuality} voiceError={voiceError} micEnabled={micEnabled} muted={muted} deafened={deafened} speaking={speaking} microphoneMode={audioSettings.microphoneMode} audioBlocked={audioBlocked} isSharingScreen={isSharingScreen} shareOccupied={Boolean(snapshot.screenShare && !isSharingScreen)} canShare={isSharingScreen || typeof navigator.mediaDevices?.getDisplayMedia === "function"} peopleCount={snapshot.members.length} unreadChat={unreadChat} chatOpen={mobileParty ? mobileChatOpen : !rightPanelCollapsed && activePanel === "chat"} onMic={toggleMute} onDeafen={toggleDeafen} onShare={() => isSharingScreen ? stopScreenShare(true) : void startScreenShare()} onChat={toggleChat} onPeople={() => openDrawer("members")} onSettings={() => setShowCallSettings(true)} onEnableAudio={() => { void Promise.all([...remoteAudio.current.values()].map((audio) => audio.play())).then(() => setAudioBlocked(false), () => setAudioBlocked(true)); }} onRetryVoice={() => { void joinCall(false); }} partyTriggerRef={socialPartyTrigger} chatTriggerRef={socialChatTrigger} />
     </main>
 
     {showMediaHub && partyExperience === "media" ? <Suspense fallback={<div className="overlay-loading" role="status">Abrindo Media Hub...</div>}><MediaHub apiUrl={API_URL} token={session.token} roomId={snapshot.id} queueRevision={snapshot.queueRevision} refreshSignal={mediaHubRevision} permissions={house?.permissions ?? []} canControl={canControlMedia} canAdd={canAddMedia} onClose={() => setShowMediaHub(false)} onAdd={addMedia} onPlayNext={playMediaNext} onPlaybackRequested={openMediaForPlayback} /></Suspense> : null}
@@ -869,7 +866,7 @@ export function App() {
     {showInvite && house ? <InviteDialog apiUrl={API_URL} token={session.token} house={house} onClose={() => setShowInvite(false)} onChanged={(next) => setHouse(next)} /> : null}
     {showHouseSettings && house ? <HouseSettingsDialog apiUrl={API_URL} token={session.token} house={house} currentUserId={session.user.id} roomSettings={snapshot.settings} onRoomSettings={(settings) => socket?.emit(eventNames.roomSettings, { roomId: snapshot.id, settings })} onClose={() => setShowHouseSettings(false)} onLeft={() => { setShowHouseSettings(false); setSnapshot(null); setHouse(null); localStorage.removeItem(HOUSE_KEY); navigate("/app"); void refreshHouses(); }} onChanged={(next) => { setHouse(next); void refreshHouses(); }} /> : null}
     {showProfile ? <ProfileDialog apiUrl={API_URL} token={session.token} user={session.user} onClose={() => setShowProfile(false)} onSaved={(user) => { const nextSession = { ...session, user }; setSession(nextSession); localStorage.setItem(SESSION_KEY, JSON.stringify(nextSession)); }} /> : null}
-    {showCallSettings ? <Suspense fallback={<div className="overlay-loading" role="status">Abrindo configurações...</div>}><CallSettings settings={audioSettings} devices={audioDevices} getMicLevel={getMicLevel} outputSelectionSupported={"setSinkId" in HTMLMediaElement.prototype} onChange={setAudioSettings} onClose={() => setShowCallSettings(false)} /></Suspense> : null}
+    {showCallSettings ? <Suspense fallback={<div className="overlay-loading" role="status">Abrindo configurações...</div>}><CallSettings settings={audioSettings} devices={audioDevices} getMicLevel={getMicLevel} outputSelectionSupported={"setSinkId" in HTMLMediaElement.prototype} callStatus={callState === "connected" ? "Call conectada" : callState === "reconnecting" ? "Reconectando voz" : "Call indisponível"} microphoneStatus={voiceError.startsWith("Microfone bloqueado") ? "Microfone bloqueado" : micEnabled && !muted && !deafened ? "Microfone ligado" : "Microfone desligado"} onChange={setAudioSettings} onClose={() => { setShowCallSettings(false); requestAnimationFrame(() => socialPartyTrigger.current?.focus()); }} /></Suspense> : null}
   </div></PartyGameChatProvider></Suspense>;
 }
 
@@ -935,7 +932,7 @@ function HistoryList({ history: items }: { history: HouseHistoryEntry[] }) {
   return <div className="history-panel"><div><History size={18} aria-hidden="true" /><strong>Reproduzidos recentemente</strong></div>{items.length ? <ul>{items.slice().reverse().map((item) => <li key={`${item.id}-history`}><span>{item.title}</span><small>{providerLabel(item.provider)} · {timeLabel(item.playedAt)}</small></li>)}</ul> : <p>Nenhuma mídia reproduzida ainda.</p>}</div>;
 }
 
-function ChatPanel({ messages, currentUser, typingNames, onTyping, onSend, composerAccessory }: { composerAccessory?: ReactNode; messages: ChatMessage[]; currentUser: User; typingNames: string[]; onTyping: (typing: boolean) => void; onSend: (body: string) => boolean }) {
+function ChatPanel({ messages, currentUser, typingNames, onTyping, onSend, composerAccessory, forceComposer = false }: { composerAccessory?: ReactNode; forceComposer?: boolean; messages: ChatMessage[]; currentUser: User; typingNames: string[]; onTyping: (typing: boolean) => void; onSend: (body: string) => boolean }) {
   const gameChat = usePartyGameChat();
   const [newBelow, setNewBelow] = useState(0);
   const listRef = useRef<HTMLDivElement>(null);
@@ -954,7 +951,7 @@ function ChatPanel({ messages, currentUser, typingNames, onTyping, onSend, compo
   }, [messages, lastEvent]);
   return <div className="chat-panel"><div ref={listRef} className="messages" onScroll={(event) => { const node = event.currentTarget; atBottom.current = node.scrollHeight - node.scrollTop - node.clientHeight < 72; if (atBottom.current) setNewBelow(0); }}>
     {timeline.length ? timeline.map(({ key, message, event }) => message ? <article className={`message ${message.user.id === currentUser.id ? "mine" : ""}`} key={key}><Avatar className="message-avatar" name={message.user.displayName} src={message.user.avatar} color={message.user.color} /><div><header><strong>{message.user.displayName}</strong><time dateTime={message.createdAt}>{timeLabel(message.createdAt)}</time></header><p>{message.body}</p></div></article> : <article className="game-chat-event" key={key}><small>Desenhe e Adivinhe</small><p>{event?.text}</p></article>) : <p className="chat-empty">Nenhuma mensagem ainda.</p>}
-  </div>{newBelow ? <button className="chat-new-below" onClick={() => { listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: "smooth" }); atBottom.current = true; setNewBelow(0); }}>Novas mensagens ↓</button> : null}<div className="typing-indicator" aria-live="polite">{typingNames.length ? `${typingNames.slice(0, 2).join(" e ")} está digitando…` : ""}</div>{gameChat?.selected && gameChat.game && gameChat.game.phase !== "LOBBY" && gameChat.game.phase !== "GAME_RESULT" ? null : <PartyComposer onSend={onSend} onTyping={onTyping} accessory={composerAccessory} />}</div>;
+  </div>{newBelow ? <button className="chat-new-below" onClick={() => { listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: "smooth" }); atBottom.current = true; setNewBelow(0); }}>Novas mensagens ↓</button> : null}<div className="typing-indicator" aria-live="polite">{typingNames.length ? `${typingNames.slice(0, 2).join(" e ")} está digitando…` : ""}</div><div className="chat-composer-shell" hidden={Boolean(!forceComposer && gameChat?.selected && gameChat.game && gameChat.game.phase !== "LOBBY" && gameChat.game.phase !== "GAME_RESULT")}><PartyComposer onSend={onSend} onTyping={onTyping} accessory={composerAccessory} /></div></div>;
 }
 
 function MembersPanel({ members, currentUserId, participantVolumes, onVolume, voiceMembers }: { voiceMembers: RoomSnapshot["members"]; members: HouseMember[]; currentUserId: string; participantVolumes: Record<string, number>; onVolume: (userId: string, volume: number) => void }) {

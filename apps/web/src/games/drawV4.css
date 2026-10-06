@@ -134,7 +134,7 @@
 @media (max-width:900px) {
   .mobile-party .party-workspace:has(.draw-v4-active) { grid-template-columns:minmax(0,1fr); }
   .mobile-party .party-content:has(.draw-v4-active) { flex:1 1 auto; width:100%; min-height:0; padding:2px 4px; }
-  .mobile-party .party-workspace:has(.draw-v4-active) > .mobile-party-chat { display:none; }
+  .mobile-party .party-workspace:has(.draw-v4-active) > .mobile-party-chat:not(.is-open) { display:none; }
   .mobile-party.game-mode .party-workspace[data-game-role=guesser] .party-content:has(.draw-v4-active) { flex:1 1 auto; height:auto; min-height:0; }
   .mobile-party .party-content>.main-stage.is-game:has(.draw-v4-active) { width:100%; height:100%; min-height:0; padding:3px; overflow:hidden; align-content:stretch; grid-template-rows:minmax(0,1fr); }
   .mobile-party .party-content>.main-stage.is-game:has(.draw-v4-active):has(.stage-switcher) { grid-template-rows:auto minmax(0,1fr); }
@@ -196,7 +196,7 @@
   .mobile-party .draw-v4 .draw-guess-composer .chat-form { width:100%; }
   .mobile-party .party-workspace[data-game-role=guesser]:has(.draw-v4-active) .mobile-party-chat { flex:0 0 44px; min-height:44px; }
   .mobile-party .party-workspace[data-game-role=guesser]:has(.draw-v4-active) .mobile-party-chat.draw-chat-expanded { flex-basis:min(36dvh,250px); }
-  .mobile-party .party-workspace[data-game-role=guesser]:has(.draw-v4-active) .mobile-party-chat.draw-chat-compact .mobile-chat-body { display:none; }
+  .mobile-party .party-workspace[data-game-role=guesser]:has(.draw-v4-active) .mobile-party-chat.draw-chat-compact:not(.is-open) .mobile-chat-body { display:none; }
   .mobile-party .draw-v4 .draw-choice-layer { padding:8px; }
   .mobile-party .draw-v4 .draw-choice-dialog { padding:12px; }
   .mobile-party .draw-v4 .draw-choices button { min-height:52px; }
@@ -226,6 +226,7 @@
   .mobile-party .party-workspace[data-game-role=guesser] .main-stage.is-game:has(.draw-v4-active) .draw-v4 .draw-board { width:min(calc(100vw - 16px),calc(max(100px,100dvh - 320px) * 4 / 3)); height:auto; max-height:100%; aspect-ratio:4/3; }
   .mobile-party .draw-v4 .draw-table-drawer .draw-table { grid-template-rows:30px auto 3px minmax(0,1fr) auto; }
   .mobile-party .draw-v4 .draw-table-guesser .draw-table { grid-template-rows:30px minmax(0,calc(100dvh - 320px)) 3px minmax(0,1fr); }
+  html[data-compact-viewport] .mobile-party .party-workspace[data-game-role=guesser]:has(.chat-form:focus-within) .draw-v4 .draw-table-guesser .draw-table { grid-template-rows:30px minmax(0,calc(var(--visual-height,100dvh) * .18)) 3px minmax(0,1fr); }
   .mobile-party .draw-v4 .draw-table-drawer .draw-toolbar { gap:2px; }
   .mobile-party .draw-v4 .draw-table-drawer .draw-size button { width:28px; min-width:28px; }
   .mobile-party .draw-v4 .draw-table-guesser .draw-activity { min-height:94px; }

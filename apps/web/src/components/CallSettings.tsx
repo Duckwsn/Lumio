@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Headphones, Mic, X } from "lucide-react";
 
 export type MicrophoneMode = "voice" | "ptt";
@@ -13,15 +13,19 @@ export interface LocalAudioSettings {
   duckingVolume: number;
 }
 
-export function CallSettings({ settings, devices, getMicLevel, outputSelectionSupported, onChange, onClose }: {
+export function CallSettings({ settings, devices, getMicLevel, outputSelectionSupported, callStatus, microphoneStatus, onChange, onClose }: {
   settings: LocalAudioSettings;
   devices: MediaDeviceInfo[];
   getMicLevel: () => number;
   outputSelectionSupported: boolean;
+  callStatus: string;
+  microphoneStatus: string;
   onChange: (settings: LocalAudioSettings) => void;
   onClose: () => void;
 }) {
   const [micLevel, setMicLevel] = useState(getMicLevel);
+  const closeButton = useRef<HTMLButtonElement>(null);
+  useEffect(() => { closeButton.current?.focus(); }, []);
   useEffect(() => {
     const timer = window.setInterval(() => setMicLevel(getMicLevel()), 100);
     return () => window.clearInterval(timer);
@@ -29,7 +33,7 @@ export function CallSettings({ settings, devices, getMicLevel, outputSelectionSu
   const inputs = devices.filter((device) => device.kind === "audioinput");
   const outputs = devices.filter((device) => device.kind === "audiooutput");
   const update = <K extends keyof LocalAudioSettings>(key: K, value: LocalAudioSettings[K]) => onChange({ ...settings, [key]: value });
-  return <div className="dialog-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><section className="dialog call-settings" role="dialog" aria-modal="true" aria-labelledby="audio-settings-title"><header><div><h2 id="audio-settings-title">Áudio da call</h2><p>Preferências locais para microfone, saída e mídia.</p></div><button className="icon-button" onClick={onClose} aria-label="Fechar configurações de áudio"><X /></button></header>
+  return <div className="dialog-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }} onKeyDown={(event) => { if (event.key === "Escape") { event.stopPropagation(); onClose(); } }}><section className="dialog call-settings" role="dialog" aria-modal="true" aria-labelledby="audio-settings-title"><header><div><h2 id="audio-settings-title">Call e dispositivos</h2><p>Preferências locais para microfone, saída e mídia.</p><small className="call-settings-status">{callStatus} · {microphoneStatus}</small></div><button ref={closeButton} className="icon-button" onClick={onClose} aria-label="Fechar configurações de áudio"><X /></button></header>
     <label><span><Mic size={15} aria-hidden="true" /> Microfone</span><select value={settings.inputDeviceId} onChange={(event) => update("inputDeviceId", event.target.value)}><option value="">Padrão do sistema</option>{inputs.map((device, index) => <option value={device.deviceId} key={device.deviceId}>{device.label || `Microfone ${index + 1}`}</option>)}</select></label>
     <label><span><Headphones size={15} aria-hidden="true" /> Saída de áudio</span><select value={settings.outputDeviceId} disabled={!outputSelectionSupported} onChange={(event) => update("outputDeviceId", event.target.value)}><option value="">Padrão do sistema</option>{outputs.map((device, index) => <option value={device.deviceId} key={device.deviceId}>{device.label || `Saída ${index + 1}`}</option>)}</select>{!outputSelectionSupported ? <small>Seu navegador não permite escolher a saída.</small> : null}</label>
     <fieldset><legend>Modo do microfone</legend><label className="radio-row"><input type="radio" name="mic-mode" checked={settings.microphoneMode === "voice"} onChange={() => update("microphoneMode", "voice")} /> Detecção normal</label>{!window.matchMedia("(pointer: coarse)").matches ? <label className="radio-row"><input type="radio" name="mic-mode" checked={settings.microphoneMode === "ptt"} onChange={() => update("microphoneMode", "ptt")} /> Push-to-talk <kbd>V</kbd></label> : <small>Push-to-talk por teclado não está disponível em telas touch.</small>}</fieldset>

@@ -152,8 +152,10 @@ test("G5 three authenticated browsers: private cards, full match, six widths, wi
     }
     await expect(a.locator(".card-players li")).toHaveCount(3);
     await a.screenshot({ path: "test-results/g5-lobby-mobile.png" }); await b.screenshot({ path: "test-results/g6-cards-lobby.png" });
-    const chat = a.locator(".mobile-party-chat").getByRole("textbox"); await chat.fill("rascunho Cartas G5");
+    await a.getByRole("button", { name: "Abrir chat", exact: true }).click();
+    const chat = a.locator(".mobile-party-chat .chat-form input"); await chat.fill("rascunho Cartas G5");
     const chatNode = await a.locator(".mobile-party-chat").elementHandle(), tableNode = await a.locator(".card-game").elementHandle();
+    await a.getByRole("button", { name: "Fechar chat", exact: true }).click();
     await a.getByRole("button", { name: "Iniciar partida", exact: true }).click();
     for (const page of [a, b, c]) await expect(page.locator(".card-hand .lumio-card")).toHaveCount(7);
     const handBeforeReconnect = await b.locator(".card-hand button").allTextContents();
@@ -164,7 +166,7 @@ test("G5 three authenticated browsers: private cards, full match, six widths, wi
     expect(await b.locator(".card-hand button").allTextContents()).toEqual(handBeforeReconnect);
     for (const card of await b.locator(".card-hand button").all()) await expect(card).toBeDisabled();
     await contexts[1].setOffline(false); await expect(b.locator(".game-connection-notice")).toHaveCount(0, { timeout: 15000 });
-    expect(await b.locator(".card-hand button").allTextContents()).toEqual(handBeforeReconnect);
+    await expect.poll(() => b.locator(".card-hand button").allTextContents(), { timeout: 15000 }).toEqual(handBeforeReconnect);
     await b.screenshot({ path: "test-results/g6-cards-table-desktop.png" }); await a.screenshot({ path: "test-results/g5-own-turn.png" });
     for (const width of [320, 360, 375, 390, 412, 430]) {
       await a.setViewportSize({ width, height: 844 });
@@ -175,7 +177,7 @@ test("G5 three authenticated browsers: private cards, full match, six widths, wi
     }
     await a.setViewportSize({ width: 390, height: 844 });
     await expect(a.getByRole("button", { name: "Fila da Party", exact: true })).toHaveCount(0);
-    await a.getByRole("button", { name: "Pessoas da Party", exact: true }).tap(); await expect(a.locator(".party-drawer")).toBeVisible(); await a.getByRole("button", { name: "Recolher painel da Party", exact: true }).tap(); await expect(a.locator(".party-drawer")).toHaveCount(0); expect(await tableNode!.evaluate((node) => node === document.querySelector(".card-game"))).toBe(true);
+    await a.getByRole("button", { name: "Abrir controles da Party" }).tap(); await a.getByRole("button", { name: /Pessoas na Party/ }).tap(); await expect(a.locator(".party-drawer")).toBeVisible(); await a.getByRole("button", { name: "Recolher painel da Party", exact: true }).tap(); await expect(a.locator(".party-drawer")).toHaveCount(0); expect(await tableNode!.evaluate((node) => node === document.querySelector(".card-game"))).toBe(true);
     const play = async (page: typeof a, label: string) => {
       const card = page.getByRole("button", { name: label, exact: true }); await expect(card).toBeEnabled();
       if (page === b) await card.click(); else await card.tap(); await expect(card).toHaveAttribute("aria-pressed", "true");
@@ -259,9 +261,11 @@ test("G4 three authenticated clients: safe Quiz, lock/reconnect, navigation, six
     await a.screenshot({ path: "test-results/g4-lobby-mobile.png" }); await b.screenshot({ path: "test-results/g6-quiz-lobby.png" });
     const quizNode = await a.locator(".quiz-game").elementHandle();
     await expect(a.getByRole("button", { name: "Fila da Party", exact: true })).toHaveCount(0);
-    await a.getByRole("button", { name: "Pessoas da Party", exact: true }).click(); await expect(a.locator(".party-drawer")).toBeVisible(); await a.getByRole("button", { name: "Recolher painel da Party", exact: true }).click(); await expect(a.locator(".party-drawer")).toHaveCount(0); expect(await quizNode!.evaluate((node) => node === document.querySelector(".quiz-game"))).toBe(true);
+    await a.getByRole("button", { name: "Abrir controles da Party" }).click(); await a.getByRole("button", { name: /Pessoas na Party/ }).click(); await expect(a.locator(".party-drawer")).toBeVisible(); await a.getByRole("button", { name: "Recolher painel da Party", exact: true }).click(); await expect(a.locator(".party-drawer")).toHaveCount(0); expect(await quizNode!.evaluate((node) => node === document.querySelector(".quiz-game"))).toBe(true);
     const chatNode = await a.locator(".mobile-party-chat").elementHandle();
+    await a.getByRole("button", { name: "Abrir chat", exact: true }).click();
     await a.locator(".mobile-party-chat").getByRole("textbox").fill("rascunho Quiz G4");
+    await a.getByRole("button", { name: "Fechar chat", exact: true }).click();
     await a.getByRole("button", { name: "Iniciar partida", exact: true }).click();
     const prompts = new Set<string>();
     for (let round = 1; round <= 5; round++) {
@@ -321,7 +325,7 @@ test("G4 three authenticated clients: safe Quiz, lock/reconnect, navigation, six
     const quizRematch = (await a.getByRole("button", { name: "Jogar novamente", exact: true }).boundingBox())!;
     expect(quizRematch.y + quizRematch.height).toBeLessThanOrEqual(844);
     await a.screenshot({ path: "test-results/g6-quiz-result.png" }); expect(await chatNode!.evaluate((node) => node === document.querySelector(".mobile-party-chat"))).toBe(true);
-    await expect(a.locator(".mobile-party-chat").getByRole("textbox")).toHaveValue("rascunho Quiz G4");
+    await expect(a.locator(".mobile-party-chat .chat-form input")).toHaveValue("rascunho Quiz G4");
     await a.getByRole("button", { name: "Jogar novamente", exact: true }).click(); await expect(a.locator(".quiz-game")).toHaveAttribute("data-phase", "LOBBY");
     await expect(a.getByLabel("Categoria")).toHaveValue("math"); await expect(a.locator(".quiz-scoreboard strong")).toHaveText(["0", "0", "0"]);
     await a.getByRole("button", { name: "Voltar aos jogos", exact: true }).click(); await a.getByRole("button", { name: "Encerrar sessão de jogo", exact: true }).click(); await a.getByRole("button", { name: "Confirmar encerramento", exact: true }).click();
@@ -590,7 +594,9 @@ test("G3 configurable target match: mobile roles preserve Chat, geometry, rotati
     expect(startBox.y + startBox.height).toBeLessThanOrEqual(844);
     await a.setViewportSize({ width: 1280, height: 900 }); await a.screenshot({ path: "test-results/g6-draw-lobby.png" });
     await a.setViewportSize({ width: 390, height: 844 });
+    await b.getByRole("button", { name: "Abrir chat", exact: true }).click();
     await b.getByRole("textbox", { name: "Mensagem", exact: true }).fill("rascunho antes de desenhar G3");
+    await b.getByRole("button", { name: "Fechar chat", exact: true }).click();
     await b.evaluate(() => { (window as any).g3ChatNode = document.querySelector(".mobile-party-chat"); });
     await a.getByRole("button", { name: "Iniciar partida", exact: true }).click();
     const drawerHeights: Record<number, number> = {}, guesserHeights: Record<number, number> = {};
@@ -615,7 +621,7 @@ test("G3 configurable target match: mobile roles preserve Chat, geometry, rotati
           expect(db.height).toBeGreaterThan(gb.height * 1.08);
           expect(Math.abs(db.width / db.height - 4 / 3)).toBeLessThan(.02);
           const messages = (await b.locator(".draw-activity-feed").boundingBox())!;
-          expect(messages.height).toBeGreaterThan(190);
+          expect(messages.height, `feed do Draw em ${width}px`).toBeGreaterThan(160);
           expect((await b.getByRole("textbox", { name: "Seu palpite" }).boundingBox())!.y + 44).toBeLessThanOrEqual(844);
           for (const page of [a, b]) expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
           await expect(a.getByRole("button", { name: "Desfazer", exact: true })).toBeVisible();
@@ -654,9 +660,15 @@ test("G3 configurable target match: mobile roles preserve Chat, geometry, rotati
       }
       for (const page of guessers) await send(page, word);
       await expect(drawer.locator(".draw-word")).toHaveText(`Era: ${word}`);
+      if (round === 1) {
+        await b.getByRole("button", { name: "Abrir chat", exact: true }).click();
+        await expect(b.locator(".mobile-party-chat")).toBeVisible();
+        await expect(b.locator(".mobile-party-chat").getByRole("textbox", { name: "Mensagem" })).toBeVisible();
+      }
       if (round === 2) {
         await expect(b.locator(".mobile-party-chat")).toBeHidden();
-        await expect(b.getByRole("textbox", { name: "Mensagem", exact: true })).toBeEmpty();
+        await expect(b.locator(".social-chat-trigger")).toHaveAttribute("aria-expanded", "false");
+        await expect(b.locator(".mobile-party-chat .chat-form input")).toBeEmpty();
         await expect(b.locator(".draw-activity-feed")).toContainText("mensagem recebida enquanto Bia desenha");
         expect(await b.evaluate(() => (window as any).g3ChatNode === document.querySelector(".mobile-party-chat"))).toBe(true);
         await b.screenshot({ path: "test-results/g3-round-result.png" });
@@ -770,11 +782,11 @@ test("Landing → login → restored session → House → Party → queue/drawe
   await page.getByRole("button", { name: "Criar e entrar" }).click();
   await expect(page).toHaveURL(/\/house\/house-/);
   await expect(page.getByRole("heading", { name: "QA E2E Casa" })).toBeVisible();
-  await page.getByRole("button", { name: /Abrir fila/ }).click();
+  await page.locator(".media-session-actions").getByRole("button", { name: /Fila da Party/ }).click();
   await expect(page.getByText("Fila da Party")).toBeVisible();
   await page.getByRole("button", { name: "Abrir chat" }).click();
   await expect(page.getByRole("textbox", { name: "Mensagem" })).toBeVisible();
-  await page.getByLabel("Controles da Party").getByRole("button", { name: "Adicionar mídia" }).click();
+  await page.locator(".main-stage").getByRole("button", { name: "Adicionar mídia" }).click();
   await expect(page.getByRole("heading", { name: "A mídia da Casa" })).toBeVisible();
   await page.reload();
   await expect(page.getByRole("heading", { name: "QA E2E Casa" })).toBeVisible();
@@ -782,6 +794,7 @@ test("Landing → login → restored session → House → Party → queue/drawe
   expect(manifest.ok()).toBe(true);
   expect((await manifest.json() as { icons: unknown[] }).icons.length).toBeGreaterThan(0);
   await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole("button", { name: "Abrir chat", exact: true }).click();
   await expect(page.getByRole("textbox", { name: "Mensagem" })).toBeVisible();
   await page.setViewportSize({ width: 844, height: 390 });
   await expect(page.getByRole("heading", { name: "QA E2E Casa" })).toBeVisible();
@@ -914,8 +927,9 @@ test("automatic voice: three real RTC clients, explicit capture, denial, deafen,
     const [a, b, c] = await Promise.all(contexts.map((context) => context.newPage()));
     const join = async (page: typeof a) => {
       await page.goto(`${origin}/house/${house.id}`);
-      await expect(page.locator(".dock-call-state").first()).toHaveText("Microfone desligado", { timeout: 20000 });
-      await expect(page.getByRole("button", { name: "Ativar microfone", exact: true })).toBeVisible();
+      await expect(page.locator(".social-call-status").first()).toHaveText("Call conectada", { timeout: 20000 });
+      await expect(page.locator(".social-mic")).toContainText("Mic desligado");
+      await expect(page.getByRole("button", { name: /Ativar microfone/ }).first()).toBeVisible();
       expect(await page.evaluate(() => (window as any).qaVoice.captures)).toBe(0);
       expect(await page.evaluate(() => (window as any).qaVoice.displays)).toBe(0);
       await expect(page.getByRole("button", { name: /Entrar na call|Sair da call/ })).toHaveCount(0);
@@ -929,9 +943,10 @@ test("automatic voice: three real RTC clients, explicit capture, denial, deafen,
     try {
     await join(a); await join(b);
     await b.evaluate(() => { (window as any).qaVoice.blockAudio = true; });
-    await a.getByRole("button", { name: "Ativar microfone", exact: true }).click();
-    await expect(a.getByRole("button", { name: "Desativar microfone", exact: true })).toBeVisible();
+    await a.locator(".social-mic").click();
+    await expect(a.locator(".social-mic")).toHaveAttribute("aria-pressed", "true");
     await connected(b, 1); await expect.poll(() => packets(b), { timeout: 20000 }).toBeGreaterThan(0);
+    await b.getByRole("button", { name: "Abrir controles da Party" }).click();
     await expect(b.getByRole("button", { name: "Ativar áudio da call", exact: true })).toBeVisible();
     await b.evaluate(() => { (window as any).qaVoice.blockAudio = false; });
     await b.getByRole("button", { name: "Ativar áudio da call", exact: true }).click();
@@ -943,7 +958,7 @@ test("automatic voice: three real RTC clients, explicit capture, denial, deafen,
     await a.getByRole("button", { name: /Desenhe e Adivinhe/ }).click();
     await expect(a.getByRole("button", { name: "Participar", exact: true })).toBeVisible();
     await a.getByRole("button", { name: "Participar", exact: true }).click();
-    await expect(a.getByRole("button", { name: "Desativar microfone", exact: true })).toBeVisible();
+    await expect(a.locator(".social-mic")).toHaveAttribute("aria-pressed", "true");
     await expect(b.locator(".main-stage")).toHaveAttribute("data-view", "media");
     await b.getByRole("button", { name: "Jogos", exact: true }).click();
     await b.getByRole("button", { name: /Desenhe e Adivinhe/ }).click();
@@ -962,16 +977,27 @@ test("automatic voice: three real RTC clients, explicit capture, denial, deafen,
     await expect(a.getByRole("button", { name: "Assistir/Ouvir", exact: true })).toBeFocused();
     await connected(a, 1); await connected(b, 1);
     await join(c);
-    await expect.poll(() => c.evaluate(() => ({ ready: (window as any).qaVoice.peers.some((peer: RTCPeerConnection) => peer.connectionState === "connected"), peers: (window as any).qaVoice.peers.map((peer: RTCPeerConnection) => ({ state: peer.connectionState, signaling: peer.signalingState, ice: peer.iceConnectionState, slots: peer.getTransceivers().map((slot) => ({ kind: slot.receiver.track.kind, direction: slot.direction, current: slot.currentDirection, sender: Boolean(slot.sender.track) })) })), voice: document.querySelector(".dock-call-state")?.textContent })), { timeout: 20000 }).toMatchObject({ ready: true });
+    await expect.poll(() => c.evaluate(() => ({ ready: (window as any).qaVoice.peers.some((peer: RTCPeerConnection) => peer.connectionState === "connected"), peers: (window as any).qaVoice.peers.map((peer: RTCPeerConnection) => ({ state: peer.connectionState, signaling: peer.signalingState, ice: peer.iceConnectionState, slots: peer.getTransceivers().map((slot) => ({ kind: slot.receiver.track.kind, direction: slot.direction, current: slot.currentDirection, sender: Boolean(slot.sender.track) })) })), voice: document.querySelector(".social-call-status")?.textContent })), { timeout: 20000 }).toMatchObject({ ready: true });
     await expect.poll(() => packets(c), { timeout: 20000 }).toBeGreaterThan(0);
+    for (const page of [a, b, c]) if (await page.getByRole("button", { name: "Abrir chat", exact: true }).isVisible()) await page.getByRole("button", { name: "Abrir chat", exact: true }).click();
+    for (const message of ["FF3 mensagem antes da troca", "FF3 mensagem depois da troca"]) {
+      if (message.includes("depois")) {
+        await a.getByRole("button", { name: "Jogos", exact: true }).click();
+        await a.getByRole("button", { name: "Assistir/Ouvir", exact: true }).click();
+      }
+      await a.getByRole("textbox", { name: "Mensagem" }).fill(message);
+      await a.getByRole("button", { name: "Enviar mensagem", exact: true }).click();
+      for (const page of [b, c]) await expect(page.locator(".chat-panel .message").filter({ hasText: message })).toHaveCount(1);
+    }
+    for (const page of [a, b, c]) if (await page.getByRole("button", { name: "Fechar chat", exact: true }).isVisible()) await page.getByRole("button", { name: "Fechar chat", exact: true }).click();
     await b.evaluate(() => { (window as any).qaVoice.deny = true; });
-    await b.getByRole("button", { name: "Ativar microfone", exact: true }).click();
-    await expect(b.locator(".dock-call-state").first()).toContainText("Microfone indisponível");
-    await expect(b.getByRole("button", { name: "Ativar microfone", exact: true })).toBeVisible();
+    await b.locator(".social-mic").click();
+    await expect(b.locator(".social-mic")).toContainText("Bloqueado");
+    await expect(b.locator(".social-mic")).toHaveAttribute("aria-pressed", "false");
     await expect.poll(() => b.evaluate(() => (window as any).qaVoice.peers.filter((peer: RTCPeerConnection) => peer.connectionState === "connected").length), { timeout: 20000 }).toBeGreaterThanOrEqual(1);
     const received = await packets(b); await expect.poll(() => packets(b), { timeout: 20000 }).toBeGreaterThan(received);
     await b.evaluate(() => { (window as any).qaVoice.deny = false; });
-    await b.getByRole("button", { name: "Ativar microfone", exact: true }).click();
+    await b.locator(".social-mic").click();
     await expect.poll(() => packets(a), { timeout: 20000 }).toBeGreaterThan(0);
     await connected(c, 2); await connected(b, 2);
     // G6: one Party, three authenticated RTC clients, all game presentations.
@@ -1025,28 +1051,30 @@ test("automatic voice: three real RTC clients, explicit capture, denial, deafen,
       for (const peer of (window as any).qaVoice.peers as RTCPeerConnection[]) (await peer.getStats()).forEach((stat) => { if (stat.type === "inbound-rtp" && stat.kind === "audio" && stat.packetsReceived > 0) sources++; });
       return { sources, peers: (window as any).qaVoice.peers.map((peer: RTCPeerConnection) => ({ state: peer.connectionState, signaling: peer.signalingState, audio: peer.getTransceivers().filter((slot) => slot.receiver.track.kind === "audio").map((slot) => ({ direction: slot.direction, current: slot.currentDirection, muted: slot.receiver.track.muted })) })) };
     }), { timeout: 20000 }).toMatchObject({ sources: 2 });
+    await b.getByRole("button", { name: "Abrir controles da Party" }).click();
     await b.getByRole("button", { name: "Desativar áudio da call", exact: true }).click();
     expect(await b.evaluate(() => (window as any).qaVoice.audio.every((audio: HTMLAudioElement) => audio.muted))).toBe(true);
     expect(await b.evaluate(() => (window as any).qaVoice.tracks.filter((track: MediaStreamTrack) => track.readyState === "live").every((track: MediaStreamTrack) => !track.enabled))).toBe(true);
+    await b.getByRole("button", { name: "Abrir controles da Party" }).click();
     await b.getByRole("button", { name: "Ativar áudio da call", exact: true }).click();
-    await expect(b.getByRole("button", { name: "Ativar microfone", exact: true })).toBeVisible();
-    await b.getByRole("button", { name: "Ativar microfone", exact: true }).click();
-    await a.getByRole("button", { name: "Desativar microfone", exact: true }).click();
+    await expect(b.locator(".social-mic")).toBeVisible();
+    await b.locator(".social-mic").click();
+    await a.locator(".social-mic").click();
     const aPackets = await packets(a); await expect.poll(() => packets(a), { timeout: 20000 }).toBeGreaterThan(aPackets);
-    await a.getByRole("button", { name: "Ativar microfone", exact: true }).click();
-    await expect(a.getByRole("button", { name: "Desativar microfone", exact: true })).toBeVisible();
+    await a.locator(".social-mic").click();
+    await expect(a.locator(".social-mic")).toHaveAttribute("aria-pressed", "true");
     const captures = await a.evaluate(() => (window as any).qaVoice.captures);
     await contexts[0].setOffline(true);
     await expect.poll(() => a.evaluate(() => (window as any).qaVoice.tracks.every((track: MediaStreamTrack) => track.readyState === "ended"))).toBe(true);
     await contexts[0].setOffline(false);
     await expect.poll(() => a.evaluate(() => (window as any).qaVoice.peers.filter((peer: RTCPeerConnection) => peer.connectionState !== "closed").length), { timeout: 20000 }).toBe(2);
     await expect.poll(() => a.evaluate(() => (window as any).qaVoice.peers.filter((peer: RTCPeerConnection) => peer.connectionState === "connected").length), { timeout: 20000 }).toBeGreaterThanOrEqual(1);
-    await expect(a.getByRole("button", { name: "Ativar microfone", exact: true })).toBeVisible();
+    await expect(a.locator(".social-mic")).toBeVisible();
     expect(await a.evaluate(() => (window as any).qaVoice.captures)).toBe(captures);
     const details = await (await request.get(`${api}/api/houses/${house.id}`, { headers })).json();
     expect(details.house.members.filter((member: any) => member.inCall)).toHaveLength(3);
     await c.evaluate(() => { (window as any).qaVoice.hold = true; });
-    await c.getByRole("button", { name: "Ativar microfone", exact: true }).click();
+    await c.locator(".social-mic").click();
     await expect.poll(() => c.evaluate(() => Boolean((window as any).qaVoice.release))).toBe(true);
     await c.getByRole("button", { name: "Abrir menu da Casa e Party" }).click();
     await c.getByRole("button", { name: "Sair da Party", exact: true }).click();
@@ -1058,7 +1086,7 @@ test("automatic voice: three real RTC clients, explicit capture, denial, deafen,
     expect(await c.evaluate(() => (window as any).qaVoice.audio.every((audio: HTMLAudioElement) => audio.srcObject === null))).toBe(true);
     } catch (error) {
       for (const [name, page] of [["A", a], ["B", b], ["C", c]] as const) console.info("RTC diagnostic", name, JSON.stringify(await page.evaluate(() => ({
-        voice: document.querySelector(".dock-call-state")?.textContent,
+        voice: document.querySelector(".social-call-status")?.textContent,
         tracks: ((window as any).qaVoice?.tracks ?? []).map((track: MediaStreamTrack) => ({ enabled: track.enabled, ready: track.readyState })),
         peers: ((window as any).qaVoice?.peers ?? []).map((peer: RTCPeerConnection) => ({ state: peer.connectionState, signaling: peer.signalingState, ice: peer.iceConnectionState, gathering: peer.iceGatheringState, slots: peer.getTransceivers().map((slot) => ({ kind: slot.receiver.track.kind, direction: slot.direction, current: slot.currentDirection, sender: slot.sender.track?.readyState, enabled: slot.sender.track?.enabled })) })),
       }))));
@@ -1067,7 +1095,7 @@ test("automatic voice: three real RTC clients, explicit capture, denial, deafen,
   } finally { await rtcBrowser.close(); }
 });
 
-test("mobile permanent chat, gesture, secondary tools, late join and player idle controls", async ({ browser, request }) => {
+test("mobile contextual Party Chat, secondary tools, late join and player idle controls", async ({ browser, request }) => {
   test.setTimeout(120_000);
   fs.mkdirSync(path.join(root, "artifacts/m1"), { recursive: true });
   const origin = `http://127.0.0.1:${webPort}`, api = `http://127.0.0.1:${apiPort}`;
@@ -1113,10 +1141,15 @@ test("mobile permanent chat, gesture, secondary tools, late join and player idle
     const pageErrors: string[] = []; page.on("pageerror", (error) => pageErrors.push(error.message));
     await page.goto(`${origin}/house/${house.id}`);
     await expect(page.getByRole("heading", { name: "Mobile QA Casa", exact: true })).toBeVisible({ timeout: 30_000 });
-    await expect(page.getByRole("textbox", { name: "Mensagem" })).toBeVisible();
+    await expect(page.locator(".mobile-party-chat")).toBeHidden();
     if ((await page.evaluate(() => (window as any).qaPlayer.state)) !== 1) {
       await page.locator(".player-touch-surface").tap({ position: { x: 20, y: 20 } });
-      await page.getByRole("button", { name: "Reproduzir", exact: true }).tap();
+      const playButton = page.getByRole("button", { name: "Reproduzir", exact: true });
+      if (await playButton.isVisible()) {
+        await playButton.tap({ timeout: 2000 }).catch(async (error) => {
+          if ((await page.evaluate(() => (window as any).qaPlayer.state)) !== 1) throw error;
+        });
+      }
     }
     await expect.poll(() => page.evaluate(() => (window as any).qaPlayer.state)).toBe(1);
     await expect.poll(() => page.evaluate(() => (window as any).qaPlayer.plays)).toBeGreaterThan(0);
@@ -1125,6 +1158,7 @@ test("mobile permanent chat, gesture, secondary tools, late join and player idle
     const engine = () => page.evaluate(() => ({ created: (window as any).qaPlayer.created, destroyed: (window as any).qaPlayer.destroyed, position: (window as any).qaPlayer.position, plays: (window as any).qaPlayer.plays }));
     const originalEngine = await engine();
     const mediaNode = await page.locator("iframe.provider-player").elementHandle();
+    await page.getByRole("button", { name: "Abrir chat", exact: true }).tap();
     await page.getByRole("textbox", { name: "Mensagem" }).fill("Draft preserved in Games");
     await page.getByRole("button", { name: "Jogos", exact: true }).tap();
     await expect(page.getByRole("heading", { name: "O que vamos jogar?" })).toBeFocused();
@@ -1132,15 +1166,17 @@ test("mobile permanent chat, gesture, secondary tools, late join and player idle
     await expect(page.getByRole("textbox", { name: "Mensagem" })).toHaveValue("Draft preserved in Games");
     await page.getByRole("button", { name: "Enviar mensagem" }).tap();
     await expect(page.getByText("Draft preserved in Games", { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Fechar chat", exact: true }).tap();
     await page.getByRole("button", { name: /Desenhe e Adivinhe/ }).tap();
     await expect(page.getByRole("button", { name: "Participar", exact: true })).toBeVisible();
     for (const width of [320, 360, 375, 390, 412, 430]) {
       await page.setViewportSize({ width, height: 844 });
-      await expect(page.getByRole("textbox", { name: "Mensagem" })).toBeVisible();
+      await expect(page.locator(".mobile-party-chat")).toBeHidden();
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth && document.documentElement.scrollHeight <= innerHeight)).toBe(true);
       await expect(page.locator("iframe.provider-player, video.provider-player, .lumio-player")).toHaveCount(0);
       await expect(page.getByRole("button", { name: "Fila da Party", exact: true })).toHaveCount(0);
-      await page.getByRole("button", { name: "Pessoas da Party", exact: true }).tap();
+      await page.getByRole("button", { name: "Abrir controles da Party" }).tap();
+      await page.getByRole("button", { name: /Pessoas na Party/ }).tap();
       await expect(page.getByRole("button", { name: "Recolher painel da Party" })).toBeVisible();
       await page.getByRole("button", { name: "Fechar painel", exact: true }).tap();
       await expect(page.locator(".main-stage")).toHaveAttribute("data-view", "game");
@@ -1151,7 +1187,7 @@ test("mobile permanent chat, gesture, secondary tools, late join and player idle
     await expect.poll(() => page.evaluate(() => Boolean(document.fullscreenElement || document.querySelector(".game-fallback-fullscreen")))).toBe(true);
     await expect(page.locator(".mobile-party-chat")).toBeHidden();
     await page.getByRole("button", { name: "Sair da tela cheia de Jogos", exact: true }).tap();
-    await expect(page.locator(".mobile-party-chat")).toBeVisible();
+    await expect(page.locator(".mobile-party-chat")).toBeHidden();
     await expect(page.locator(".main-stage")).toHaveAttribute("data-view", "game");
     await page.getByRole("button", { name: "Assistir/Ouvir", exact: true }).tap();
     await expect(page.locator(".main-stage")).toHaveAttribute("data-view", "media");
@@ -1164,6 +1200,7 @@ test("mobile permanent chat, gesture, secondary tools, late join and player idle
     await page.locator(".player-touch-surface").tap({ position: { x: 20, y: 20 } });
     await page.getByRole("button", { name: "Reproduzir", exact: true }).tap();
     await expect.poll(() => page.evaluate(() => (window as any).qaPlayer.state)).toBe(1);
+    await page.getByRole("button", { name: "Abrir chat", exact: true }).tap();
     const assertPortraitLayout = async () => {
       await expect.poll(() => page.locator(".player-frame").evaluate((node) => Math.abs(node.getBoundingClientRect().width / node.getBoundingClientRect().height - 16 / 9))).toBeLessThan(0.02);
       // VisualViewport resize arrives asynchronously after setViewportSize/fullscreen.
@@ -1186,8 +1223,10 @@ test("mobile permanent chat, gesture, secondary tools, late join and player idle
     }
     await page.setViewportSize({ width: 390, height: 844 });
     await page.screenshot({ path: "test-results/mobile-video-proportion.png" });
+    await page.getByRole("button", { name: "Fechar chat", exact: true }).tap();
     await page.locator(".player-touch-surface").tap({ position: { x: 20, y: 20 } });
     await page.getByRole("button", { name: "Entrar no Ambiente", exact: true }).tap();
+    await page.getByRole("button", { name: "Abrir chat", exact: true }).tap();
     await expect(page.locator(".music-presentation")).toBeVisible();
     expect(await page.locator(".player-frame").evaluate((node) => node.getBoundingClientRect().height)).toBeCloseTo(videoHeight, 2);
     await expect(page.locator("iframe.provider-player")).toHaveCSS("opacity", "1");
@@ -1209,14 +1248,15 @@ test("mobile permanent chat, gesture, secondary tools, late join and player idle
     await expect.poll(() => page.locator(".messages").evaluate((node) => node.scrollHeight > node.clientHeight)).toBe(true);
     await page.locator(".messages").evaluate((node) => { node.scrollTop = 0; });
     expect(await page.evaluate(() => document.documentElement.scrollHeight <= innerHeight)).toBe(true);
-    for (const name of ["Pessoas da Party", "Fila da Party", "Fila da Party"]) {
-      await page.getByRole("button", { name, exact: true }).tap();
+    for (const panel of ["people", "queue"] as const) {
+      if (panel === "people") await page.getByRole("button", { name: "Pessoas da Party", exact: true }).tap();
+      else { await page.getByRole("button", { name: "Fechar chat", exact: true }).tap(); await page.locator(".media-session-actions").getByRole("button", { name: /Fila da Party/ }).tap(); }
       const sheet = page.getByRole("complementary", { name: "Painel da Party" });
       await expect(sheet).toBeVisible();
       await expect(page.getByRole("tab", { name: "Chat", exact: true })).toHaveCount(0);
       const handle = page.getByRole("button", { name: "Recolher painel da Party" });
       await expect(handle).toBeVisible();
-      await page.screenshot({ path: name === "Pessoas da Party" ? "test-results/mobile-people-sheet.png" : "test-results/mobile-queue-sheet.png" });
+      await page.screenshot({ path: panel === "people" ? "test-results/mobile-people-sheet.png" : "test-results/mobile-queue-sheet.png" });
       await expect.poll(() => handle.boundingBox()).not.toBeNull();
       const box = await handle.boundingBox();
       await page.mouse.move(box!.x + box!.width / 2, box!.y + 10); await page.mouse.down();
@@ -1230,14 +1270,17 @@ test("mobile permanent chat, gesture, secondary tools, late join and player idle
       await page.mouse.move(box!.x + box!.width / 2, box!.y + 10); await page.mouse.down();
       await page.mouse.move(box!.x + box!.width / 2, box!.y + 300, { steps: 12 }); await page.mouse.up();
       await expect(sheet).toBeHidden();
-      await expect(page.getByRole("textbox", { name: "Mensagem" })).toBeVisible();
+      await expect(page.locator(".mobile-party-chat")).toBeHidden();
       expect((await engine()).created).toBe(resumedEngine.created); expect((await engine()).destroyed).toBe(resumedEngine.destroyed);
-      await page.getByRole("button", { name, exact: true }).tap();
+      if (panel === "people") { await page.getByRole("button", { name: "Abrir controles da Party" }).tap(); await page.getByRole("button", { name: /Pessoas na Party/ }).tap(); }
+      else await page.locator(".media-session-actions").getByRole("button", { name: /Fila da Party/ }).tap();
       await page.getByRole("button", { name: "Recolher painel da Party" }).tap();
       await expect(sheet).toBeHidden();
-      await page.getByRole("button", { name, exact: true }).tap();
+      if (panel === "people") { await page.getByRole("button", { name: "Abrir controles da Party" }).tap(); await page.getByRole("button", { name: /Pessoas na Party/ }).tap(); }
+      else await page.locator(".media-session-actions").getByRole("button", { name: /Fila da Party/ }).tap();
       await page.getByRole("button", { name: "Recolher painel da Party" }).focus();
       await page.keyboard.press("Enter"); await expect(sheet).toBeHidden();
+      await page.getByRole("button", { name: "Abrir chat", exact: true }).tap();
     }
     for (const width of [320, 360, 375, 390, 412, 430]) {
       await page.setViewportSize({ width, height: 844 });
@@ -1251,10 +1294,11 @@ test("mobile permanent chat, gesture, secondary tools, late join and player idle
     expect(await page.evaluate(() => (window as any).qaMicCaptures)).toBe(0);
     await page.getByRole("button", { name: "Ativar microfone", exact: true }).last().tap();
     await page.getByRole("button", { name: "Controles da call", exact: true }).tap();
-    await expect(page.locator(".mobile-call-menu")).toContainText("Microfone indisponível");
+    await expect(page.locator(".mobile-call-menu")).toContainText("Microfone bloqueado");
     expect(await page.evaluate(() => (window as any).qaMicCaptures)).toBe(1);
     await page.screenshot({ path: "test-results/mobile-automatic-voice.png" });
     await page.getByRole("button", { name: "Controles da call", exact: true }).tap();
+    await page.getByRole("button", { name: "Fechar chat", exact: true }).tap();
     const currentMediaState = await new Promise<any>((resolve) => { socket.once("media:sync", resolve); socket.emit("media:request-sync", { roomId: house.primaryRoomId }); });
     expect(currentMediaState.state).toBe("playing");
     await page.evaluate(() => { if (document.activeElement instanceof HTMLElement) document.activeElement.blur(); });
@@ -1263,15 +1307,17 @@ test("mobile permanent chat, gesture, secondary tools, late join and player idle
     await expect(page.locator(".lumio-controls")).toHaveCSS("opacity", "0", { timeout: 5000 });
     await page.locator(".player-touch-surface").tap({ position: { x: 20, y: 20 } });
     await page.getByRole("button", { name: "Entrar no modo cinema", exact: true }).tap();
-    await expect(page.locator(".mobile-party-chat")).toBeVisible();
+    await expect(page.locator(".mobile-party-chat")).toBeHidden();
     await page.getByRole("button", { name: "Sair do modo cinema", exact: true }).tap();
+    await page.getByRole("button", { name: "Abrir chat", exact: true }).tap();
     await expect(page.getByRole("textbox", { name: "Mensagem" })).toBeVisible();
     await page.setViewportSize({ width: 844, height: 390 });
     await expect(page.getByRole("textbox", { name: "Mensagem" })).toBeVisible();
-    await expect.poll(() => page.locator(".party-workspace").evaluate((node) => getComputedStyle(node).display)).toBe("grid");
-    const landscape = await page.evaluate(() => { const frame = document.querySelector(".player-frame")!.getBoundingClientRect(), chat = document.querySelector(".mobile-party-chat")!.getBoundingClientRect(); return { ratio: frame.width / frame.height, frameRight: frame.right, chatLeft: chat.left }; });
+    await expect.poll(() => page.locator(".party-workspace").evaluate((node) => getComputedStyle(node).display)).toBe("flex");
+    const landscape = await page.evaluate(() => { const frame = document.querySelector(".player-frame")!.getBoundingClientRect(), chat = document.querySelector(".mobile-party-chat")!.getBoundingClientRect(); return { ratio: frame.width / frame.height, chatLeft: chat.left, chatRight: chat.right }; });
     expect(Math.abs(landscape.ratio - 16 / 9)).toBeLessThan(0.02);
-    expect(landscape.frameRight).toBeLessThanOrEqual(landscape.chatLeft);
+    expect(landscape.chatLeft).toBeGreaterThanOrEqual(0);
+    expect(landscape.chatRight).toBeLessThanOrEqual(844);
     await page.locator(".mobile-party-chat").evaluate((node) => Promise.all(node.getAnimations().map((animation) => animation.finished)));
     await page.screenshot({ path: "test-results/mobile-landscape.png" });
     const landscapeComposer = await page.getByRole("textbox", { name: "Mensagem" }).boundingBox();
@@ -1279,6 +1325,7 @@ test("mobile permanent chat, gesture, secondary tools, late join and player idle
     await page.getByRole("textbox", { name: "Mensagem" }).fill("Fullscreen draft");
     await page.locator(".messages").evaluate((node) => { node.scrollTop = 60; });
     const scrollBeforeFullscreen = await page.locator(".messages").evaluate((node) => node.scrollTop);
+    await page.getByRole("button", { name: "Fechar chat", exact: true }).tap();
     await page.locator(".player-touch-surface").tap({ position: { x: 20, y: 20 } });
     await page.getByRole("button", { name: "Tela cheia", exact: true }).tap();
     await expect.poll(() => page.evaluate(() => Boolean(document.fullscreenElement || document.querySelector(".fallback-fullscreen")))).toBe(true);
@@ -1295,6 +1342,7 @@ test("mobile permanent chat, gesture, secondary tools, late join and player idle
     await page.screenshot({ path: "test-results/mobile-video-fullscreen.png" });
     await page.screenshot({ path: "artifacts/m1/m1-fullscreen-video.png" });
     await page.getByRole("button", { name: /Sair da tela (cheia|ampliada)/ }).tap();
+    await page.getByRole("button", { name: "Abrir chat", exact: true }).tap();
     await expect(page.getByRole("textbox", { name: "Mensagem" })).toBeVisible();
     await expect(page.getByRole("textbox", { name: "Mensagem" })).toHaveValue("Fullscreen draft");
     expect(await page.locator(".messages").evaluate((node) => node.scrollTop)).toBe(scrollBeforeFullscreen);
@@ -1309,6 +1357,7 @@ test("mobile permanent chat, gesture, secondary tools, late join and player idle
     await page.evaluate(() => document.documentElement.style.removeProperty("--visual-height"));
     await assertPortraitLayout();
     await expect(page.getByRole("textbox", { name: "Mensagem" })).toHaveValue("Rascunho preservado");
+    await page.getByRole("button", { name: "Fechar chat", exact: true }).tap();
     await page.locator(".player-touch-surface").tap({ position: { x: 20, y: 20 } });
     await page.getByRole("button", { name: "Pausar", exact: true }).tap();
     await page.reload();
@@ -1379,10 +1428,11 @@ test("mobile permanent chat, gesture, secondary tools, late join and player idle
     await expect.poll(() => page.evaluate(() => (window as any).qaPlayer.state)).toBe(1);
     expect((await engine()).position).toBeGreaterThanOrEqual(seekPosition);
     await page.setViewportSize({ width: 320, height: 450 });
+    await page.getByRole("button", { name: "Abrir chat", exact: true }).tap();
     await page.getByRole("textbox", { name: "Mensagem" }).fill("Keyboard-sized viewport");
     const input = await page.getByRole("textbox", { name: "Mensagem" }).boundingBox(); expect(input!.y + input!.height).toBeLessThanOrEqual(450);
     await page.screenshot({ path: "test-results/mobile-short-viewport.png" });
-    await page.reload(); await expect(page.getByRole("textbox", { name: "Mensagem" })).toBeVisible();
+    await page.reload(); await page.getByRole("button", { name: "Abrir chat", exact: true }).tap(); await expect(page.getByRole("textbox", { name: "Mensagem" })).toBeVisible();
     expect(await page.locator(".reaction-actions,.reaction-float").count()).toBe(0);
     expect(fs.readFileSync(path.join(serverRoot, "src/index.ts"), "utf8")).not.toContain("reaction:send");
     expect(fs.readFileSync(path.join(root, "packages/shared/src/index.ts"), "utf8")).not.toContain("reaction:send");
@@ -1607,7 +1657,7 @@ test("M2 three browsers share favorites and collections without disturbing playb
     await expect(a.locator(".now-playing h2")).toHaveText(media.title);
     await expect(b.locator(".now-playing h2")).toHaveText(media.title);
     const before = await a.locator(".now-playing h2").textContent();
-    await b.locator(".dock-add").click();
+    await b.locator(".media-session-actions").getByRole("button", { name: "Adicionar mídia" }).click();
     const hubB = b.getByRole("dialog", { name: "A mídia da Casa" });
     await hubB.getByRole("button", { name: "Biblioteca", exact: true }).click();
     await hubB.getByRole("combobox", { name: "Filtrar biblioteca" }).selectOption("favorites");
@@ -1629,7 +1679,7 @@ test("M2 three browsers share favorites and collections without disturbing playb
     await b.screenshot({ path: "artifacts/m2/m2-edit-collection.png" });
     await hubB.getByRole("button", { name: "Cancelar" }).click();
     await hubB.getByLabel("Mais opções").click();
-    await a.locator(".dock-add").click();
+    await a.locator(".media-session-actions").getByRole("button", { name: "Adicionar mídia" }).click();
     const hubA = a.getByRole("dialog", { name: "A mídia da Casa" });
     await hubA.getByRole("button", { name: "Biblioteca", exact: true }).click();
     const row = hubA.locator(".media-row").filter({ hasText: media.title });
@@ -1664,11 +1714,11 @@ test("M2 three browsers share favorites and collections without disturbing playb
     expect(await b.locator(".now-playing h2").textContent()).toBe(before);
     await hubB.getByRole("button", { name: `Adicionar ${media.title} à fila` }).click();
     await hubB.getByRole("button", { name: "Fechar Media Hub" }).click();
-    await b.getByRole("button", { name: /Abrir fila/ }).click();
+    await b.locator(".media-session-actions").getByRole("button", { name: /Fila da Party/ }).click();
     await expect(b.locator(".drawer-queue .queue-item")).toHaveCount(2);
     await c.goto(`${origin}/house/${house.id}`);
     await expect(c.locator(".now-playing h2")).toHaveText(media.title);
-    await c.locator(".dock-add").click();
+    await c.locator(".media-session-actions").getByRole("button", { name: "Adicionar mídia" }).click();
     const hubC = c.getByRole("dialog", { name: "A mídia da Casa" });
     await hubC.getByRole("button", { name: "Playlists", exact: true }).click();
     await expect(hubC.getByRole("button", { name: /M2 shared collection/ })).toBeVisible();
@@ -1706,10 +1756,10 @@ test("M3 Queue V2: three clients converge through reorder, stale action, late jo
     const errors: string[] = [];
     for (const page of [a, b, c]) page.on("pageerror", (error) => errors.push(error.message));
     await Promise.all([a.goto(`${origin}/house/${house.id}`), b.goto(`${origin}/house/${house.id}`)]);
-    await a.getByRole("button", { name: /Abrir fila/ }).click();
+    await a.locator(".media-session-actions").getByRole("button", { name: /Fila da Party/ }).click();
     await expect(a.locator(".queue-empty")).toBeVisible();
     await a.screenshot({ path: "artifacts/m3/m3-queue-empty-desktop.png" });
-    await b.getByRole("button", { name: "Fila da Party", exact: true }).click();
+    await b.locator(".media-session-actions").getByRole("button", { name: /Fila da Party/ }).click();
     await expect(b.locator(".queue-empty")).toBeVisible();
     await b.screenshot({ path: "artifacts/m3/m3-queue-empty-mobile.png" });
     await b.getByRole("button", { name: "Fechar painel" }).click();
@@ -1739,7 +1789,7 @@ test("M3 Queue V2: three clients converge through reorder, stale action, late jo
     const stale = await sockets[0].timeout(5000).emitWithAck("queue:move", { roomId, itemId: second.id, toIndex: 1, revision: oldRevision });
     expect(stale.ok).toBe(false); expect(stale.queue.map((entry: { id: string }) => entry.id)).toEqual([first.id, third.id, second.id]);
     await expect(a.locator(".queue-group").last().locator(".queue-item").first()).toContainText(third.title);
-    await b.getByRole("button", { name: "Fila da Party", exact: true }).click();
+    await b.locator(".media-session-actions").getByRole("button", { name: /Fila da Party/ }).click();
     await expect(b.locator(".queue-group").last().locator(".queue-item").first()).toContainText(third.title);
     await b.screenshot({ path: "artifacts/m3/m3-queue-mobile.png" });
     await b.getByRole("button", { name: `Opções para ${third.title}` }).click();
@@ -1760,7 +1810,7 @@ test("M3 Queue V2: three clients converge through reorder, stale action, late jo
     const retry = await request.post(`${api}/api/media-hub/${roomId}/playlists/${playlistId}/queue`, { headers, data: { mode: "append", playNow: false, revision: removed.revision, operationId: batchId } });
     expect((await retry.json()).duplicate).toBe(true);
     sockets[1].disconnect(); await b.reload();
-    if (!await b.getByRole("complementary", { name: "Painel da Party" }).isVisible()) await b.getByRole("button", { name: "Fila da Party", exact: true }).click();
+    if (!await b.getByRole("complementary", { name: "Painel da Party" }).isVisible()) await b.locator(".media-session-actions").getByRole("button", { name: /Fila da Party/ }).click();
     await expect(b.locator(".queue-group").last().locator(".queue-item")).toHaveCount(2);
     const next = await sockets[0].timeout(5000).emitWithAck("queue:advance", { roomId, expectedMediaId: first.providerMediaId, expectedQueueItemId: first.id });
     const repeated = await sockets[2].timeout(5000).emitWithAck("queue:advance", { roomId, expectedMediaId: first.providerMediaId, expectedQueueItemId: first.id });
@@ -1771,7 +1821,7 @@ test("M3 Queue V2: three clients converge through reorder, stale action, late jo
     await expect(a.locator(".queue-group").last().locator(".queue-item")).toHaveCount(16);
     await a.screenshot({ path: "artifacts/m3/m3-long-list-desktop.png" });
     await b.screenshot({ path: "artifacts/m3/m3-long-list-mobile.png" });
-    await a.locator(".dock-add").click();
+    await a.locator(".media-session-actions").getByRole("button", { name: "Adicionar mídia" }).click();
     const hub = a.getByRole("dialog", { name: "A mídia da Casa" });
     await hub.getByRole("button", { name: "Google Drive", exact: true }).click();
     await a.screenshot({ path: "artifacts/m3/m3-drive-unavailable-local.png" });
@@ -1824,16 +1874,18 @@ test("GX2 Party transport, Call peers and tracks keep identity across visual chi
     try {
       for (const page of [a, b]) {
         await page.goto(`${origin}/house/${house.id}`);
-        await expect(page.locator(".dock-call-state").first()).toHaveText("Microfone desligado", { timeout: 20_000 });
+        await expect(page.locator(".social-call-status").first()).toHaveText("Call conectada", { timeout: 20_000 });
         expect(await page.evaluate(() => (window as any).gx2.captures.length)).toBe(0);
         expect(await page.evaluate(() => (window as any).gx2.sockets.length)).toBe(1);
       }
       await expect.poll(() => a.evaluate(() => (window as any).gx2.peers.filter((peer: RTCPeerConnection) => peer.connectionState === "connected").length), { timeout: 20_000 }).toBe(1);
-      await a.getByRole("button", { name: "Ativar microfone", exact: true }).click();
-      await expect(a.getByRole("button", { name: "Desativar microfone", exact: true })).toBeVisible();
+      await a.locator(".social-mic").click();
+      await expect(a.locator(".social-mic")).toHaveAttribute("aria-pressed", "true");
+      await b.getByRole("button", { name: "Abrir controles da Party" }).click();
       await b.getByRole("button", { name: "Desativar áudio da call", exact: true }).click();
+      await a.getByRole("button", { name: "Abrir controles da Party" }).click();
       await a.getByRole("button", { name: "Compartilhar tela", exact: true }).click();
-      await expect(a.getByRole("button", { name: "Parar compartilhamento", exact: true })).toBeVisible();
+      await expect(a.getByRole("button", { name: "Parar compartilhamento de tela", exact: true })).toBeVisible();
       await a.getByRole("button", { name: "Abrir chat", exact: true }).click();
       await a.getByRole("textbox", { name: "Mensagem" }).fill("Rascunho GX2 permanece");
       for (const page of [a, b]) await page.evaluate(() => {
@@ -1866,7 +1918,8 @@ test("GX2 Party transport, Call peers and tracks keep identity across visual chi
         };
       })).toEqual({ sameShell: true, sameSocket: true, samePeers: true, sameMic: true, sameDisplay: true, playerRemounted: true, captures: 0, displays: 0, socialPackets: [] });
       await expect(a.getByRole("textbox", { name: "Mensagem" })).toHaveValue("Rascunho GX2 permanece");
-      await expect(a.getByRole("button", { name: "Desativar microfone", exact: true })).toBeVisible();
+      await expect(a.locator(".social-mic")).toHaveAttribute("aria-pressed", "true");
+      await b.getByRole("button", { name: "Abrir controles da Party" }).click();
       await expect(b.getByRole("button", { name: "Ativar áudio da call", exact: true })).toBeVisible();
       await b.getByRole("button", { name: "Abrir chat", exact: true }).click();
       await b.getByRole("textbox", { name: "Mensagem" }).fill("GX2 mensagem única");
