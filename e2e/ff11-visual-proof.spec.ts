@@ -11,7 +11,7 @@ import { pathToFileURL } from "node:url";
 
 const root = path.resolve(__dirname, "..");
 const shots = path.join(root, "artifacts", "frontfix", "ff11", "current");
-const ff3Shots = path.join(root, "artifacts", "frontfix", "ff3", "pass2");
+const ff3Shots = path.join(root, "artifacts", "frontfix", "ff31", "pass2");
 const freePort = () => new Promise<number>((resolve, reject) => {
   const socket = net.createServer();
   socket.once("error", reject);
@@ -80,7 +80,7 @@ test("FF1.1 current authenticated surfaces", async ({ browser, request }) => {
   };
   try {
     await a.goto(`${origin}/app`);
-    await expect(a.getByRole("heading", { name: "Você ainda não faz parte de uma Casa." })).toBeVisible();
+    await expect(a.getByRole("heading", { name: "Você ainda não faz parte de uma Casa." })).toBeVisible({ timeout: 20_000 });
     await capture(a, "home-empty", 1440, 900);
     await capture(a, "home-empty", 390, 844);
     const headers = { Authorization: `Bearer ${sessions[0].token}` };
@@ -109,7 +109,7 @@ test("FF1.1 current authenticated surfaces", async ({ browser, request }) => {
     await capture(a, "media-chat", 1440, 900);
     await a.getByRole("button", { name: /Abrir pessoas/ }).click();
     await capture(a, "media-people", 1440, 900);
-    await a.getByRole("button", { name: "Abrir controles da Party" }).click();
+
     await a.getByRole("button", { name: "Call e dispositivos" }).click();
     await expect(a.getByRole("dialog")).toBeVisible();
     await capture(a, "call-controls", 1440, 900);

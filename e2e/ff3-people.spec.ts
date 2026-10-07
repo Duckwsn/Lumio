@@ -91,9 +91,9 @@ test("FF3 People keeps 1, 2, 4, 8 and 12 real Party members readable", async ({ 
         peer.once("connect", () => peer.emit("room:join", { roomId: house.primaryRoomId, user: sessions[index].user }));
         peers.push(peer); peer.connect(); await joined;
       }
-      await expect(page.getByRole("button", { name: "Abrir controles da Party" })).toBeVisible();
-      await page.getByRole("button", { name: "Abrir controles da Party" }).click();
-      await expect(page.locator(".party-social-menu")).toContainText(`Na Party · ${target}`);
+      await expect(page.getByRole("button", { name: `Pessoas na Party, ${target}`, exact: true })).toBeVisible();
+
+      await expect(page.getByRole("button", { name: "Abrir controles da Party" })).toHaveCount(0);
       await page.getByRole("button", { name: /Pessoas na Party/ }).click();
       const panel = page.getByRole("complementary", { name: "Painel da Party" });
       await expect(panel.locator(".people-section").first().locator("li")).toHaveCount(target);
@@ -102,12 +102,12 @@ test("FF3 People keeps 1, 2, 4, 8 and 12 real Party members readable", async ({ 
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
       if (target === 12) {
         if (await page.getByRole("button", { name: "Dispensar aviso" }).isVisible()) await page.getByRole("button", { name: "Dispensar aviso" }).click();
-        await page.screenshot({ path: "artifacts/frontfix/ff3/pass2/people-12-desktop.png" });
+        await page.screenshot({ path: "artifacts/frontfix/ff31/pass2/people-12-desktop.png" });
         for (const width of [320, 390]) {
           await page.setViewportSize({ width, height: width === 320 ? 568 : 844 });
           await expect(panel.locator(".people-section").first().locator("li")).toHaveCount(12);
           expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-          await page.screenshot({ path: `artifacts/frontfix/ff3/pass2/people-12-${width}.png` });
+          await page.screenshot({ path: `artifacts/frontfix/ff31/pass2/people-12-${width}.png` });
         }
       }
       await page.getByRole("button", { name: "Fechar painel", exact: true }).click();

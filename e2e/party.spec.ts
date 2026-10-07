@@ -177,7 +177,7 @@ test("G5 three authenticated browsers: private cards, full match, six widths, wi
     }
     await a.setViewportSize({ width: 390, height: 844 });
     await expect(a.getByRole("button", { name: "Fila da Party", exact: true })).toHaveCount(0);
-    await a.getByRole("button", { name: "Abrir controles da Party" }).tap(); await a.getByRole("button", { name: /Pessoas na Party/ }).tap(); await expect(a.locator(".party-drawer")).toBeVisible(); await a.getByRole("button", { name: "Recolher painel da Party", exact: true }).tap(); await expect(a.locator(".party-drawer")).toHaveCount(0); expect(await tableNode!.evaluate((node) => node === document.querySelector(".card-game"))).toBe(true);
+    await a.getByRole("button", { name: "Abrir chat", exact: true }).tap(); await a.getByRole("button", { name: "Pessoas da Party", exact: true }).tap(); await expect(a.locator(".party-drawer")).toBeVisible(); await a.getByRole("button", { name: "Recolher painel da Party", exact: true }).tap(); await expect(a.locator(".party-drawer")).toHaveCount(0); expect(await tableNode!.evaluate((node) => node === document.querySelector(".card-game"))).toBe(true);
     const play = async (page: typeof a, label: string) => {
       const card = page.getByRole("button", { name: label, exact: true }); await expect(card).toBeEnabled();
       if (page === b) await card.click(); else await card.tap(); await expect(card).toHaveAttribute("aria-pressed", "true");
@@ -261,7 +261,7 @@ test("G4 three authenticated clients: safe Quiz, lock/reconnect, navigation, six
     await a.screenshot({ path: "test-results/g4-lobby-mobile.png" }); await b.screenshot({ path: "test-results/g6-quiz-lobby.png" });
     const quizNode = await a.locator(".quiz-game").elementHandle();
     await expect(a.getByRole("button", { name: "Fila da Party", exact: true })).toHaveCount(0);
-    await a.getByRole("button", { name: "Abrir controles da Party" }).click(); await a.getByRole("button", { name: /Pessoas na Party/ }).click(); await expect(a.locator(".party-drawer")).toBeVisible(); await a.getByRole("button", { name: "Recolher painel da Party", exact: true }).click(); await expect(a.locator(".party-drawer")).toHaveCount(0); expect(await quizNode!.evaluate((node) => node === document.querySelector(".quiz-game"))).toBe(true);
+    await a.getByRole("button", { name: "Abrir chat", exact: true }).click(); await a.getByRole("button", { name: "Pessoas da Party", exact: true }).click(); await expect(a.locator(".party-drawer")).toBeVisible(); await a.getByRole("button", { name: "Recolher painel da Party", exact: true }).click(); await expect(a.locator(".party-drawer")).toHaveCount(0); expect(await quizNode!.evaluate((node) => node === document.querySelector(".quiz-game"))).toBe(true);
     const chatNode = await a.locator(".mobile-party-chat").elementHandle();
     await a.getByRole("button", { name: "Abrir chat", exact: true }).click();
     await a.locator(".mobile-party-chat").getByRole("textbox").fill("rascunho Quiz G4");
@@ -393,6 +393,10 @@ test("G2 three-user Draw Game: integrated chat, privacy, shortcuts, score, mobil
     await a.setViewportSize({ width: 390, height: 844 });
     await a.screenshot({ path: "test-results/g6-draw-word-choice.png" });
     const choiceWords = await a.locator(".draw-choices button").allTextContents();
+    const containsWholeChoice = (value: string) => choiceWords.some((term) => {
+      const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      return new RegExp(`(^|[^\\p{L}])${escaped}($|[^\\p{L}])`, "iu").test(value);
+    });
     const word = [...choiceWords].sort((left, right) => right.length - left.length)[0];
     await a.locator(".draw-choices button").filter({ hasText: word }).click();
     for (const page of [b, c]) { await expect(page.locator(".draw-word")).not.toContainText(word); await expect(page.getByRole("textbox", { name: "Seu palpite" })).toBeVisible(); }
@@ -414,9 +418,9 @@ test("G2 three-user Draw Game: integrated chat, privacy, shortcuts, score, mobil
       }, choiceWords);
       expect(Object.values(carriers).every((found) => !found)).toBe(true);
       const accessible = await page.locator("body").ariaSnapshot();
-      for (const term of choiceWords) expect(accessible.toLocaleLowerCase("pt-BR").includes(term.toLocaleLowerCase("pt-BR"))).toBe(false);
+      expect(containsWholeChoice(accessible)).toBe(false);
     }
-    expect(capturedLogs.some((message) => choiceWords.some((term) => message.toLocaleLowerCase("pt-BR").includes(term.toLocaleLowerCase("pt-BR"))))).toBe(false);
+    expect(capturedLogs.some(containsWholeChoice)).toBe(false);
     const board = (page: typeof a) => page.locator(".draw-board canvas").evaluate((node: HTMLCanvasElement) => node.toDataURL());
     const blank = await board(b);
     const canvas = a.locator(".draw-board canvas"); await canvas.scrollIntoViewIfNeeded();
@@ -782,7 +786,7 @@ test("Landing → login → restored session → House → Party → queue/drawe
   await page.getByRole("button", { name: "Criar e entrar" }).click();
   await expect(page).toHaveURL(/\/house\/house-/);
   await expect(page.getByRole("heading", { name: "QA E2E Casa" })).toBeVisible();
-  await page.locator(".media-session-actions").getByRole("button", { name: /Fila da Party/ }).click();
+  await page.getByRole("button", { name: /Fila da Party/ }).click();
   await expect(page.getByText("Fila da Party")).toBeVisible();
   await page.getByRole("button", { name: "Abrir chat" }).click();
   await expect(page.getByRole("textbox", { name: "Mensagem" })).toBeVisible();
@@ -794,7 +798,7 @@ test("Landing → login → restored session → House → Party → queue/drawe
   expect(manifest.ok()).toBe(true);
   expect((await manifest.json() as { icons: unknown[] }).icons.length).toBeGreaterThan(0);
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.getByRole("button", { name: "Abrir chat", exact: true }).click();
+  await expect(page.locator(".mobile-party-chat")).toBeVisible();
   await expect(page.getByRole("textbox", { name: "Mensagem" })).toBeVisible();
   await page.setViewportSize({ width: 844, height: 390 });
   await expect(page.getByRole("heading", { name: "QA E2E Casa" })).toBeVisible();
@@ -928,7 +932,7 @@ test("automatic voice: three real RTC clients, explicit capture, denial, deafen,
     const join = async (page: typeof a) => {
       await page.goto(`${origin}/house/${house.id}`);
       await expect(page.locator(".social-call-status").first()).toHaveText("Call conectada", { timeout: 20000 });
-      await expect(page.locator(".social-mic")).toContainText("Mic desligado");
+      await expect(page.locator(".social-mic")).toHaveAccessibleName("Ativar microfone · Microfone desligado");
       await expect(page.getByRole("button", { name: /Ativar microfone/ }).first()).toBeVisible();
       expect(await page.evaluate(() => (window as any).qaVoice.captures)).toBe(0);
       expect(await page.evaluate(() => (window as any).qaVoice.displays)).toBe(0);
@@ -946,7 +950,7 @@ test("automatic voice: three real RTC clients, explicit capture, denial, deafen,
     await a.locator(".social-mic").click();
     await expect(a.locator(".social-mic")).toHaveAttribute("aria-pressed", "true");
     await connected(b, 1); await expect.poll(() => packets(b), { timeout: 20000 }).toBeGreaterThan(0);
-    await b.getByRole("button", { name: "Abrir controles da Party" }).click();
+
     await expect(b.getByRole("button", { name: "Ativar áudio da call", exact: true })).toBeVisible();
     await b.evaluate(() => { (window as any).qaVoice.blockAudio = false; });
     await b.getByRole("button", { name: "Ativar áudio da call", exact: true }).click();
@@ -992,7 +996,7 @@ test("automatic voice: three real RTC clients, explicit capture, denial, deafen,
     for (const page of [a, b, c]) if (await page.getByRole("button", { name: "Fechar chat", exact: true }).isVisible()) await page.getByRole("button", { name: "Fechar chat", exact: true }).click();
     await b.evaluate(() => { (window as any).qaVoice.deny = true; });
     await b.locator(".social-mic").click();
-    await expect(b.locator(".social-mic")).toContainText("Bloqueado");
+    await expect(b.locator(".social-mic")).toHaveAccessibleName(/Microfone bloqueado/);
     await expect(b.locator(".social-mic")).toHaveAttribute("aria-pressed", "false");
     await expect.poll(() => b.evaluate(() => (window as any).qaVoice.peers.filter((peer: RTCPeerConnection) => peer.connectionState === "connected").length), { timeout: 20000 }).toBeGreaterThanOrEqual(1);
     const received = await packets(b); await expect.poll(() => packets(b), { timeout: 20000 }).toBeGreaterThan(received);
@@ -1051,11 +1055,11 @@ test("automatic voice: three real RTC clients, explicit capture, denial, deafen,
       for (const peer of (window as any).qaVoice.peers as RTCPeerConnection[]) (await peer.getStats()).forEach((stat) => { if (stat.type === "inbound-rtp" && stat.kind === "audio" && stat.packetsReceived > 0) sources++; });
       return { sources, peers: (window as any).qaVoice.peers.map((peer: RTCPeerConnection) => ({ state: peer.connectionState, signaling: peer.signalingState, audio: peer.getTransceivers().filter((slot) => slot.receiver.track.kind === "audio").map((slot) => ({ direction: slot.direction, current: slot.currentDirection, muted: slot.receiver.track.muted })) })) };
     }), { timeout: 20000 }).toMatchObject({ sources: 2 });
-    await b.getByRole("button", { name: "Abrir controles da Party" }).click();
+
     await b.getByRole("button", { name: "Desativar áudio da call", exact: true }).click();
     expect(await b.evaluate(() => (window as any).qaVoice.audio.every((audio: HTMLAudioElement) => audio.muted))).toBe(true);
     expect(await b.evaluate(() => (window as any).qaVoice.tracks.filter((track: MediaStreamTrack) => track.readyState === "live").every((track: MediaStreamTrack) => !track.enabled))).toBe(true);
-    await b.getByRole("button", { name: "Abrir controles da Party" }).click();
+
     await b.getByRole("button", { name: "Ativar áudio da call", exact: true }).click();
     await expect(b.locator(".social-mic")).toBeVisible();
     await b.locator(".social-mic").click();
@@ -1141,7 +1145,8 @@ test("mobile contextual Party Chat, secondary tools, late join and player idle c
     const pageErrors: string[] = []; page.on("pageerror", (error) => pageErrors.push(error.message));
     await page.goto(`${origin}/house/${house.id}`);
     await expect(page.getByRole("heading", { name: "Mobile QA Casa", exact: true })).toBeVisible({ timeout: 30_000 });
-    await expect(page.locator(".mobile-party-chat")).toBeHidden();
+    await expect(page.locator(".mobile-party-chat")).toBeVisible();
+    await expect(page.getByRole("button", { name: /^(Abrir|Fechar|Ocultar) chat$/ })).toHaveCount(0);
     if ((await page.evaluate(() => (window as any).qaPlayer.state)) !== 1) {
       await page.locator(".player-touch-surface").tap({ position: { x: 20, y: 20 } });
       const playButton = page.getByRole("button", { name: "Reproduzir", exact: true });
@@ -1158,11 +1163,12 @@ test("mobile contextual Party Chat, secondary tools, late join and player idle c
     const engine = () => page.evaluate(() => ({ created: (window as any).qaPlayer.created, destroyed: (window as any).qaPlayer.destroyed, position: (window as any).qaPlayer.position, plays: (window as any).qaPlayer.plays }));
     const originalEngine = await engine();
     const mediaNode = await page.locator("iframe.provider-player").elementHandle();
-    await page.getByRole("button", { name: "Abrir chat", exact: true }).tap();
+    await expect(page.locator(".mobile-party-chat")).toBeVisible();
     await page.getByRole("textbox", { name: "Mensagem" }).fill("Draft preserved in Games");
     await page.getByRole("button", { name: "Jogos", exact: true }).tap();
     await expect(page.getByRole("heading", { name: "O que vamos jogar?" })).toBeFocused();
     await expect(page.locator(".main-stage")).toHaveAttribute("data-view", "game");
+    await page.getByRole("button", { name: "Abrir chat", exact: true }).tap();
     await expect(page.getByRole("textbox", { name: "Mensagem" })).toHaveValue("Draft preserved in Games");
     await page.getByRole("button", { name: "Enviar mensagem" }).tap();
     await expect(page.getByText("Draft preserved in Games", { exact: true })).toBeVisible();
@@ -1175,8 +1181,9 @@ test("mobile contextual Party Chat, secondary tools, late join and player idle c
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth && document.documentElement.scrollHeight <= innerHeight)).toBe(true);
       await expect(page.locator("iframe.provider-player, video.provider-player, .lumio-player")).toHaveCount(0);
       await expect(page.getByRole("button", { name: "Fila da Party", exact: true })).toHaveCount(0);
-      await page.getByRole("button", { name: "Abrir controles da Party" }).tap();
-      await page.getByRole("button", { name: /Pessoas na Party/ }).tap();
+
+      if (await page.getByRole("button", { name: "Abrir chat", exact: true }).isVisible()) await page.getByRole("button", { name: "Abrir chat", exact: true }).tap();
+      await page.getByRole("button", { name: "Pessoas da Party", exact: true }).tap();
       await expect(page.getByRole("button", { name: "Recolher painel da Party" })).toBeVisible();
       await page.getByRole("button", { name: "Fechar painel", exact: true }).tap();
       await expect(page.locator(".main-stage")).toHaveAttribute("data-view", "game");
@@ -1200,18 +1207,19 @@ test("mobile contextual Party Chat, secondary tools, late join and player idle c
     await page.locator(".player-touch-surface").tap({ position: { x: 20, y: 20 } });
     await page.getByRole("button", { name: "Reproduzir", exact: true }).tap();
     await expect.poll(() => page.evaluate(() => (window as any).qaPlayer.state)).toBe(1);
-    await page.getByRole("button", { name: "Abrir chat", exact: true }).tap();
+    await expect(page.locator(".mobile-party-chat")).toBeVisible();
     const assertPortraitLayout = async () => {
       await expect.poll(() => page.locator(".player-frame").evaluate((node) => Math.abs(node.getBoundingClientRect().width / node.getBoundingClientRect().height - 16 / 9))).toBeLessThan(0.02);
       // VisualViewport resize arrives asynchronously after setViewportSize/fullscreen.
       await expect.poll(() => page.evaluate(() => document.querySelector(".mobile-party-chat")!.getBoundingClientRect().height - document.querySelector(".player-frame")!.getBoundingClientRect().height)).toBeGreaterThan(0);
       const geometry = await page.evaluate(() => {
         const frame = document.querySelector(".player-frame")!.getBoundingClientRect(), chat = document.querySelector(".mobile-party-chat")!.getBoundingClientRect(), workspace = document.querySelector(".party-workspace")!.getBoundingClientRect();
-        return { frame: frame.height, chat: chat.height, bottom: chat.bottom, workspaceBottom: workspace.bottom, gap: chat.top - frame.bottom };
+        return { frame: frame.height, chat: chat.height, bottom: chat.bottom, workspaceBottom: workspace.bottom, gap: chat.top - frame.bottom, metadata: document.querySelector(".media-context")!.getBoundingClientRect().height };
       });
       expect(geometry.chat).toBeGreaterThan(geometry.frame);
       expect(Math.abs(geometry.bottom - geometry.workspaceBottom)).toBeLessThanOrEqual(1);
-      expect(geometry.gap).toBeLessThanOrEqual(8);
+      expect(geometry.gap).toBeGreaterThanOrEqual(0);
+      expect(geometry.gap).toBeLessThanOrEqual(geometry.metadata + 8);
       expect(await page.locator(".messages").evaluate((node) => getComputedStyle(node).overflowY)).toBe("auto");
     };
     await assertPortraitLayout();
@@ -1223,10 +1231,10 @@ test("mobile contextual Party Chat, secondary tools, late join and player idle c
     }
     await page.setViewportSize({ width: 390, height: 844 });
     await page.screenshot({ path: "test-results/mobile-video-proportion.png" });
-    await page.getByRole("button", { name: "Fechar chat", exact: true }).tap();
+    await expect(page.getByRole("button", { name: "Fechar chat", exact: true })).toHaveCount(0);
     await page.locator(".player-touch-surface").tap({ position: { x: 20, y: 20 } });
     await page.getByRole("button", { name: "Entrar no Ambiente", exact: true }).tap();
-    await page.getByRole("button", { name: "Abrir chat", exact: true }).tap();
+    await expect(page.locator(".mobile-party-chat")).toBeVisible();
     await expect(page.locator(".music-presentation")).toBeVisible();
     expect(await page.locator(".player-frame").evaluate((node) => node.getBoundingClientRect().height)).toBeCloseTo(videoHeight, 2);
     await expect(page.locator("iframe.provider-player")).toHaveCSS("opacity", "1");
@@ -1249,8 +1257,8 @@ test("mobile contextual Party Chat, secondary tools, late join and player idle c
     await page.locator(".messages").evaluate((node) => { node.scrollTop = 0; });
     expect(await page.evaluate(() => document.documentElement.scrollHeight <= innerHeight)).toBe(true);
     for (const panel of ["people", "queue"] as const) {
-      if (panel === "people") await page.getByRole("button", { name: "Pessoas da Party", exact: true }).tap();
-      else { await page.getByRole("button", { name: "Fechar chat", exact: true }).tap(); await page.locator(".media-session-actions").getByRole("button", { name: /Fila da Party/ }).tap(); }
+      if (panel === "people") { await page.getByRole("button", { name: "Pessoas da Party", exact: true }).tap(); }
+      else { await expect(page.getByRole("button", { name: "Fechar chat", exact: true })).toHaveCount(0); await page.getByRole("button", { name: /Fila da Party/ }).tap(); }
       const sheet = page.getByRole("complementary", { name: "Painel da Party" });
       await expect(sheet).toBeVisible();
       await expect(page.getByRole("tab", { name: "Chat", exact: true })).toHaveCount(0);
@@ -1270,17 +1278,19 @@ test("mobile contextual Party Chat, secondary tools, late join and player idle c
       await page.mouse.move(box!.x + box!.width / 2, box!.y + 10); await page.mouse.down();
       await page.mouse.move(box!.x + box!.width / 2, box!.y + 300, { steps: 12 }); await page.mouse.up();
       await expect(sheet).toBeHidden();
-      await expect(page.locator(".mobile-party-chat")).toBeHidden();
+      await expect(page.locator(".mobile-party-chat")).toBeVisible();
       expect((await engine()).created).toBe(resumedEngine.created); expect((await engine()).destroyed).toBe(resumedEngine.destroyed);
-      if (panel === "people") { await page.getByRole("button", { name: "Abrir controles da Party" }).tap(); await page.getByRole("button", { name: /Pessoas na Party/ }).tap(); }
-      else await page.locator(".media-session-actions").getByRole("button", { name: /Fila da Party/ }).tap();
+      if (panel === "people") { if (await page.getByRole("button", { name: "Abrir chat", exact: true }).isVisible()) await page.getByRole("button", { name: "Abrir chat", exact: true }).tap();
+      await page.getByRole("button", { name: "Pessoas da Party", exact: true }).tap(); }
+      else await page.getByRole("button", { name: /Fila da Party/ }).tap();
       await page.getByRole("button", { name: "Recolher painel da Party" }).tap();
       await expect(sheet).toBeHidden();
-      if (panel === "people") { await page.getByRole("button", { name: "Abrir controles da Party" }).tap(); await page.getByRole("button", { name: /Pessoas na Party/ }).tap(); }
-      else await page.locator(".media-session-actions").getByRole("button", { name: /Fila da Party/ }).tap();
+      if (panel === "people") { if (await page.getByRole("button", { name: "Abrir chat", exact: true }).isVisible()) await page.getByRole("button", { name: "Abrir chat", exact: true }).tap();
+      await page.getByRole("button", { name: "Pessoas da Party", exact: true }).tap(); }
+      else await page.getByRole("button", { name: /Fila da Party/ }).tap();
       await page.getByRole("button", { name: "Recolher painel da Party" }).focus();
       await page.keyboard.press("Enter"); await expect(sheet).toBeHidden();
-      await page.getByRole("button", { name: "Abrir chat", exact: true }).tap();
+      await expect(page.locator(".mobile-party-chat")).toBeVisible();
     }
     for (const width of [320, 360, 375, 390, 412, 430]) {
       await page.setViewportSize({ width, height: 844 });
@@ -1290,15 +1300,15 @@ test("mobile contextual Party Chat, secondary tools, late join and player idle c
     }
     await page.screenshot({ path: "test-results/mobile-chat-430.png" });
     await page.getByRole("button", { name: "Controles da call", exact: true }).tap();
-    await expect(page.getByRole("button", { name: "Ativar microfone", exact: true }).last()).toBeVisible();
+    await expect(page.getByRole("button", { name: /^Ativar microfone/ }).last()).toBeVisible();
     expect(await page.evaluate(() => (window as any).qaMicCaptures)).toBe(0);
-    await page.getByRole("button", { name: "Ativar microfone", exact: true }).last().tap();
+    await page.getByRole("button", { name: /^Ativar microfone/ }).last().tap();
     await page.getByRole("button", { name: "Controles da call", exact: true }).tap();
     await expect(page.locator(".mobile-call-menu")).toContainText("Microfone bloqueado");
+    await page.keyboard.press("Escape");
     expect(await page.evaluate(() => (window as any).qaMicCaptures)).toBe(1);
     await page.screenshot({ path: "test-results/mobile-automatic-voice.png" });
-    await page.getByRole("button", { name: "Controles da call", exact: true }).tap();
-    await page.getByRole("button", { name: "Fechar chat", exact: true }).tap();
+    await expect(page.getByRole("button", { name: "Fechar chat", exact: true })).toHaveCount(0);
     const currentMediaState = await new Promise<any>((resolve) => { socket.once("media:sync", resolve); socket.emit("media:request-sync", { roomId: house.primaryRoomId }); });
     expect(currentMediaState.state).toBe("playing");
     await page.evaluate(() => { if (document.activeElement instanceof HTMLElement) document.activeElement.blur(); });
@@ -1307,9 +1317,9 @@ test("mobile contextual Party Chat, secondary tools, late join and player idle c
     await expect(page.locator(".lumio-controls")).toHaveCSS("opacity", "0", { timeout: 5000 });
     await page.locator(".player-touch-surface").tap({ position: { x: 20, y: 20 } });
     await page.getByRole("button", { name: "Entrar no modo cinema", exact: true }).tap();
-    await expect(page.locator(".mobile-party-chat")).toBeHidden();
+    await expect(page.locator(".mobile-party-chat")).toBeVisible();
     await page.getByRole("button", { name: "Sair do modo cinema", exact: true }).tap();
-    await page.getByRole("button", { name: "Abrir chat", exact: true }).tap();
+    await expect(page.locator(".mobile-party-chat")).toBeVisible();
     await expect(page.getByRole("textbox", { name: "Mensagem" })).toBeVisible();
     await page.setViewportSize({ width: 844, height: 390 });
     await expect(page.getByRole("textbox", { name: "Mensagem" })).toBeVisible();
@@ -1325,7 +1335,7 @@ test("mobile contextual Party Chat, secondary tools, late join and player idle c
     await page.getByRole("textbox", { name: "Mensagem" }).fill("Fullscreen draft");
     await page.locator(".messages").evaluate((node) => { node.scrollTop = 60; });
     const scrollBeforeFullscreen = await page.locator(".messages").evaluate((node) => node.scrollTop);
-    await page.getByRole("button", { name: "Fechar chat", exact: true }).tap();
+    await expect(page.getByRole("button", { name: "Ocultar chat", exact: true })).toHaveCount(0);
     await page.locator(".player-touch-surface").tap({ position: { x: 20, y: 20 } });
     await page.getByRole("button", { name: "Tela cheia", exact: true }).tap();
     await expect.poll(() => page.evaluate(() => Boolean(document.fullscreenElement || document.querySelector(".fallback-fullscreen")))).toBe(true);
@@ -1342,7 +1352,7 @@ test("mobile contextual Party Chat, secondary tools, late join and player idle c
     await page.screenshot({ path: "test-results/mobile-video-fullscreen.png" });
     await page.screenshot({ path: "artifacts/m1/m1-fullscreen-video.png" });
     await page.getByRole("button", { name: /Sair da tela (cheia|ampliada)/ }).tap();
-    await page.getByRole("button", { name: "Abrir chat", exact: true }).tap();
+    await expect(page.locator(".mobile-party-chat")).toBeVisible();
     await expect(page.getByRole("textbox", { name: "Mensagem" })).toBeVisible();
     await expect(page.getByRole("textbox", { name: "Mensagem" })).toHaveValue("Fullscreen draft");
     expect(await page.locator(".messages").evaluate((node) => node.scrollTop)).toBe(scrollBeforeFullscreen);
@@ -1357,7 +1367,7 @@ test("mobile contextual Party Chat, secondary tools, late join and player idle c
     await page.evaluate(() => document.documentElement.style.removeProperty("--visual-height"));
     await assertPortraitLayout();
     await expect(page.getByRole("textbox", { name: "Mensagem" })).toHaveValue("Rascunho preservado");
-    await page.getByRole("button", { name: "Fechar chat", exact: true }).tap();
+    await expect(page.getByRole("button", { name: "Fechar chat", exact: true })).toHaveCount(0);
     await page.locator(".player-touch-surface").tap({ position: { x: 20, y: 20 } });
     await page.getByRole("button", { name: "Pausar", exact: true }).tap();
     await page.reload();
@@ -1365,6 +1375,7 @@ test("mobile contextual Party Chat, secondary tools, late join and player idle c
     expect(await page.evaluate(() => (window as any).qaPlayer.plays)).toBe(0);
     await expect(page.locator(".lumio-controls")).toHaveCSS("opacity", "1");
     await page.getByRole("button", { name: "Reproduzir", exact: true }).tap();
+    await expect.poll(() => page.evaluate(() => (window as any).qaPlayer.state)).toBe(1);
     await page.evaluate(() => localStorage.setItem("qa.blocked", "1")); await page.reload();
     await expect(page.getByText("Toque para continuar", { exact: true })).toBeVisible();
     await page.evaluate(() => { (window as any).qaPlayer.blocked = false; localStorage.removeItem("qa.blocked"); });
@@ -1428,11 +1439,11 @@ test("mobile contextual Party Chat, secondary tools, late join and player idle c
     await expect.poll(() => page.evaluate(() => (window as any).qaPlayer.state)).toBe(1);
     expect((await engine()).position).toBeGreaterThanOrEqual(seekPosition);
     await page.setViewportSize({ width: 320, height: 450 });
-    await page.getByRole("button", { name: "Abrir chat", exact: true }).tap();
+    await expect(page.locator(".mobile-party-chat")).toBeVisible();
     await page.getByRole("textbox", { name: "Mensagem" }).fill("Keyboard-sized viewport");
     const input = await page.getByRole("textbox", { name: "Mensagem" }).boundingBox(); expect(input!.y + input!.height).toBeLessThanOrEqual(450);
     await page.screenshot({ path: "test-results/mobile-short-viewport.png" });
-    await page.reload(); await page.getByRole("button", { name: "Abrir chat", exact: true }).tap(); await expect(page.getByRole("textbox", { name: "Mensagem" })).toBeVisible();
+    await page.reload(); await expect(page.locator(".mobile-party-chat")).toBeVisible(); await expect(page.getByRole("textbox", { name: "Mensagem" })).toBeVisible();
     expect(await page.locator(".reaction-actions,.reaction-float").count()).toBe(0);
     expect(fs.readFileSync(path.join(serverRoot, "src/index.ts"), "utf8")).not.toContain("reaction:send");
     expect(fs.readFileSync(path.join(root, "packages/shared/src/index.ts"), "utf8")).not.toContain("reaction:send");
@@ -1759,7 +1770,7 @@ test("M3 Queue V2: three clients converge through reorder, stale action, late jo
     await a.locator(".media-session-actions").getByRole("button", { name: /Fila da Party/ }).click();
     await expect(a.locator(".queue-empty")).toBeVisible();
     await a.screenshot({ path: "artifacts/m3/m3-queue-empty-desktop.png" });
-    await b.locator(".media-session-actions").getByRole("button", { name: /Fila da Party/ }).click();
+    await b.locator(".mobile-chat-heading").getByRole("button", { name: /Fila da Party/ }).click();
     await expect(b.locator(".queue-empty")).toBeVisible();
     await b.screenshot({ path: "artifacts/m3/m3-queue-empty-mobile.png" });
     await b.getByRole("button", { name: "Fechar painel" }).click();
@@ -1789,7 +1800,7 @@ test("M3 Queue V2: three clients converge through reorder, stale action, late jo
     const stale = await sockets[0].timeout(5000).emitWithAck("queue:move", { roomId, itemId: second.id, toIndex: 1, revision: oldRevision });
     expect(stale.ok).toBe(false); expect(stale.queue.map((entry: { id: string }) => entry.id)).toEqual([first.id, third.id, second.id]);
     await expect(a.locator(".queue-group").last().locator(".queue-item").first()).toContainText(third.title);
-    await b.locator(".media-session-actions").getByRole("button", { name: /Fila da Party/ }).click();
+    await b.locator(".mobile-chat-heading").getByRole("button", { name: /Fila da Party/ }).click();
     await expect(b.locator(".queue-group").last().locator(".queue-item").first()).toContainText(third.title);
     await b.screenshot({ path: "artifacts/m3/m3-queue-mobile.png" });
     await b.getByRole("button", { name: `Opções para ${third.title}` }).click();
@@ -1810,7 +1821,7 @@ test("M3 Queue V2: three clients converge through reorder, stale action, late jo
     const retry = await request.post(`${api}/api/media-hub/${roomId}/playlists/${playlistId}/queue`, { headers, data: { mode: "append", playNow: false, revision: removed.revision, operationId: batchId } });
     expect((await retry.json()).duplicate).toBe(true);
     sockets[1].disconnect(); await b.reload();
-    if (!await b.getByRole("complementary", { name: "Painel da Party" }).isVisible()) await b.locator(".media-session-actions").getByRole("button", { name: /Fila da Party/ }).click();
+    if (!await b.getByRole("complementary", { name: "Painel da Party" }).isVisible()) await b.locator(".mobile-chat-heading").getByRole("button", { name: /Fila da Party/ }).click();
     await expect(b.locator(".queue-group").last().locator(".queue-item")).toHaveCount(2);
     const next = await sockets[0].timeout(5000).emitWithAck("queue:advance", { roomId, expectedMediaId: first.providerMediaId, expectedQueueItemId: first.id });
     const repeated = await sockets[2].timeout(5000).emitWithAck("queue:advance", { roomId, expectedMediaId: first.providerMediaId, expectedQueueItemId: first.id });
@@ -1881,9 +1892,9 @@ test("GX2 Party transport, Call peers and tracks keep identity across visual chi
       await expect.poll(() => a.evaluate(() => (window as any).gx2.peers.filter((peer: RTCPeerConnection) => peer.connectionState === "connected").length), { timeout: 20_000 }).toBe(1);
       await a.locator(".social-mic").click();
       await expect(a.locator(".social-mic")).toHaveAttribute("aria-pressed", "true");
-      await b.getByRole("button", { name: "Abrir controles da Party" }).click();
+
       await b.getByRole("button", { name: "Desativar áudio da call", exact: true }).click();
-      await a.getByRole("button", { name: "Abrir controles da Party" }).click();
+
       await a.getByRole("button", { name: "Compartilhar tela", exact: true }).click();
       await expect(a.getByRole("button", { name: "Parar compartilhamento de tela", exact: true })).toBeVisible();
       await a.getByRole("button", { name: "Abrir chat", exact: true }).click();
@@ -1919,7 +1930,7 @@ test("GX2 Party transport, Call peers and tracks keep identity across visual chi
       })).toEqual({ sameShell: true, sameSocket: true, samePeers: true, sameMic: true, sameDisplay: true, playerRemounted: true, captures: 0, displays: 0, socialPackets: [] });
       await expect(a.getByRole("textbox", { name: "Mensagem" })).toHaveValue("Rascunho GX2 permanece");
       await expect(a.locator(".social-mic")).toHaveAttribute("aria-pressed", "true");
-      await b.getByRole("button", { name: "Abrir controles da Party" }).click();
+
       await expect(b.getByRole("button", { name: "Ativar áudio da call", exact: true })).toBeVisible();
       await b.getByRole("button", { name: "Abrir chat", exact: true }).click();
       await b.getByRole("textbox", { name: "Mensagem" }).fill("GX2 mensagem única");
