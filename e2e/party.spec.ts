@@ -1041,6 +1041,99 @@ test("M2 three browsers share favorites and collections without disturbing playb
   } finally { socket.disconnect(); for (const context of contexts) await context.close(); }
 });
 
+test("MEDIA2 Hub retries Drive pagination, validates searches and guards collection creation", async ({ page, request }) => {
+  test.setTimeout(90_000);
+  const origin = `http://127.0.0.1:${webPort}`, api = `http://127.0.0.1:${apiPort}`;
+  let session = m2QaSessions?.[0];
+  if (!session) {
+    const email = `media2-${crypto.randomUUID()}@example.test`, password = "local-e2e-password-123";
+    expect((await request.post(`${api}/api/auth/signup`, { data: { displayName: "MEDIA2 QA", email, password } })).status()).toBe(201);
+    const link = JSON.parse(fs.readFileSync(path.join(directory, "mail.jsonl"), "utf8").trim().split("\n").at(-1)!).text.match(/https?:\/\/\S+/)[0];
+    expect((await request.post(`${api}/api/auth/verification/confirm`, { data: { token: new URL(link).hash.slice(7) } })).status()).toBe(204);
+    session = await (await request.post(`${api}/api/auth/login`, { data: { email, password } })).json();
+  }
+  const { house } = await (await request.post(`${api}/api/houses`, { headers: { Authorization: `Bearer ${session.token}` }, data: { name: "MEDIA2 Drive QA" } })).json();
+  await page.addInitScript((account) => localStorage.setItem("lumio.session.v1", JSON.stringify(account)), session);
+  await page.route("**/api/google-drive/status", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ configured: true, connected: true, email: "qa@example.test" }) }));
+  let secondPageAttempts = 0;
+  const item = (id: string, title: string) => ({ id: `drive:${id}`, provider: "google-drive", providerMediaId: id, type: "audio", title, mimeType: "audio/mpeg" });
+  await page.route("**/api/google-drive/files?*", (route) => {
+    const next = new URL(route.request().url()).searchParams.get("pageToken");
+    if (next === "page-2") {
+      secondPageAttempts += 1;
+      if (secondPageAttempts === 1) return route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ message: "Drive temporariamente indisponível." }) });
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ entries: [{ id: "audio-one", name: "Primeira música", kind: "audio", item: item("audio-one", "Primeira música") }, { id: "audio-two", name: "Segunda música", kind: "audio", item: item("audio-two", "Segunda música") }] }) });
+    }
+    return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ entries: [{ id: "audio-one", name: "Primeira música", kind: "audio", item: item("audio-one", "Primeira música") }], nextPageToken: "page-2" }) });
+  });
+  await page.goto(`${origin}/house/${house.id}`);
+  await page.getByRole("button", { name: "Adicionar mídia" }).first().click();
+  const hub = page.getByRole("dialog", { name: "A mídia da Casa" });
+  await hub.getByRole("button", { name: "Google Drive", exact: true }).click();
+  await expect(hub.locator(".media-row")).toHaveCount(1);
+  await hub.getByRole("button", { name: "Carregar mais" }).click();
+  await expect(hub.getByRole("alert")).toContainText("Drive temporariamente indisponível.");
+  await hub.getByRole("button", { name: "Tentar novamente" }).click();
+  await expect(hub.locator(".media-row")).toHaveCount(2);
+  await expect(hub.locator(".media-row").filter({ hasText: "Primeira música" })).toHaveCount(1);
+  await expect(hub.locator(".media-row").filter({ hasText: "Segunda música" })).toHaveCount(1);
+  expect(secondPageAttempts).toBe(2);
+  await page.screenshot({ path: "artifacts/media2/media2-drive-paginated-audio.png" });
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await hub.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await page.screenshot({ path: "artifacts/media2/media2-drive-audio-mobile.png" });
+  await page.setViewportSize({ width: 1280, height: 900 });
+  const longQuery = "m".repeat(101);
+  const rejected = await request.get(`${api}/api/youtube/search?q=${longQuery}`, { headers: { Authorization: `Bearer ${session.token}` } });
+  expect(rejected.status()).toBe(400);
+  expect((await rejected.json()).message).toContain("100 caracteres");
+  await hub.getByRole("button", { name: "Descobrir", exact: true }).click();
+  await hub.getByRole("textbox", { name: "Pesquisar no YouTube ou colar URL" }).fill(longQuery);
+  await expect(hub.getByRole("alert")).toContainText("100 caracteres");
+  await expect(hub.getByRole("button", { name: "Tentar novamente" })).toHaveCount(0);
+  await page.screenshot({ path: "artifacts/media2/media2-search-too-long.png" });
+  let beginAlpha!: () => void, releaseAlpha!: () => void, finishAlpha!: () => void;
+  const alphaStarted = new Promise<void>((resolve) => { beginAlpha = resolve; });
+  const alphaGate = new Promise<void>((resolve) => { releaseAlpha = resolve; });
+  const alphaFinished = new Promise<void>((resolve) => { finishAlpha = resolve; });
+  await page.route("**/api/youtube/search?*", async (route) => {
+    const query = new URL(route.request().url()).searchParams.get("q");
+    if (query === "alpha query") { beginAlpha(); await alphaGate; }
+    const id = query === "alpha query" ? "aaaaaaaaaaa" : "bbbbbbbbbbb";
+    try { await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ results: [{ id: `youtube:${id}`, provider: "youtube", providerMediaId: id, type: "video", title: query === "alpha query" ? "Resultado antigo" : "Resultado atual", available: true }] }) }); }
+    catch { /* Aborted stale request is expected. */ }
+    finally { if (query === "alpha query") finishAlpha(); }
+  });
+  const search = hub.getByRole("textbox", { name: "Pesquisar no YouTube ou colar URL" });
+  await search.fill("alpha query");
+  await alphaStarted;
+  await search.fill("beta query");
+  await expect(hub.locator(".media-row")).toContainText("Resultado atual");
+  releaseAlpha();
+  await alphaFinished;
+  await expect(hub.locator(".media-row")).toHaveCount(1);
+  await expect(hub.locator(".media-row")).not.toContainText("Resultado antigo");
+  await page.screenshot({ path: "artifacts/media2/media2-search-latest-wins.png" });
+  await hub.getByRole("button", { name: "Playlists", exact: true }).click();
+  await hub.getByRole("button", { name: "Nova playlist" }).first().click();
+  await hub.getByRole("textbox", { name: "Nome" }).fill("Criar uma vez");
+  let createRequests = 0;
+  await page.route(`**/api/media-hub/${house.primaryRoomId}/playlists`, async (route) => {
+    if (route.request().method() === "POST") { createRequests += 1; await new Promise((resolve) => setTimeout(resolve, 300)); }
+    await route.continue();
+  });
+  await hub.getByRole("button", { name: "Criar", exact: true }).evaluate((button: HTMLButtonElement) => { button.click(); button.click(); });
+  await expect(hub.locator(".playlist-detail header h3")).toHaveText("Criar uma vez");
+  expect(createRequests).toBe(1);
+  await page.screenshot({ path: "artifacts/media2/media2-single-collection.png" });
+  for (const viewport of [{ width: 320, height: 568 }, { width: 360, height: 640 }, { width: 390, height: 844 }, { width: 430, height: 932 }, { width: 844, height: 390 }]) {
+    await page.setViewportSize(viewport);
+    expect(await hub.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.screenshot({ path: `artifacts/media2/media2-collection-${viewport.width}x${viewport.height}.png` });
+  }
+});
+
 test("M3 Queue V2: three clients converge through reorder, stale action, late join, batch and reconnect", async ({ browser, request }) => {
   test.setTimeout(180_000);
   fs.mkdirSync("artifacts/m3", { recursive: true });

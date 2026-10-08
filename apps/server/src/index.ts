@@ -311,7 +311,7 @@ const youtubeError = (response: express.Response, error: unknown) => {
 app.get("/api/youtube/search", async (request, response) => {
   const user = requireUser(request, response); if (!user) return;
   const input = z.object({ q: z.string().trim().min(3).max(100), pageToken: z.string().max(256).optional() }).safeParse(request.query);
-  if (!input.success) return response.status(400).json({ code: "INVALID", message: "Digite pelo menos 3 caracteres." });
+  if (!input.success) return response.status(400).json({ code: "INVALID", message: typeof request.query.q === "string" && request.query.q.trim().length > 100 ? "Pesquise com até 100 caracteres." : "Digite pelo menos 3 caracteres." });
   try { youtube.checkRateLimit(user.id); return response.json(await youtube.search(input.data.q, input.data.pageToken)); }
   catch (error) { return youtubeError(response, error); }
 });

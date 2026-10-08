@@ -63,6 +63,40 @@ test("M3 Play Next retry uses occurrence identity before stale revision", () => 
   assert.equal(store.playNext("cinema", { ...item, id: "other-intent" }, revision)?.conflict, true);
 });
 
+test("MEDIA2 long queue keeps occurrence identity, CAS order and current media when cleared", () => {
+  const store = new RoomStore();
+  const user = { id: "media2-host", displayName: "Host", color: "#fff" };
+  const item = (index: number) => ({ id: `long-${index}`, provider: "youtube" as const, providerMediaId: "abcdefghijk", type: "video" as const, title: "Repeated title", addedBy: user, addedAt: new Date().toISOString() });
+  for (let index = 0; index < 100; index += 1) assert.equal(store.addQueueItem("cinema", item(index))?.length, index + 1);
+  store.changeMedia("cinema", item(0));
+  const before = store.getQueueRevision("cinema");
+  assert.equal(store.moveQueueItem("cinema", "long-99", 1, before)?.changed, true);
+  assert.equal(store.moveQueueItem("cinema", "long-98", 1, before)?.conflict, true);
+  assert.equal(store.clearQueue("cinema", before)?.conflict, true);
+  assert.deepEqual(store.getSnapshot("cinema")?.queue.slice(0, 3).map((entry) => entry.id), ["long-0", "long-99", "long-1"]);
+  const currentRevision = store.getQueueRevision("cinema");
+  assert.equal(store.clearQueue("cinema", currentRevision)?.changed, true);
+  assert.deepEqual(store.getSnapshot("cinema")?.queue.map((entry) => entry.id), ["long-0"]);
+  assert.equal(store.getSnapshot("cinema")?.currentMedia.mediaId, "abcdefghijk");
+});
+
+test("MEDIA2 concurrent adds remain separate intentions while stale removal cannot undo either", () => {
+  const store = new RoomStore();
+  const actor = { id: "media2-a", displayName: "A", color: "#fff" };
+  const other = { id: "media2-b", displayName: "B", color: "#fff" };
+  const item = (id: string, addedBy: typeof actor) => ({ id, provider: "youtube" as const, providerMediaId: "abcdefghijk", type: "video" as const, title: "Same media", addedBy, addedAt: new Date().toISOString() });
+  const a = item("intent-a", actor), b = item("intent-b", other);
+  const priorRevision = store.getQueueRevision("cinema");
+  assert.equal(store.addQueueItem("cinema", a)?.length, 1);
+  assert.equal(store.addQueueItem("cinema", b)?.length, 2);
+  const afterAdds = store.getQueueRevision("cinema");
+  assert.equal(afterAdds, priorRevision + 2);
+  assert.equal(store.addQueueItem("cinema", a)?.length, 2);
+  assert.equal(store.getQueueRevision("cinema"), afterAdds);
+  assert.equal(store.moveQueueItem("cinema", b.id, 0, priorRevision)?.conflict, true);
+  assert.deepEqual(store.getSnapshot("cinema")?.queue.map((entry) => entry.id), [a.id, b.id]);
+});
+
 test("M3 selecting an upcoming occurrence rebases Up Next and operational history keeps repeat plays", () => {
   const store = new RoomStore();
   const user = { id: "m3-host", displayName: "Host", color: "#fff" };

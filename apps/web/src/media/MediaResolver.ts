@@ -5,17 +5,26 @@ export const youtubeIdFromInput = (value: string) => {
   if (/^[a-zA-Z0-9_-]{11}$/.test(trimmed)) return trimmed;
   try {
     const url = new URL(trimmed);
+    if (url.protocol !== "https:") return "";
     const hostname = url.hostname.replace(/^www\./, "");
-    if (hostname === "youtu.be") return url.pathname.split("/").filter(Boolean)[0] ?? "";
+    if (hostname === "youtu.be") {
+      const candidate = url.pathname.match(/^\/([\w-]{11})\/?$/)?.[1] ?? "";
+      return candidate;
+    }
     if (["youtube.com", "m.youtube.com", "music.youtube.com"].includes(hostname)) {
-      const candidate = url.searchParams.get("v") ?? url.pathname.match(/^\/(?:shorts|embed|live)\/([\w-]{11})/)?.[1] ?? "";
+      const candidate = url.pathname === "/watch" ? url.searchParams.get("v") ?? "" : url.pathname.match(/^\/(?:shorts|embed|live)\/([\w-]{11})\/?$/)?.[1] ?? "";
       return /^[\w-]{11}$/.test(candidate) ? candidate : "";
     }
   } catch { return ""; }
   return "";
 };
 
-export const isDriveReference = (input: string) => /drive\.google\.com/i.test(input.trim());
+export const isDriveReference = (input: string) => {
+  try {
+    const url = new URL(input.trim());
+    return url.protocol === "https:" && url.hostname.replace(/^www\./, "") === "drive.google.com";
+  } catch { return false; }
+};
 
 export async function resolveMediaInput(input: string, options: { apiUrl: string; token: string; title?: string; thumbnail?: string }): Promise<MediaItem> {
   const value = input.trim();
