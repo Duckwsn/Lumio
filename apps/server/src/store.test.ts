@@ -23,6 +23,23 @@ test("unknown media duration preserves authoritative position and seek", () => {
   assert.ok(store.getEffectiveMedia(room.currentMedia).position >= 33);
 });
 
+test("playback commands preserve the server clock and reject future or retried revisions", () => {
+  const store = new RoomStore();
+  const user = { id: "sync-owner", displayName: "Owner", color: "#fff" };
+  const item = { id: "sync-occurrence", provider: "youtube" as const, providerMediaId: "abcdefghijk", type: "video" as const, title: "Sync", duration: 120, addedBy: user, addedAt: new Date().toISOString() };
+  store.addQueueItem("cinema", item);
+  store.changeMedia("cinema", item);
+  const initial = store.getSnapshot("cinema")!.currentMedia;
+  assert.equal(store.updateMedia("cinema", user.id, "play", 0, { mediaId: item.providerMediaId, revision: initial.revision + 1 }), null);
+  assert.equal(store.getSnapshot("cinema")!.currentMedia.revision, initial.revision);
+  const sought = store.updateMedia("cinema", user.id, "seek", 30, { mediaId: item.providerMediaId, revision: initial.revision })!;
+  const playing = store.updateMedia("cinema", user.id, "play", 0, { mediaId: item.providerMediaId, revision: sought.revision })!;
+  assert.ok(playing.position >= 30, "a delayed local player must not rewind the authoritative seek");
+  assert.equal(store.updateMedia("cinema", user.id, "play", 0, { mediaId: item.providerMediaId, revision: sought.revision }), null);
+  const paused = store.updateMedia("cinema", user.id, "pause", 0, { mediaId: item.providerMediaId, revision: playing.revision })!;
+  assert.ok(paused.position >= 30, "a buffering participant must not reset the shared position");
+});
+
 test("M3 occurrence retries are idempotent while intentional duplicates remain distinct", () => {
   const store = new RoomStore();
   const user = { id: "m3-owner", displayName: "Owner", color: "#fff" };

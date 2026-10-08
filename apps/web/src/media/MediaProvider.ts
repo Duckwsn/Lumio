@@ -68,6 +68,11 @@ export const expectedPosition = (media: MediaState, now = Date.now()) => {
   return media.duration > 0 ? Math.min(media.duration, position) : position;
 };
 
+export const shouldApplyMedia = (incoming: MediaState, current: MediaState) =>
+  incoming.revision > current.revision ||
+  incoming.revision === current.revision && incoming.mediaId === current.mediaId &&
+  (incoming.state !== "playing" || incoming.position >= current.position);
+
 const youtubeCapabilities: ProviderCapabilities = { playPause: true, seek: true, volume: true, mute: true, playbackRate: true, captions: false, qualitySelection: false, fullscreen: true, pictureInPicture: false };
 const unavailableCapabilities: ProviderCapabilities = { playPause: false, seek: false, volume: false, mute: false, playbackRate: false, captions: false, qualitySelection: false, fullscreen: true, pictureInPicture: false };
 export const youtubePlaybackError = (code: number): Extract<ProviderEvent, { type: "error" }> => {
@@ -209,6 +214,7 @@ export class MediaController {
   private active: MediaProviderAdapter | null = null; private generation = 0; private lastRevision = -1;
   private latestMedia: MediaState | null = null;
   constructor(private readonly factories: Partial<Record<MediaProviderId, () => MediaProviderAdapter>>, private readonly onError: (message: string) => void) {}
+  resetRevision() { this.lastRevision = -1; }
   async sync(media: MediaState, options?: { force?: boolean }) {
     if (media.revision < this.lastRevision) return;
     this.lastRevision = media.revision; this.latestMedia = media;

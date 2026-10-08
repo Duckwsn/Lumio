@@ -26,7 +26,7 @@ export function MediaStage({ media, roomId, onSkip, onRemove, onAddMedia, onPlay
   volume: number; effectiveVolume: number; onVolumeChange: (volume: number) => void; resyncToken: number;
   shortcutsEnabled?: boolean;
 }) {
-  const stageRef = useRef<HTMLElement>(null); const iframeRef = useRef<HTMLIFrameElement | null>(null); const videoRef = useRef<HTMLVideoElement>(null); const controllerRef = useRef<MediaController | null>(null); const endedKeyRef = useRef(""); const hideTimer = useRef<number>(); const seekingRef = useRef(false); const mediaIdentityRef = useRef({ id: media.mediaId, revision: media.revision }); const detectedDurationRef = useRef({ id: media.mediaId, value: 0 }); const onEndedRef = useRef(onEnded);
+  const stageRef = useRef<HTMLElement>(null); const iframeRef = useRef<HTMLIFrameElement | null>(null); const videoRef = useRef<HTMLVideoElement>(null); const controllerRef = useRef<MediaController | null>(null); const lastResyncTokenRef = useRef(resyncToken); const endedKeyRef = useRef(""); const hideTimer = useRef<number>(); const seekingRef = useRef(false); const mediaIdentityRef = useRef({ id: media.mediaId, revision: media.revision }); const detectedDurationRef = useRef({ id: media.mediaId, value: 0 }); const onEndedRef = useRef(onEnded);
   const { fullscreen, fallbackFullscreen, fullscreenError, toggleFullscreen, setFallbackFullscreen } = useFullscreenSurface(stageRef);
   const appliedVolume = useRef(effectiveVolume);
   const pointerActive = useRef(false);
@@ -71,6 +71,7 @@ export function MediaStage({ media, roomId, onSkip, onRemove, onAddMedia, onPlay
   useEffect(() => {
     if (empty) return;
     const controller = controllerRef.current;
+    if (lastResyncTokenRef.current !== resyncToken) { controller?.resetRevision(); lastResyncTokenRef.current = resyncToken; }
     const identity = { id: media.mediaId, revision: media.revision };
     void controller?.sync(media, { force: resyncToken > 0 }).then(() => { if (controller !== controllerRef.current || mediaIdentityRef.current.id !== identity.id || mediaIdentityRef.current.revision !== identity.revision) return; controller.setVolume(appliedVolume.current); setCapabilities(controller.getCapabilities()); setRates(controller.getAvailablePlaybackRates?.() ?? [1]); });
     if (!seekingRef.current) setPosition(media.position); setDuration(media.duration > 0 ? media.duration : detectedDurationRef.current.id === media.mediaId ? detectedDurationRef.current.value : 0); setProviderState(media.state);

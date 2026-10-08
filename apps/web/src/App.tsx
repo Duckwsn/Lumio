@@ -22,7 +22,7 @@ import {
   type VoicePeer,
 } from "@lumio/shared";
 import { parsePartyRoute, partyPath } from "./party/experienceRoute";
-import { expectedPosition } from "./media/MediaProvider";
+import { expectedPosition, shouldApplyMedia } from "./media/MediaProvider";
 import { toQueueItem } from "./media/MediaResolver";
 import { shouldIgnoreOffer, shouldInitiateOffer } from "./rtc/negotiation";
 import { publishMicrophone } from "./rtc/microphone";
@@ -288,7 +288,7 @@ export function App() {
         for (const [id, name] of membersSeen.current) if (!nextMembers.has(id) && id !== session.user.id) notifyParty(`${name} saiu da Party.`);
         membersSeen.current = nextMembers;
       }
-      setSnapshot((current) => current?.id === nextSnapshot.id ? { ...nextSnapshot, currentMedia: nextSnapshot.currentMedia.revision < current.currentMedia.revision ? current.currentMedia : nextSnapshot.currentMedia, queue: nextSnapshot.queueRevision < current.queueRevision ? current.queue : nextSnapshot.queue, queueRevision: Math.max(nextSnapshot.queueRevision, current.queueRevision) } : nextSnapshot);
+      setSnapshot((current) => current?.id === nextSnapshot.id && !recovered ? { ...nextSnapshot, currentMedia: shouldApplyMedia(nextSnapshot.currentMedia, current.currentMedia) ? nextSnapshot.currentMedia : current.currentMedia, queue: nextSnapshot.queueRevision < current.queueRevision ? current.queue : nextSnapshot.queue, queueRevision: Math.max(nextSnapshot.queueRevision, current.queueRevision) } : nextSnapshot);
       if (recovered && callActiveRef.current) setCallState("joining");
     });
     nextSocket.on("presence:update", (members) => setSnapshot((current) => current ? { ...current, members, connectedCount: members.length } : current));
@@ -308,9 +308,9 @@ export function App() {
         if (media.mediaId !== previous.mediaId && media.mediaId) notifyParty(`Agora: ${media.title}`);
         else if (media.mediaId === previous.mediaId && Math.abs(expectedPosition(media) - expectedPosition(previous)) > 25) notifyParty(`Reprodução avançou para ${formatDuration(media.position)}.`);
       }
-      if (!previous || media.revision >= previous.revision) latestMedia.current = media;
+      if (!previous || shouldApplyMedia(media, previous)) latestMedia.current = media;
       feedbackRevision.current = Math.max(feedbackRevision.current, media.revision);
-      setSnapshot((current) => current && media.revision >= current.currentMedia.revision ? { ...current, currentMedia: media } : current);
+      setSnapshot((current) => current && shouldApplyMedia(media, current.currentMedia) ? { ...current, currentMedia: media } : current);
     });
     nextSocket.on("chat:message", (message) => { setSnapshot((current) => current && !current.messages.some((item) => item.id === message.id) ? { ...current, messages: [...current.messages, message].slice(-80) } : current); if (message.user.id !== session.user.id && !(drawerStateRef.current.open && drawerStateRef.current.panel === "chat")) setUnreadChat((value) => value + 1); });
     nextSocket.on("chat:typing", ({ userId, typing }) => setTypingUserIds((current) => typing ? [...new Set([...current, userId])] : current.filter((id) => id !== userId)));

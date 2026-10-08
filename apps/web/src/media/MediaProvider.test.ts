@@ -1,7 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { MediaState } from "@lumio/shared";
-import { DriveProvider, YouTubeProvider, MediaController, expectedPosition, youtubePlaybackError, type MediaProviderAdapter } from "./MediaProvider";
+import { DriveProvider, YouTubeProvider, MediaController, expectedPosition, shouldApplyMedia, youtubePlaybackError, type MediaProviderAdapter } from "./MediaProvider";
+
+test("equal-revision playback snapshots cannot rewind a newer position", () => {
+  const current = { ...media("youtube", 10), state: "playing" as const, position: 30 };
+  assert.equal(shouldApplyMedia({ ...current, position: 20 }, current), false);
+  assert.equal(shouldApplyMedia({ ...current, position: 31 }, current), true);
+  assert.equal(shouldApplyMedia({ ...current, revision: 9, position: 40 }, current), false);
+  assert.equal(shouldApplyMedia({ ...current, revision: 11, position: 5 }, current), true, "a newer seek may intentionally move backward");
+});
 import { shouldDismissSheet } from "../components/MobileBottomSheet";
 
 const media = (provider: "youtube" | "google-drive", revision: number): MediaState => ({ mediaId: `${provider}-${revision}`, provider, type: "video", title: "Teste", state: "paused", position: 0, duration: 60, playbackRate: 1, startedAt: null, updatedAt: 0, controlledBy: "test", revision });
@@ -185,6 +193,19 @@ test("provider switching destroys each previous adapter", async () => {
   controller.destroy();
   assert.equal(created, 50);
   assert.equal(destroyed, 50);
+});
+
+test("a reconnect snapshot can reset the controller revision after a server restart", async () => {
+  const applied: number[] = [];
+  const adapter = { id: "youtube", sync: (state: { revision: number }) => { applied.push(state.revision); }, destroy: () => undefined, getState: () => "paused" } as unknown as MediaProviderAdapter;
+  const controller = new MediaController({ youtube: () => adapter }, () => undefined);
+  await controller.sync(media("youtube", 12));
+  await controller.sync(media("youtube", 1));
+  assert.deepEqual(applied, [12], "an ordinary stale event remains rejected");
+  controller.resetRevision();
+  await controller.sync(media("youtube", 1));
+  assert.deepEqual(applied, [12, 1], "a new authoritative connection may start at a lower revision");
+  controller.destroy();
 });
 
 test("Drive ticket request is aborted when provider is destroyed", async () => {
