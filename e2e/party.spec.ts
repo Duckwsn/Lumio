@@ -211,6 +211,42 @@ test("Landing → login → restored session → House → Party → queue/drawe
   await expect(page).toHaveURL(/\/login$/);
 });
 
+test("UX1 Google Login shows a helpful message when its challenge request cannot reach the API", async ({ page }) => {
+  const origin = `http://127.0.0.1:${webPort}`;
+  await page.route("**/api/auth/google/challenge", (route) => route.abort("failed"));
+  await page.goto(`${origin}/login`);
+  await expect(page.getByText("Não foi possível alcançar o servidor. Tente novamente em instantes.")).toBeVisible();
+  await expect(page.getByText("Failed to fetch")).toHaveCount(0);
+  fs.mkdirSync("artifacts/ux1/pass1", { recursive: true });
+  await page.screenshot({ path: "artifacts/ux1/pass1/login-network-error-after.png" });
+});
+
+test("UX1 Account shows a recoverable load failure instead of an endless loading state", async ({ browser, request }) => {
+  const origin = `http://127.0.0.1:${webPort}`, api = `http://127.0.0.1:${apiPort}`;
+  const email = `ux1-${crypto.randomUUID()}@example.test`, password = "local-e2e-password-123";
+  expect((await request.post(`${api}/api/auth/signup`, { data: { displayName: "UX1 Account QA", email, password } })).status()).toBe(201);
+  const link = JSON.parse(fs.readFileSync(path.join(directory, "mail.jsonl"), "utf8").trim().split("\n").at(-1)!).text.match(/https?:\/\/\S+/)[0];
+  expect((await request.post(`${api}/api/auth/verification/confirm`, { data: { token: new URL(link).hash.slice(7) } })).status()).toBe(204);
+  const session = await (await request.post(`${api}/api/auth/login`, { data: { email, password } })).json();
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
+  try {
+    await context.addInitScript((value) => localStorage.setItem("lumio.session.v1", JSON.stringify(value)), session);
+    const page = await context.newPage();
+    await page.route("**/api/account", (route) => route.fulfill({ status: 503, contentType: "application/json", body: "{}" }));
+    await page.goto(`${origin}/account`);
+    await expect(page.getByRole("heading", { name: "Formas de entrar. Conexões à parte." })).toBeVisible();
+    await expect(page.getByRole("alert")).toContainText("Não foi possível carregar sua conta.");
+    fs.mkdirSync("artifacts/ux1/pass1", { recursive: true });
+    await expect(page.getByText("Carregando conta…")).toHaveCount(0);
+    await page.screenshot({ path: "artifacts/ux1/pass1/account-load-error-after.png" });
+    await page.unroute("**/api/account");
+    await page.getByRole("button", { name: "Tentar novamente" }).click();
+    await expect(page.getByRole("heading", { name: "Formas de login" })).toBeVisible();
+    await expect(page.getByRole("alert")).toHaveCount(0);
+    await page.screenshot({ path: "artifacts/ux1/pass1/account-recovered-390.png" });
+  } finally { await context.close(); }
+});
+
 test("invitation sharing offers code and link, mobile code entry and unauthenticated link return", async ({ browser, request }) => {
   test.setTimeout(120000);
   const origin = `http://127.0.0.1:${webPort}`, api = `http://127.0.0.1:${apiPort}`;

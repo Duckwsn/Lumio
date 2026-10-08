@@ -38,12 +38,12 @@ export function GoogleIdentityButton({ apiUrl, mode, token, linkPassword, onLogi
             if (!result.ok) throw new Error(body.message ?? "Não foi possível entrar com Google.");
             if (mode === "login" && body.user && body.token) handlers.current.onLogin?.({ user: body.user, token: body.token });
             else if (mode === "link" && body.linked) handlers.current.onLinked?.();
-          } catch (error) { if (active) setMessage(error instanceof Error ? error.message : "Não foi possível entrar com Google."); }
+          } catch (error) { if (active) setMessage(error instanceof TypeError ? "Não foi possível alcançar o servidor. Tente novamente em instantes." : error instanceof Error ? error.message : "Não foi possível entrar com Google."); }
           finally { if (active) setBusy(false); }
         } });
         holder.current.replaceChildren();
         window.google.accounts.id.renderButton(holder.current, { theme: "outline", size: "large", text: mode === "link" ? "continue_with" : "continue_with", shape: "pill", width: "280", locale: "pt-BR" });
-      } catch (error) { if (active) setMessage(error instanceof Error ? error.message : "Google Login indisponível."); }
+      } catch (error) { if (active) setMessage(error instanceof TypeError ? "Não foi possível alcançar o servidor. Tente novamente em instantes." : error instanceof Error ? error.message : "Google Login indisponível."); }
     };
     void start(); return () => { active = false; };
   }, [apiUrl, mode, token]);
