@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useRef, useState, type FormEvent } from "react";
 import { createPortal } from "react-dom";
-import { Check, Copy, Link2, Shield, Trash2, UserMinus, X } from "lucide-react";
+import { Check, Copy, Link2, Share2, Shield, Trash2, UserMinus, X } from "lucide-react";
 import { houseRolePermissions, type HouseDetails, type HouseInvite, type HouseRole, type Permission, type RoomSettings, type User } from "@lumio/shared";
 import { Avatar } from "./Avatar";
 import { memberPresenceLabel, sortHouseMembers } from "../presence";
@@ -72,7 +72,7 @@ export function InviteDialog({ apiUrl, token, house, onClose, onChanged }: { api
       <strong>Convite pronto</strong>
       {invite.code ? <><label htmlFor="invite-code">Código do convite</label><input id="invite-code" className="invite-code" readOnly value={invite.code} onFocus={(event) => event.target.select()} /><small>Para falar ou digitar na Home em Entrar com convite.</small><button className="primary-action" onClick={() => void copy("code")}><Copy />Copiar código</button></> : <small>Código indisponível neste servidor. Use o link.</small>}
       <label htmlFor="invite-link">Link do convite</label><input id="invite-link" readOnly value={link} onFocus={(event) => event.target.select()} /><small>Para enviar por mensagem.</small>
-      <div className="invite-share-actions"><button className="primary-action" onClick={() => void copy("link")}><Link2 />Copiar link</button>{typeof navigator.share === "function" ? <button className="quiet-button" onClick={() => void share()}>Compartilhar</button> : null}</div>
+      <div className="invite-share-actions"><button className="primary-action" onClick={() => void copy("link")}><Link2 />Copiar link</button>{typeof navigator.share === "function" ? <button className="quiet-button" onClick={() => void share()}><Share2 />Compartilhar</button> : null}</div>
       {copied ? <span role="status">{copied === "code" ? "Código copiado." : "Link copiado."}</span> : null}
       <small>Expira em {expiresInHours === 1 ? "1 hora" : expiresInHours === 24 ? "24 horas" : "7 dias"} · {maxUses} {maxUses === 1 ? "uso" : "usos"}</small>
     </div> : <div className="social-form"><label>Validade<select value={expiresInHours} onChange={(event) => setExpiry(Number(event.target.value) as 1 | 24 | 168)}><option value={1}>1 hora</option><option value={24}>24 horas</option><option value={168}>7 dias</option></select></label><label>Limite de usos<input type="number" min={1} max={100} value={maxUses} onChange={(event) => setMaxUses(Number(event.target.value))} /></label><button className="primary-action" disabled={busy} onClick={() => void create()}>{busy ? "Criando…" : "Criar convite seguro"}</button></div>}

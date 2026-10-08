@@ -748,7 +748,8 @@ svg { flex:none; }
 .pwa-update button { flex:none; min-height:44px; padding:0 12px; border-radius:8px; color:var(--primary-ink); background:var(--primary); font-weight:700; }
 .pwa-install-hint { display:block; padding:8px 10px; color:var(--muted); font-size:11px; line-height:1.4; }
 .invite-result .invite-code { font-size:clamp(20px,5vw,28px); font-weight:700; letter-spacing:.08em; text-align:center; font-family:monospace; min-width:0; }
-.invite-share-actions { display:flex; flex-wrap:wrap; gap:8px; }
+.invite-share-actions { display:grid; width:100%; gap:8px; }
+.invite-share-actions>button { width:100%; min-height:44px; margin-top:0; }
 .invite-result button { min-height:44px; }
 .mobile-call-controls { display:none; }
 .app-shell,.party-main { height:100dvh; }
@@ -1152,7 +1153,7 @@ svg { flex:none; }
 }
 @media (max-width:900px) {
   .party-header { gap:5px; padding-top:env(safe-area-inset-top); }
-  .header-identity { flex:1; overflow:hidden; }
+  .header-identity { flex:1; overflow:visible; }
   .header-identity h1 { max-width:none; min-width:0; }
   .header-actions { flex:none; gap:3px; }
   .party-main { grid-template-rows:calc(58px + env(safe-area-inset-top)) minmax(0,1fr); }

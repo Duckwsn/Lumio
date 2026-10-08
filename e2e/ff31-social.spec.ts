@@ -152,6 +152,34 @@ test("FF3.1 direct social actions and mobile Media keep video, chat and composer
     await expect(page.getByRole("textbox", { name:"Mensagem", exact:true })).not.toBeFocused();
     await expect(page.getByRole("button", { name:/^(Abrir|Fechar|Ocultar) chat$/ })).toHaveCount(0);
     await expect(controls).toHaveCount(0);
+    for (const width of [390, 320]) {
+      await page.setViewportSize({ width, height: 844 });
+      const trigger = page.getByRole("button", { name: "Abrir menu da Casa e Party" });
+      await trigger.click();
+      const menu = page.getByRole("navigation", { name: "Menu da Casa e Party" });
+      await expect(menu).toBeVisible();
+      const bounds = await menu.boundingBox();
+      expect(bounds).not.toBeNull();
+      expect(bounds!.x).toBeGreaterThanOrEqual(0);
+      expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width + 1);
+      if (width === 390) await capture("media-390-party-menu");
+      await menu.getByRole("button", { name: "Atividade" }).click();
+      await expect(page.locator(".drawer-queue")).toBeVisible();
+      await page.getByRole("button", { name: "Fechar painel" }).click();
+    }
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.evaluate(() => { Object.defineProperty(navigator, "share", { configurable: true, value: async (data: ShareData) => { (window as any).qaSharedUrl = data.url; } }); });
+    await page.getByRole("button", { name: "Convidar", exact: true }).click();
+    await page.getByRole("button", { name: "Criar convite seguro" }).click();
+    const inviteActions = page.locator(".invite-share-actions");
+    await expect(inviteActions.getByRole("button", { name: "Compartilhar" })).toBeVisible();
+    const actionWidths = await inviteActions.locator("button").evaluateAll((buttons) => buttons.map((button) => Math.round(button.getBoundingClientRect().width)));
+    expect(actionWidths).toHaveLength(2);
+    expect(actionWidths[0]).toBe(actionWidths[1]);
+    await capture("media-390-invite-share");
+    await inviteActions.getByRole("button", { name: "Compartilhar" }).click();
+    await expect.poll(() => page.evaluate(() => (window as any).qaSharedUrl)).toContain("/invite/");
+    await page.getByRole("dialog").getByRole("button", { name: "Fechar" }).click();
     const engine = await page.locator("iframe.provider-player").elementHandle();
     await expect(page.locator(".mobile-party-chat")).toBeVisible();
     const geometry = async () => {
