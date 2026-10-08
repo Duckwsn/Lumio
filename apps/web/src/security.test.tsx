@@ -6,8 +6,7 @@ import type { HouseSummary } from "@lumio/shared";
 import { safeAuthDestination } from "./authNavigation";
 import { HomePage } from "./components/EntryExperience";
 import { parseInviteInput } from "./inviteInput.js";
-import { MediaExperienceStage, GamesExperienceStage } from "./components/PartyStages";
-import { GameHub } from "./components/GameHub";
+import { MediaExperienceStage } from "./components/PartyStages";
 import { memberPresenceLabel, memberPreviewName, sortHouseMembers } from "./presence";
 
 test("S2 labels online/Party/last seen independently and keeps stable member order", () => {
@@ -50,37 +49,20 @@ test("GX3 Media experience owns the only provider surface", () => {
   assert.equal((html.match(/<iframe/g) ?? []).length, 1);
   assert.match(html, /media-experience/);
 });
-test("GX3 Games experience has no hidden YouTube, Drive or MediaStage", () => {
-  const html = renderToStaticMarkup(createElement(GamesExperienceStage, { screenShare: null, screenStream: null, onFullscreenChange: () => undefined }));
-  assert.match(html, /games-experience/);
-  assert.doesNotMatch(html, /<iframe|<video|game-media-visible|lumio-player/);
-});
-
 test("S1 Home distinguishes Party occupancy, online members and escaped activity", () => {
-  const house: HouseSummary = { id: "x", name: "Casa X", initials: "CX", role: "MEMBER", memberCount: 4, onlineCount: 3, partyCount: 2, primaryRoomId: "r", partyActivity: { type: "game", gameType: "quiz", label: "Partida de Quiz ativa" }, memberPreview: [{ id: "a", displayName: "Ana", color: "#fff", presence: "ONLINE", inParty: true }] };
+  const house: HouseSummary = { id: "x", name: "Casa X", initials: "CX", role: "MEMBER", memberCount: 4, onlineCount: 3, partyCount: 2, primaryRoomId: "r", partyActivity: { type: "media", label: "Assistindo Filme da Casa" }, memberPreview: [{ id: "a", displayName: "Ana", color: "#fff", presence: "ONLINE", inParty: true }] };
   const props = { user: { id: "u", displayName: "User", color: "#fff" }, onRetry: () => undefined, onOpenHouse: () => undefined, onCreate: async () => undefined, onInvite: () => false, onAccount: () => undefined, onLogout: () => undefined };
   const html = renderToStaticMarkup(createElement(HomePage, { ...props, houses: [house] }));
-  assert.match(html, /2 pessoas na Party/); assert.match(html, /3 membros online/); assert.match(html, /Partida de Quiz ativa/); assert.match(html, /Entrar na Party/); assert.match(html, /Casa e membros/); assert.doesNotMatch(html, /Convidar pessoas/);
-  const idle = renderToStaticMarkup(createElement(HomePage, { ...props, houses: [{ ...house, partyCount: 0 }] })); assert.match(idle, /Abrir Party/); assert.doesNotMatch(idle, /Partida de Quiz ativa/);
+  assert.match(html, /2 pessoas na Party/); assert.match(html, /3 membros online/); assert.match(html, /Assistindo Filme da Casa/); assert.match(html, /Entrar na Party/); assert.match(html, /Casa e membros/); assert.doesNotMatch(html, /Convidar pessoas/);
+  const idle = renderToStaticMarkup(createElement(HomePage, { ...props, houses: [{ ...house, partyCount: 0 }] })); assert.match(idle, /Abrir Party/); assert.doesNotMatch(idle, /Assistindo Filme da Casa/);
   const empty = renderToStaticMarkup(createElement(HomePage, { ...props, houses: [], error: "Falhou" })); assert.match(empty, /Tentar novamente/); assert.doesNotMatch(empty, /Crie uma Casa ou entre/);
   const stale = renderToStaticMarkup(createElement(HomePage, { ...props, houses: [house], connected: false })); assert.match(stale, /último estado recebido/);
   const noHouses = renderToStaticMarkup(createElement(HomePage, { ...props, houses: [] }));
-  assert.match(noHouses, /Criar Casa/); assert.doesNotMatch(noHouses, /house-featured/);
-  assert.equal((html.match(/house-featured/g) ?? []).length, 1);
+  assert.match(noHouses, /Criar Casa/); assert.doesNotMatch(noHouses, /house-list-item/);
+  assert.equal((html.match(/house-list-item/g) ?? []).length, 1);
   const three = renderToStaticMarkup(createElement(HomePage, { ...props, houses: [house, { ...house, id: "y", name: "Casa Y" }, { ...house, id: "z", name: "Casa Z" }] }));
-  assert.equal((three.match(/house-featured/g) ?? []).length, 1);
-  assert.equal((three.match(/house-secondary/g) ?? []).length, 2);
+  assert.equal((three.match(/house-list-item/g) ?? []).length, 3);
+  assert.doesNotMatch(three, /house-featured|house-secondary|house-feature-label/);
   const many = renderToStaticMarkup(createElement(HomePage, { ...props, houses: Array.from({ length: 9 }, (_, index) => ({ ...house, id: `house-${index}` })) }));
-  assert.equal((many.match(/house-secondary/g) ?? []).length, 8);
-});
-  test("Game Hub shows three real games with original vector identity and concise accessible copy", () => {
-  const html = renderToStaticMarkup(createElement(GameHub, { onFullscreen: () => undefined, fullscreen: false }));
-  assert.equal((html.match(/class="draw-entry"/g) ?? []).length, 1);
-    assert.equal((html.match(/class="quiz-entry"/g) ?? []).length, 1);
-    assert.equal((html.match(/class="cards-entry"/g) ?? []).length, 1);
-    assert.match(html, /Lumio Cartas/); assert.match(html, /2–8 jogadores/);
-  assert.match(html, /draw-game-icon/); assert.match(html, /2–12 jogadores/);
-  assert.match(html, /aria-label="Lumio Cartas 2–8 jogadores"/);
-  assert.doesNotMatch(html, /Voltar à mídia/);
-  for (const text of ["Em breve", "Na mesma Party", "Desenhe, adivinhe e ria"]) assert.equal(html.includes(text), false);
+  assert.equal((many.match(/house-list-item/g) ?? []).length, 9);
 });

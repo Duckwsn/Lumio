@@ -55,7 +55,6 @@ import { PrismaDriveVault } from "./prismaDriveVault.js";
 import { PrismaMediaRepository } from "./prismaMediaRepository.js";
 import { validateProductionEnvironment } from "./productionConfig.js";
 import { bootFailureFields, type BootStage } from "./bootDiagnostics.js";
-import { PartyGames } from "./partyGames.js";
 import { projectHouseActivity, safeMediaTitle } from "./houseActivity.js";
 import { projectLibraryMedia, publicHistory } from "./socialLibrary.js";
 import { MediaViewerRegistry } from "./mediaViewerRegistry.js";
@@ -146,26 +145,6 @@ const persistMediaForResponse = async (roomId: string, response: express.Respons
 const emailService = new EmailService();
 const googleIdentity = new GoogleIdentityService();
 const youtube = new YouTubeDataService();
-const games = new PartyGames((roomId, delta, forceFull) => {
-  const house = social.getByRoom(roomId);
-  for (const peer of io.sockets.sockets.values()) {
-    const viewer = peer.data.user as User;
-    if (peer.data.joinedRoomId !== roomId || peer.data.revoked || !house || !social.isMember(house.id, viewer.id) || !auth.resolveSession(peer.handshake.auth?.token ?? "")) continue;
-    const stamp = games.boardStamp(roomId);
-    if (delta) peer.emit("game:draw", delta);
-    else {
-      const full = forceFull || peer.data.gameBoardStamp !== stamp;
-      const state = games.snapshot(roomId, viewer.id, Boolean(full));
-      if (full || !state || state.gameType !== "draw") peer.emit("game:snapshot", state);
-      else { const { strokes: _strokes, ...metadata } = state; peer.emit("game:state", metadata); }
-    }
-    peer.data.gameBoardStamp = stamp;
-  }
-  if (house && !delta) emitHomeForHouse(house.id);
-});
-const gameTimer = setInterval(() => games.tick(), 250);
-gameTimer.unref();
-
 app.use(cors({ origin: corsOrigin, credentials: true }));
 app.disable("x-powered-by");
 app.use((_request, response, next) => {
@@ -569,7 +548,6 @@ app.delete("/api/houses/:houseId", async (request, response) => {
     social.deleteHouse(houseId);
     store.deleteHouse(houseId);
     mediaViewers.clear(roomId); emptyMediaMarkers.delete(roomId);
-    games.delete(roomId);
     googleDrive.revokeRoom(roomId);
     for (const entry of activeDriveStreams.get(roomId) ?? []) entry.controller.abort();
     activeDriveStreams.delete(roomId);
@@ -889,16 +867,15 @@ const emitSnapshot = (roomId: string) => {
 };
 const houseSummaries = (userId: string) => social.listForUser(userId).map((house) => {
   const room = store.getSnapshot(house.primaryRoomId), media = room?.currentMedia;
-  const game = games.snapshot(house.primaryRoomId, "", false);
   return { ...house, nowPlaying: media?.mediaId ? { title: safeMediaTitle(media.title), provider: media.provider } : null,
-    partyActivity: projectHouseActivity({ partyCount: house.partyCount, sharing: Boolean(room?.screenShare), game: game ? { gameType: game.gameType, phase: game.phase } : null, media: media?.mediaId ? { title: media.title, state: media.state, type: media.type } : null }) };
+    partyActivity: projectHouseActivity({ partyCount: house.partyCount, sharing: Boolean(room?.screenShare), media: media?.mediaId ? { title: media.title, state: media.state, type: media.type } : null }) };
 });
 const homeStateBySocket = new Map<string, string>();
 const emitHomeToSocket = (socket: Socket<ClientToServerEvents, ServerToClientEvents>, userId: string) => { if (!auth.resolveSession(socket.handshake.auth?.token ?? "")) { socket.disconnect(true); return; } const summaries = houseSummaries(userId); const serialized = JSON.stringify(summaries); if (homeStateBySocket.get(socket.id) !== serialized) { homeStateBySocket.set(socket.id, serialized); socket.emit("home:update", summaries); } };
 const emitHomeForHouse = (houseId: string) => { for (const socket of io.sockets.sockets.values()) { const user = socket.data.user as User | undefined; if (user && social.isMember(houseId, user.id)) emitHomeToSocket(socket, user.id); } };
 const emitActivityForRoom = (roomId: string) => { const house = social.getByRoom(roomId); if (house) emitHomeForHouse(house.id); };
 const emitHouse = (houseId: string) => { const house = social.getHouse(houseId); if (!house) return; for (const socket of io.sockets.sockets.values()) { const user = socket.data.user as User | undefined; const details = user && social.details(houseId, user.id); if (details) socket.emit("house:update", details); } emitHomeForHouse(houseId); };
-const disconnectHouseMember = (houseId: string, userId: string) => { const house = social.getHouse(houseId); if (!house) return; games.leave(house.primaryRoomId, userId); for (const socket of io.sockets.sockets.values()) { if ((socket.data.user as User | undefined)?.id === userId) { emitHomeToSocket(socket, userId); if (socket.data.joinedRoomId === house.primaryRoomId) { leaveMediaViewer(house.primaryRoomId, socket.id); socket.emit("member:removed", { houseId, message: "Você não faz mais parte desta Casa." }); socket.data.revoked = true; socket.leave(house.primaryRoomId); setTimeout(() => socket.disconnect(true), 50); } } } const key = `${house.primaryRoomId}:${userId}`; const timer = offlineTimers.get(key); if (timer) clearTimeout(timer); offlineTimers.delete(key); store.removeMember(house.primaryRoomId, userId); emitSnapshot(house.primaryRoomId); };
+const disconnectHouseMember = (houseId: string, userId: string) => { const house = social.getHouse(houseId); if (!house) return; for (const socket of io.sockets.sockets.values()) { if ((socket.data.user as User | undefined)?.id === userId) { emitHomeToSocket(socket, userId); if (socket.data.joinedRoomId === house.primaryRoomId) { leaveMediaViewer(house.primaryRoomId, socket.id); socket.emit("member:removed", { houseId, message: "Você não faz mais parte desta Casa." }); socket.data.revoked = true; socket.leave(house.primaryRoomId); setTimeout(() => socket.disconnect(true), 50); } } } const key = `${house.primaryRoomId}:${userId}`; const timer = offlineTimers.get(key); if (timer) clearTimeout(timer); offlineTimers.delete(key); store.removeMember(house.primaryRoomId, userId); emitSnapshot(house.primaryRoomId); };
 const roomConnections = new Map<string, Map<string, Set<string>>>();
 const offlineTimers = new Map<string, NodeJS.Timeout>();
 const activeUserSockets = new Map<string, Set<string>>();
@@ -950,7 +927,7 @@ io.on("connection", (socket) => {
     if (socket.data.revoked) return next(new Error("Acesso à Casa revogado."));
     if (event !== eventNames.roomLeave && (!payload || typeof payload !== "object" || Array.isArray(payload))) return next(new Error("Payload inválido."));
     if (event !== eventNames.roomJoin && joinedRoomId) { const house = social.getByRoom(joinedRoomId); if (deletingRooms.has(joinedRoomId) || !house || !social.isMember(house.id, user.id)) return next(new Error("Acesso à Casa revogado.")); }
-    const ceiling = event === "game:action" ? 2400 : event === eventNames.chatMessage ? 20 : event === eventNames.chatTyping ? 60 : event === eventNames.voiceSignal ? 600 : 120;
+    const ceiling = event === eventNames.chatMessage ? 20 : event === eventNames.chatTyping ? 60 : event === eventNames.voiceSignal ? 600 : 120;
     const now = Date.now(), key = `${user.id}:${event}`, bucket = socketEventAttempts.get(key);
     if (socketEventAttempts.size > 20_000) for (const [id, entry] of socketEventAttempts) if (entry.resetAt <= now) socketEventAttempts.delete(id);
     if (socketEventAttempts.size > 40_000) return next(new Error("Muitas ações em pouco tempo."));
@@ -972,7 +949,7 @@ io.on("connection", (socket) => {
       leaveCall(oldRoomId, user, socket.id);
       if (screenOwnerSockets.get(oldRoomId) === socket.id) { screenOwnerSockets.delete(oldRoomId); store.stopScreenShare(oldRoomId, user.id); io.to(oldRoomId).emit("screen:state", null); }
       socket.leave(oldRoomId);
-      if (!unregisterConnection(oldRoomId, user.id, socket.id)) { games.leave(oldRoomId, user.id); store.removeMember(oldRoomId, user.id); const oldHouse = social.getByRoom(oldRoomId); if (oldHouse) { social.setPresence(oldHouse.id, user.id, "ONLINE", { inParty: false, inCall: false, speaking: false, screenSharing: false }); emitHouse(oldHouse.id); } }
+      if (!unregisterConnection(oldRoomId, user.id, socket.id)) { store.removeMember(oldRoomId, user.id); const oldHouse = social.getByRoom(oldRoomId); if (oldHouse) { social.setPresence(oldHouse.id, user.id, "ONLINE", { inParty: false, inCall: false, speaking: false, screenSharing: false }); emitHouse(oldHouse.id); } }
       emitSnapshot(oldRoomId);
     }
     registerConnection(roomId, user.id, socket.id);
@@ -981,8 +958,6 @@ io.on("connection", (socket) => {
     joinedRoomId = roomId;
     socket.data.joinedRoomId = roomId;
     socket.join(roomId);
-    games.presence(roomId, user.id, true);
-    socket.emit("game:snapshot", games.snapshot(roomId, user.id));
     log("info", "party_joined", { userId: user.id, connectionId: socket.id, roomId });
     social.setPresence(house.id, user.id, "ONLINE", { inParty: true });
     emitSnapshot(roomId);
@@ -997,20 +972,12 @@ io.on("connection", (socket) => {
     if (screenOwnerSockets.get(roomId) === socket.id) { screenOwnerSockets.delete(roomId); store.stopScreenShare(roomId, user.id); }
     socket.leave(roomId);
     const remaining = unregisterConnection(roomId, user.id, socket.id); const house = social.getByRoom(roomId);
-    if (!remaining) games.leave(roomId, user.id);
     if (!remaining) { store.removeMember(roomId, user.id); if (house) social.setPresence(house.id, user.id, "ONLINE", { inParty: false, inCall: false, speaking: false, screenSharing: false }); }
     joinedRoomId = undefined;
     socket.data.joinedRoomId = undefined;
     io.to(roomId).emit("screen:state", store.getSnapshot(roomId)?.screenShare ?? null);
     emitSnapshot(roomId);
     if (house) emitHouse(house.id);
-  });
-
-  socket.on("game:action", (input, respond) => {
-    const reply = typeof respond === "function" ? respond : () => undefined;
-    const house = joinedRoomId && social.getByRoom(joinedRoomId);
-    if (!joinedRoomId || !house || input?.roomId !== joinedRoomId || !social.isMember(house.id, user.id)) return reply({ ok: false, message: "Entre nesta Party para jogar." });
-    reply(games.action(joinedRoomId, user, input));
   });
 
   socket.on(eventNames.mediaViewerEnter, (input) => {
@@ -1326,7 +1293,6 @@ io.on("connection", (socket) => {
     const wasSharing = screenOwnerSockets.get(roomId) === socket.id; const house = social.getByRoom(roomId);
     if (wasSharing) { screenOwnerSockets.delete(roomId); store.stopScreenShare(roomId, user.id); io.to(roomId).emit("screen:state", null); if (house) { social.setPresence(house.id, user.id, "ONLINE", { screenSharing: false }); emitHouse(house.id); } }
     const remaining = unregisterConnection(roomId, user.id, socket.id); if (remaining) return;
-    games.presence(roomId, user.id, false);
     const key = `${roomId}:${user.id}`; const priorPartyTimer = offlineTimers.get(key); if (priorPartyTimer) clearTimeout(priorPartyTimer); const timer = setTimeout(() => { if (offlineTimers.get(key) !== timer) return; offlineTimers.delete(key); if ((roomConnections.get(roomId)?.get(user.id)?.size ?? 0) > 0) return; store.removeMember(roomId, user.id); if (house && social.isMember(house.id, user.id)) { social.setPresence(house.id, user.id, activeUserSockets.has(user.id) ? "ONLINE" : "OFFLINE", { inParty: false, inCall: false, speaking: false, screenSharing: false }); emitHouse(house.id); } emitSnapshot(roomId); }, 5_000); offlineTimers.set(key, timer);
   });
 });
@@ -1362,7 +1328,6 @@ httpServer.on("error", (error) => { log("error", "server_listen_error", bootFail
 const shutdown = (signal: "SIGINT" | "SIGTERM") => {
   if (shuttingDown) return;
   shuttingDown = true;
-  clearInterval(gameTimer);
   log("info", "server_shutdown_start", { signal });
   for (const entries of activeDriveStreams.values()) for (const entry of entries) entry.controller.abort();
   for (const timer of [...offlineTimers.values(), ...accountOfflineTimers.values()]) clearTimeout(timer);

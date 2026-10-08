@@ -1,7 +1,4 @@
 import { z } from "zod";
-export * from "./drawGame.js";
-export * from "./partyGames.js";
-export * from "./cardGame.js";
 
 export const roleSchema = z.enum(["OWNER", "HOST", "DJ", "ADMIN", "MODERATOR", "MEMBER", "GUEST"]);
 export type Role = z.infer<typeof roleSchema>;
@@ -58,9 +55,8 @@ export const houseMemberSchema = z.object({
 export type HouseMember = z.infer<typeof houseMemberSchema>;
 
 export const housePartyActivitySchema = z.object({
-  type: z.enum(["idle", "party", "media", "game", "screen"]),
+  type: z.enum(["idle", "party", "media", "screen"]),
   label: z.string().max(180),
-  gameType: z.enum(["draw", "quiz", "cards"]).optional(),
 }).strict();
 export type HousePartyActivity = z.infer<typeof housePartyActivitySchema>;
 
@@ -311,9 +307,6 @@ export const voiceSignalSchema = z.object({ roomId: z.string().max(100), targetU
 export interface VoicePeer { user: User; socketId: string }
 
 export interface ServerToClientEvents {
-  "game:snapshot": (snapshot: import("./partyGames.js").PartyGameSnapshot | null) => void;
-  "game:state": (state: import("./partyGames.js").PartyGameState) => void;
-  "game:draw": (delta: import("./drawGame.js").DrawDelta) => void;
   "home:update": (houses: HouseSummary[]) => void;
   "profile:update": (user: User) => void;
   "room:snapshot": (snapshot: RoomSnapshot) => void;
@@ -338,7 +331,6 @@ export interface ServerToClientEvents {
 }
 
 export interface ClientToServerEvents {
-  "game:action": (input: import("./partyGames.js").PartyGameAction, respond: (result: import("./drawGame.js").GameAck) => void) => void;
   "room:join": (input: z.infer<typeof joinRoomInputSchema>) => void;
   "room:leave": (roomId: string) => void;
   "media:play": (input: z.infer<typeof mediaCommandSchema>) => void;

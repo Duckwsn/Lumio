@@ -7,11 +7,9 @@ import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 
 const root = path.resolve(__dirname, "..");
-const shots = path.join(root, "artifacts", "frontfix", "ff11", "current");
-const ff3Shots = path.join(root, "artifacts", "frontfix", "ff31", "pass2");
+const shots = path.join(root, "test-results", "lx0", "ff11");
 const freePort = () => new Promise<number>((resolve, reject) => {
   const socket = net.createServer();
   socket.once("error", reject);
@@ -34,7 +32,7 @@ test.beforeAll(async () => {
   temp = fs.mkdtempSync(path.join(os.tmpdir(), "lumio-ff11-"));
   apiPort = await freePort(); webPort = await freePort();
   const origin = `http://127.0.0.1:${webPort}`;
-  server = spawn(process.execPath, ["--import", "tsx", "--import", pathToFileURL(path.join(root, "e2e/fixtures/cardDeckLoader.mjs")).href, "src/index.ts"], {
+  server = spawn(process.execPath, ["--import", "tsx", "src/index.ts"], {
     cwd: path.join(root, "apps/server"),
     env: { ...process.env, PORT: String(apiPort), NODE_ENV: "development", PERSISTENCE_MODE: "file", AUTH_STORE_FILE: path.join(temp, "auth.json"), EMAIL_PROVIDER: "dev-file", EMAIL_DEV_OUTBOX_FILE: path.join(temp, "mail.jsonl"), APP_PUBLIC_URL: origin, CLIENT_ORIGIN: origin, RTC_STUN_URLS: "", RTC_TURN_URLS: "", RTC_TURN_USERNAME: "", RTC_TURN_CREDENTIAL: "", YOUTUBE_API_KEY: "", GOOGLE_CLIENT_ID: "", GOOGLE_CLIENT_SECRET: "", GOOGLE_TOKEN_ENCRYPTION_KEY: "" },
     stdio: "ignore",
@@ -47,7 +45,6 @@ test.beforeAll(async () => {
   });
   await waitFor(origin);
   fs.mkdirSync(shots, { recursive: true });
-  fs.mkdirSync(ff3Shots, { recursive: true });
 });
 test.afterAll(async () => {
   server?.kill(); web?.kill();
@@ -85,7 +82,7 @@ test("FF1.1 current authenticated surfaces", async ({ browser, request }) => {
     await capture(a, "home-empty", 390, 844);
     const headers = { Authorization: `Bearer ${sessions[0].token}` };
     const houses: Array<{ id: string; primaryRoomId: string }> = [];
-    for (const name of ["Noite de sábado", "Cinema da turma", "Jogos de domingo"]) {
+    for (const name of ["Noite de sábado", "Cinema da turma", "Domingo da turma"]) {
       const { house } = await (await request.post(`${api}/api/houses`, { headers, data: { name } })).json();
       houses.push(house);
       const { invite } = await (await request.post(`${api}/api/houses/${house.id}/invites`, { headers, data: { expiresInHours: 1, maxUses: 2 } })).json();
@@ -110,10 +107,6 @@ test("FF1.1 current authenticated surfaces", async ({ browser, request }) => {
     await a.getByRole("button", { name: /Abrir pessoas/ }).click();
     await capture(a, "media-people", 1440, 900);
 
-    await a.getByRole("button", { name: "Call e dispositivos" }).click();
-    await expect(a.getByRole("dialog")).toBeVisible();
-    await capture(a, "call-controls", 1440, 900);
-    await a.keyboard.press("Escape");
     await a.getByRole("button", { name: "Fechar painel" }).click();
 
     // The app and session are real; the YouTube media item is synthetic and
@@ -141,67 +134,5 @@ test("FF1.1 current authenticated surfaces", async ({ browser, request }) => {
     await capture(a, "media-ambient", 390, 844);
     socket.disconnect();
 
-    for (const page of [a, b]) {
-      await page.setViewportSize({ width: 1440, height: 900 });
-      await page.goto(`${origin}/house/${houses[1].id}/games`);
-      await expect(page.getByRole("heading", { name: "O que vamos jogar?" })).toBeVisible();
-    }
-    await capture(a, "games-hub", 1440, 900); await capture(a, "games-hub", 390, 844);
-    await capture(a, "games-hub", 320, 568);
-    await a.setViewportSize({ width: 1440, height: 900 });
-    await a.getByRole("button", { name: "Abrir chat", exact: true }).click();
-    await expect(a.locator(".party-drawer.is-chat")).toBeVisible();
-    await a.screenshot({ path: path.join(ff3Shots, "games-chat-desktop.png") });
-    await a.getByRole("button", { name: "Fechar painel", exact: true }).click();
-
-    for (const page of [a, b]) {
-      await page.setViewportSize({ width: 1440, height: 900 });
-      await page.getByRole("button", { name: /Desenhe e Adivinhe/ }).click();
-      await page.getByRole("button", { name: "Participar", exact: true }).click();
-    }
-    await capture(a, "draw-lobby", 1440, 900);
-    await a.getByRole("button", { name: "Iniciar partida", exact: true }).click();
-    await expect(a.getByRole("dialog", { name: "Escolha o que você vai desenhar" })).toBeVisible();
-    await capture(a, "draw-choice", 1440, 900);
-    await a.locator(".draw-choices button").first().click();
-    await expect(a.locator(".draw-board canvas")).toBeVisible();
-    await expect(b.locator(".draw-board canvas")).toBeVisible();
-    await capture(a, "draw-drawer", 1440, 900);
-    await capture(b, "draw-guesser", 1440, 900);
-    await capture(a, "draw-drawer", 390, 844);
-    await capture(a, "draw-drawer", 320, 568);
-    await capture(a, "draw-drawer", 844, 390);
-    await capture(b, "draw-guesser", 390, 844);
-    await b.getByRole("button", { name: "Abrir chat", exact: true }).click();
-    await expect(b.locator(".mobile-party-chat")).toBeVisible();
-    await expect(b.locator(".mobile-party-chat").getByRole("textbox", { name: "Seu palpite" })).toBeVisible();
-    await b.screenshot({ path: path.join(ff3Shots, "draw-chat-390.png") });
-    await b.getByRole("button", { name: "Fechar chat", exact: true }).click();
-    await capture(b, "draw-guesser", 320, 568);
-    await a.setViewportSize({ width: 1440, height: 900 });
-    await b.setViewportSize({ width: 1440, height: 900 });
-
-    for (const page of [a, b]) {
-      await page.goto(`${origin}/house/${houses[2].id}/games`);
-      await page.getByRole("button", { name: /Quiz 2/ }).click();
-      await page.getByRole("button", { name: "Participar", exact: true }).click();
-    }
-    await capture(a, "quiz-lobby", 1440, 900);
-    await a.getByRole("button", { name: "Iniciar partida", exact: true }).click();
-    await expect(a.locator(".quiz-question")).toBeVisible();
-    await capture(a, "quiz-question", 1440, 900); await capture(a, "quiz-question", 390, 844);
-    // Cards use a different House so the Quiz session stays untouched.
-    const { house: cardHouse } = await (await request.post(`${api}/api/houses`, { headers, data: { name: "Cartas de sexta" } })).json();
-    const { invite: cardInvite } = await (await request.post(`${api}/api/houses/${cardHouse.id}/invites`, { headers, data: { expiresInHours: 1, maxUses: 2 } })).json();
-    expect((await request.post(`${api}/api/invites/${cardInvite.token}/accept`, { headers: { Authorization: `Bearer ${sessions[1].token}` } })).ok()).toBe(true);
-    for (const page of [a, b]) {
-      await page.setViewportSize({ width: 1440, height: 900 });
-      await page.goto(`${origin}/house/${cardHouse.id}/games`);
-      await page.getByRole("button", { name: /Lumio Cartas/ }).click();
-      await page.getByRole("button", { name: "Participar", exact: true }).click();
-    }
-    await a.getByRole("button", { name: "Iniciar partida", exact: true }).click();
-    await expect(a.locator(".card-hand")).toBeVisible();
-    await capture(a, "cards-turn", 1440, 900); await capture(a, "cards-turn", 390, 844);
   } finally { await host.close(); await guest.close(); }
 });

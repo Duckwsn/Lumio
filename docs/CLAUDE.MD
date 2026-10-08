@@ -35,7 +35,7 @@ Antes de alterar o projeto, leia também:
 - Na Landing V3, a prévia da Party usa somente conteúdo visual local. A visita pública sem sessão carrega a Landing antes do bundle do App; CTAs preservam `/login` e `/register`, e a instalação usa o prompt PWA existente quando disponível.
 - `/login` e `/register` — autenticação.
 - `/app` — Home autenticada; lista Casas e permite criar uma nova.
-- `/house/:houseId` — entrada na Casa e acesso à Party.
+- `/house/:houseId/media` — entrada canônica na Party de mídia; `/house/:houseId` e `/house/:houseId/games` são aliases históricos que redirecionam para mídia.
 - `/invite/:token` — convite; o aceite deve ser uma ação explícita do usuário.
 
 O endpoint `/api/bootstrap` fornece a sessão e os dados iniciais da Home. O servidor deve validar a sessão e a associação do usuário antes de liberar dados de Casa, Party ou mídia.
@@ -122,7 +122,7 @@ Só encerre o processo depois de confirmar que ele pertence ao projeto.
 
 ## Party Experience V2
 
-- A UI da Party diferencia entrada, reconnect e indisponibilidade prolongada; o primeiro snapshot recebido após reconnect é autoritativo. Quedas breves não devem desmontar a experiência. A navegação explícita `/media`↔`/games`, porém, desmonta o provider Media sem derrubar o Party shell.
+- A UI da Party diferencia entrada, reconnect e indisponibilidade prolongada; o primeiro snapshot recebido após reconnect é autoritativo. Quedas breves não devem desmontar a experiência de mídia.
 - Os overlays lazy (Media Hub e configurações da Call) possuem limites `Suspense` próprios para não substituir o player na primeira abertura. Drawers alternam apenas conteúdo lateral.
 - A presença usa o grace period de cinco segundos do servidor; avisos efêmeros de entrada/saída vêm de diferenças entre snapshots, sem novo protocolo de UX.
 - O chat preserva scroll de leitura, marca mensagens não lidas somente com drawer fechado e envia `typing` por início/fim da atividade, sem emitir a cada tecla.
@@ -135,46 +135,10 @@ Só encerre o processo depois de confirmar que ele pertence ao projeto.
 - A PWA oferece instalação apenas quando o navegador disponibiliza o prompt. O service worker guarda somente arquivos estáticos e uma página offline honesta; API, Drive, YouTube e mídia privada nunca entram no Cache Storage.
 - Uma nova versão espera confirmação explícita para recarregar a Party. Instalação, Google Login, Drive OAuth e WebRTC variam por navegador e precisam de teste real antes de declarar suporte em Android/iOS.
 
-## Desenhe e Adivinhe G1
+## Lumio 2.0 LX0 — Party Media-only
 
-- GameHub vive em `GamesExperienceStage`; `MediaStage` vive apenas em `MediaExperienceStage`. Call, Chat, fila e Game runtime pertencem à Party e sobrevivem à troca de rotas. Sair da apresentação não encerra participação.
-- `DrawGameRuntime` mantém uma sessão efêmera por Party, com fases, ordem e score autoritativos. Não persista jogos sem necessidade explícita.
-- Segredo/opções são projeções por usuário: somente drawer ativo. Resultado revela a resposta por regra; guesses corretos nunca são ecoados durante desenho.
-- Canvas 4:3 lógico, Pointer Events e coordenadas normalizadas; pontos em refs e envio incremental limitado. Não sincronizar PNG/base64 ou estado React por ponto.
-- `game:state` não contém traços; `game:snapshot` reconstrói o board e `game:draw` é delta ordenado. Use revisões próprias e rejeite operações anteriores a clear/undo/rodada.
-- Consulte `POST_1_0_G1_DRAW_GAME_REPORT.md`; os testes locais/fixtures não substituem QA Android/iOS, Google e WAN reais. Não mudar OAuth, schema ou produção como parte do jogo.
-
-## Party Games Experience G2
-
-- `PartyGameChatProvider` conserva rascunhos separados e metadados públicos; não recebe deltas de canvas no estado social. `PartyComposer` é a mesma implementação no Chat e fullscreen, sem histórico duplicado.
-- Guess mode depende de apresentação selecionada, DRAWING, participante online não-drawer e sem acerto. Envia `game:action` com type guess e ack; conversa continua em `chat:message`. Não converter o acerto em mensagem contendo a palavra.
-- Feed do jogo aparece no histórico visual do Chat, mas continua efêmero/bounded e fora da autoridade/persistência de chat. `roundPoints` é calculado no servidor.
-- Leia o relatório G2 antes de alterar modal integrado, atalhos, layout com teclado ou composer fullscreen. Não fazer build concorrente com QA no Vite do mesmo checkout.
-
-## Draw Game V3 / G3
-
-- As regras G3 substituem o limite fixo anterior: configuração target/theme autoritativa só no lobby; cursor circular bounded; resultado por meta após resolver a rodada. Empate compartilha vitória, não usa socket/latência como tiebreak.
-- Pontos são pequenos: 4–10 por acerto pela fórmula documentada; drawer +2 até 6/rodada. Revanche conserva sessão/tema/meta e volta ao lobby com pontos/board/feed zerados.
-- Temas/banco local e usedWords são privados do servidor; escolhas seguem tema e não repetem palavra usada até esgotar. Nunca torne secret/choices públicos para calcular layout.
-- Workspace deriva papel de metadados públicos. Chat mobile continua montado ao ficar hidden para drawer; viewer recebe histórico/composer maiores, fullscreen reutiliza composer G2. Não remonte Chat/player/call por tema/score/papel.
-- Consulte `POST_1_0_G3_DRAW_GAME_V3_REPORT.md` para fórmula, presets/simulação, limites de viewport e roteiro humano. Não mudar banco/Auth/OAuth/infraestrutura como parte do jogo.
-
-## Multi-game G4 / Quiz
-
-- PartyGames é apenas roteamento/exclusão de sessões; DrawGameRuntime e QuizGameRuntime mantêm regras e projeções próprias. Uma sessão por Party; presentation Media/Hub não termina o jogo. Encerramento pelo coordenador exige confirmação e revisão exata.
-- Snapshot/state têm gameType; Draw frontend envia envelope estrito roomId/action, Quiz e Cards enviam ações próprias. Filtros de tipo impedem outros jogos de entrar no contexto Chat/Guess Draw. Shared registry contém somente os três jogos reais (Draw, Quiz, Cards); imports de jogos são lazy.
-- Quiz QUESTION nunca inclui correção, distribuição, pontos provisórios ou resposta de outro usuário. Backend preserva ownAnswer/lock no reconnect e aplica score só ao Reveal. Banco/deck privado, deadline e early finish autoritativos; offline/spectator não seguram o relógio.
-- Preserve Chat/Call/MediaStage/engine e componentes persistentes ao navegar, rematch ou abrir Pessoas/Fila. Fullscreen Quiz prioriza alternativas, sem composer paralelo. QA em Chromium/loopback não prova Android/iOS, Google ou WAN; leia `POST_1_0_G4_PARTY_GAMES_EXPANSION_QUIZ_REPORT.md`.
-
-## G5 / Lumio Cartas
-
-- Runtime Cards separado, efêmero e autoritativo: deck/discard/hands/pending nunca entram no estado público. Projete myHand/legalCardIds/myPending apenas para a identidade autenticada participante; espectadores não recebem esses campos. Fanout individual, nunca broadcast de uma projeção privada.
-- Instâncias físicas têm UUID opaco; preserve 96 IDs únicos entre compra, descarte e mãos, inclusive reciclagem/leave. Ordem e efeitos só no servidor, sem stacking/challenge. Declaração Última! é atômica com play/play_drawn; escolha de cor confirma a carta reservada, sem estender deadline.
-- Revisão/session/round exatos, ownership, fase, turno, prazo e cor validados no servidor; não repetir ações automaticamente após timeout de ack. Desconexão mantém mão; saída explícita devolve cartas e invalida participação. Timer visual não publica ticks de socket.
-- Mão mobile usa scroll horizontal local e toque para selecionar/confirmar. Não remonte Party, Chat, Call ou mídia. Fixtures determinísticas só em harness isolado local; nunca aceitar deck/seed do cliente ou criar endpoint de debug. Consulte `POST_1_0_G5_LUMIO_CARD_GAME_REPORT.md`.
-
-## GX4.1 / Game Design System
-
-- A camada `apps/web/src/games/GameDesignSystem.tsx` é apenas visual e composável. Games mantêm seus runtimes, projeções privadas, timers/turnos autoritativos, participação explícita e classes legadas usadas pelo E2E. Não levar lógica, Socket.IO, RTC, Call, Chat nem Media provider para `GameShell`.
-- Tokens CSS ficam em `.game-hub`; o Hub adapta 3/2/1 colunas. O nome acessível do cartão permanece “Nome N–M jogadores”, mesmo com descrição visual. `GameTimer` apenas apresenta segundos, sem `aria-live` por tick. Confira `GAME_DESIGN_SYSTEM.md` e o relatório GX4.1 antes de evoluir Draw/Quiz/Cartas.
-- O seletor `.party-experience-nav` é o único caminho de Mídia↔Jogos. Não adicionar botão redundante “Voltar à mídia” ou Escape que troque a rota; o breadcrumb “Voltar aos jogos” só retorna ao Hub.
+- A Party possui uma única experiência de mídia, social e Call. Game Hub, Draw, Quiz e Cards foram removidos do produto, frontend, backend e protocolo.
+- `/house/:houseId/media` é a rota canônica; `/house/:houseId` e `/house/:houseId/games` redirecionam para ela sem iniciar jogos.
+- O Chat mobile permanece integrado ao player; Queue, Pessoas e Adicionar mídia ficam no cabeçalho, enquanto o microfone abre os controles de Call junto ao composer. Desktop mantém ações sociais diretas.
+- O viewer registry e a pausa a zero espectadores permanecem autoritativos no servidor. Não converter `experience:media:enter/leave` em fluxo de jogos.
+- Os relatórios G/GX e `GAME_DESIGN_SYSTEM.md` são históricos, não instruções para o produto atual.

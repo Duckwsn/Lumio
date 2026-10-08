@@ -8,19 +8,18 @@
 - `/app` — authenticated Home and House selector.
 - `/account` — authenticated login-method management and separate Drive connection status.
 - `/house/:houseId/media` — authenticated Media Experience in the shared Party.
-- `/house/:houseId/games` — authenticated Games Experience in the same Party.
-- `/house/:houseId` — legacy alias, replaced locally with `/house/:houseId/media` without adding a history entry.
+- `/house/:houseId` and `/house/:houseId/games` — historical aliases, replaced locally with `/house/:houseId/media` without adding a history entry. Games are no longer mounted.
 - `/invite/:token` — public invitation details; authentication returns to the same invitation.
 
 The frontend uses the History API and Vite's development fallback. A production static host must rewrite unknown paths to `index.html`.
-The PWA manifest starts at `/app`; unauthenticated visitors are redirected by the existing auth flow. Deep links such as `/invite/:token`, `/house/:houseId/media` and `/house/:houseId/games` require the host's history fallback. The service worker does not replace that server-side rewrite and does not make authenticated routes work offline.
+The PWA manifest starts at `/app`; unauthenticated visitors are redirected by the existing auth flow. Deep links such as `/invite/:token` and `/house/:houseId/media` require the host's history fallback. The service worker does not replace that server-side rewrite and does not make authenticated routes work offline.
 On a fresh unauthenticated visit to `/`, the public Landing mounts without the App/Party JavaScript chunk. Its Party showcase is local, illustrative markup; it does not connect sockets, load providers or request permissions. Landing CTAs navigate to the existing auth routes. The install section reuses the existing browser-driven PWA prompt and shows platform guidance when no prompt is available.
 
 ## Bootstrap and network behavior
 
 When a local token exists, `/api/bootstrap` returns the current profile and House summaries in one request. The UI stays in an `unknown` authentication state until this finishes, preventing a Landing flash. A `401` clears the invalid local session; a network failure keeps it and presents a retry state.
 
-The Home performs a light metadata refresh every 20 seconds and receives `home:update` over one authenticated, lightweight socket. It does not join Party rooms or initialize media, WebRTC, screen sharing or device discovery. Cards distinguish online members from members in the Party. Heavy Party components are loaded as separate Vite chunks only after entering a House experience route. Route House ID is authoritative for Party selection; older House-detail fetches are canceled on switch. Media/Games route changes keep the Party socket, Call and Chat; they do not send Party or voice leave/join. The media provider is mounted only in `/media`. An ephemeral server-side viewer registry pauses the current playback after the final Media viewer leaves, retaining Queue, current media, position and History. Returning to `/media` does not auto-resume a zero-viewer pause.
+The Home performs a light metadata refresh every 20 seconds and receives `home:update` over one authenticated, lightweight socket. It does not join Party rooms or initialize media, WebRTC, screen sharing or device discovery. House cards distinguish online members from members in the Party. Heavy Party components are loaded as separate Vite chunks only after entering the Media Party route. Route House ID is authoritative for Party selection; older House-detail fetches are canceled on switch. The media provider mounts in `/media`; the Party shell, socket, Call and Chat remain shared. An ephemeral server-side viewer registry pauses the current playback after the final Media viewer leaves, retaining Queue, current media, position and History. Returning to `/media` does not auto-resume a zero-viewer pause.
 
 **Sair da Party** returns to `/app`, disconnects Party presence and releases local call, screen-share and player resources. It does not leave the House, clear its queue, disconnect Google Drive or sign out of Lumio. **Sair** in the profile menu signs out of the account; House membership is managed separately in Casa e membros.
 

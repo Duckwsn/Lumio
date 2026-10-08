@@ -6,9 +6,9 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { io, type Socket } from "socket.io-client";
-import type { GameAck, HouseSummary, PartyGameSnapshot, RoomSnapshot, User } from "@lumio/shared";
+import type { HouseSummary, RoomSnapshot, User } from "@lumio/shared";
 
-test("S1/S2 authenticated Home observers: multi-House isolation, presence, games, reconnect and cleanup", { timeout: 90000 }, async (context) => {
+test("S1/S2 authenticated Home observers: multi-House isolation, presence, media, reconnect and cleanup", { timeout: 90000 }, async (context) => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "lumio-houses-s1-"));
   const port = await new Promise<number>((resolve) => { const server = net.createServer(); server.listen(0, "127.0.0.1", () => { const port = (server.address() as net.AddressInfo).port; server.close(() => resolve(port)); }); });
   const outbox = path.join(directory, "mail.jsonl"), origin = "http://127.0.0.1:5173", api = `http://127.0.0.1:${port}`;
@@ -33,11 +33,10 @@ test("S1/S2 authenticated Home observers: multi-House isolation, presence, games
     for (const i of members) assert.equal((await request(`/api/invites/${invite.code}/accept`, sessions[i].token)).status, 200);
   };
   await invite(x.id, 0, [1, 2]); await invite(y.id, 3, [0]);
-  const summaries: HouseSummary[][] = [[], [], [], []], traffic: unknown[] = [], games: (PartyGameSnapshot | null)[] = [null, null];
+  const summaries: HouseSummary[][] = [[], [], [], []], traffic: unknown[] = [];
   const connect = async (i: number) => {
     const socket = io(api, { transports: ["websocket"], auth: { token: sessions[i].token }, extraHeaders: { Origin: origin } }); sockets[i] = socket;
     socket.on("home:update", (houses) => { summaries[i] = houses; if (i === 2) traffic.push(houses); });
-    socket.on("game:snapshot", (state) => { if (i < 2) games[i] = state; }); socket.on("game:state", (state) => { if (i < 2) games[i] = state; });
     await until(() => socket.connected && summaries[i].length > 0); return socket;
   };
   for (let i = 0; i < 4; i++) await connect(i);
@@ -80,27 +79,11 @@ test("S1/S2 authenticated Home observers: multi-House isolation, presence, games
   sockets[2].disconnect(); await connect(2); assert.equal(current().partyCount, 2);
   assert.equal(JSON.stringify({ media: room!.currentMedia, queue: room!.queue }), before);
   assert.equal(room!.members.some((m) => m.user.id === sessions[2].user.id), false, "Home never joins Party");
-  const action = async (i: number, gameType: "draw" | "quiz" | "cards", type: string) => {
-    await new Promise((r) => setTimeout(r, 180)); const state = games[i];
-    const a = { type, roomId: x.primaryRoomId, ...(type === "open" ? {} : { sessionId: state!.sessionId, roundId: state!.roundId, revision: state!.revision }) };
-    const payload = type === "end" ? { ...a, gameType } : gameType === "draw" ? { gameType, roomId: x.primaryRoomId, action: a } : { ...a, gameType };
-    const ack = await sockets[i].timeout(3000).emitWithAck("game:action", payload) as GameAck;
-    assert.equal(ack.ok, true, `${gameType}/${type}: ${ack.message}`);
-  };
-  for (const gameType of ["draw", "quiz", "cards"] as const) {
-    await action(0, gameType, "open"); await until(() => games[0]?.gameType === gameType);
-    assert.notEqual(current().partyActivity?.type, "game", "lobby is not active match");
-    await action(0, gameType, "join"); await action(1, gameType, "join"); await action(0, gameType, "start");
-    await until(() => current().partyActivity?.gameType === gameType);
-    assert.match(current().partyActivity!.label, /^Partida de .* ativa$/);
-    assert.equal(summaries[0].find((h) => h.id === y.id)?.partyActivity?.type, "idle");
-    if (gameType === "draw") {
-      const count = traffic.length; await new Promise((r) => setTimeout(r, 800)); assert.equal(traffic.length, count, "game timer does not fanout identical summaries");
-    }
-    assert.equal((await sockets[0].timeout(3000).emitWithAck("screen:start", { roomId: x.primaryRoomId })).ok, true);
-    await until(() => current().partyActivity?.type === "screen"); sockets[0].emit("screen:stop", { roomId: x.primaryRoomId }); await until(() => current().partyActivity?.type === "game");
-    await action(0, gameType, "end"); await until(() => current().partyActivity?.type === "party");
-  }
+  assert.equal(summaries[0].find((h) => h.id === y.id)?.partyActivity?.type, "idle");
+  assert.equal((await sockets[0].timeout(3000).emitWithAck("screen:start", { roomId: x.primaryRoomId })).ok, true);
+  await until(() => current().partyActivity?.type === "screen");
+  sockets[0].emit("screen:stop", { roomId: x.primaryRoomId });
+  await until(() => current().partyActivity?.type === "party");
   let latestMedia: RoomSnapshot["currentMedia"] | null = null;
   sockets[0].on("media:sync", (state) => { latestMedia = state; });
   const mediaState = () => latestMedia as RoomSnapshot["currentMedia"] | null;

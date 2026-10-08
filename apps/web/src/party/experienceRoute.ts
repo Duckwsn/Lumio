@@ -1,12 +1,10 @@
-export type PartyExperience = "media" | "games";
-
 export type PartyRoute =
-  | { kind: "party"; houseId: string; experience: PartyExperience; legacy: boolean }
+  | { kind: "party"; houseId: string; legacy: boolean }
   | { kind: "invalid" }
   | null;
 
-export function partyPath(houseId: string, experience: PartyExperience): string {
-  return `/house/${encodeURIComponent(houseId)}/${experience}`;
+export function partyPath(houseId: string): string {
+  return `/house/${encodeURIComponent(houseId)}/media`;
 }
 
 export function parsePartyRoute(pathname: string): PartyRoute {
@@ -17,7 +15,7 @@ export function parsePartyRoute(pathname: string): PartyRoute {
   try {
     const houseId = decodeURIComponent(parts[2]);
     if (!houseId || houseId.includes("/") || houseId.includes("\\")) return { kind: "invalid" };
-    return { kind: "party", houseId, experience: parts[3] === "games" ? "games" : "media", legacy: parts.length === 3 };
+    return { kind: "party", houseId, legacy: parts.length === 3 || parts[3] === "games" };
   } catch {
     return { kind: "invalid" };
   }

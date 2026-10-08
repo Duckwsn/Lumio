@@ -24,11 +24,10 @@ const keyOf = (item: Pick<MediaItem, "provider" | "providerMediaId">) => `${item
 const asMedia = (item: MediaItem): MediaItem => ({ id: item.id, provider: item.provider, providerMediaId: item.providerMediaId, type: item.type, title: item.title, thumbnail: item.thumbnail, duration: item.duration, mimeType: item.mimeType, metadata: item.metadata, creator: item.creator, canonicalUrl: item.canonicalUrl, available: item.available });
 const MediaActionsContext = createContext({ canAdd: true, canControl: true, canSave: true, canCreatePlaylist: true, canEditPlaylist: true, canDeletePlaylist: true });
 
-export function MediaHub({ apiUrl, token, roomId, queueRevision, refreshSignal, permissions, canAdd, canControl, onClose, onAdd, onPlayNext, onPlaybackRequested }: {
+export function MediaHub({ apiUrl, token, roomId, queueRevision, refreshSignal, permissions, canAdd, canControl, onClose, onAdd, onPlayNext }: {
   apiUrl: string; token: string; roomId: string; queueRevision: number; refreshSignal: number; permissions: string[]; canAdd: boolean; canControl: boolean; onClose: () => void;
   onAdd: (item: MediaItem, playNow: boolean) => Promise<{ position: number }>;
   onPlayNext: (item: MediaItem) => Promise<void>;
-  onPlaybackRequested?: () => void;
 }) {
   const [tab, setTab] = useState<HubTab>("discover");
   const [hub, setHub] = useState<HubData>(emptyHub);
@@ -191,7 +190,6 @@ export function MediaHub({ apiUrl, token, roomId, queueRevision, refreshSignal, 
     pendingQueueBatches.current.add(key);
     try {
       if (!canAdd || (playNow || mode === "replace") && !canControl) throw new Error("Você não tem permissão para esta ação.");
-      if (playNow) onPlaybackRequested?.();
       const operationId = queueBatchIntents.current.get(key) ?? crypto.randomUUID();
       queueBatchIntents.current.set(key, operationId);
       const result = await request<{ skipped?: number; duplicate?: boolean }>(`/api/media-hub/${roomId}/playlists/${playlist.id}/queue`, { method: "POST", body: JSON.stringify({ mode, playNow, revision: queueRevision, operationId }) });

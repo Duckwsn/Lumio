@@ -3,23 +3,18 @@ import test from "node:test";
 import { projectHouseActivity, safeMediaTitle } from "./houseActivity.js";
 import { SocialStore } from "./socialStore.js";
 
-const input = { partyCount: 2, sharing: false, game: null, media: { title: "Vídeo", state: "playing", type: "video" } };
-test("activity: occupancy first, screen over game over actual playback", () => {
+const input = { partyCount: 2, sharing: false, media: { title: "Vídeo", state: "playing", type: "video" } };
+test("activity: occupancy first, screen over actual playback", () => {
   assert.equal(projectHouseActivity({ ...input, partyCount: 0, sharing: true }).type, "idle");
-  assert.equal(projectHouseActivity({ ...input, sharing: true, game: { gameType: "quiz", phase: "QUESTION" } }).type, "screen");
-  assert.deepEqual(projectHouseActivity({ ...input, game: { gameType: "quiz", phase: "QUESTION" } }), { type: "game", gameType: "quiz", label: "Partida de Quiz ativa" });
+  assert.equal(projectHouseActivity({ ...input, sharing: true }).type, "screen");
   assert.equal(projectHouseActivity(input).type, "media");
   assert.equal(projectHouseActivity({ ...input, media: { ...input.media, state: "paused" } }).type, "party");
 });
-test("activity: lobby and all final results do not pretend to be live matches", () => {
-  for (const gameType of ["draw", "quiz", "cards"] as const) for (const phase of ["LOBBY", "RESULT", "GAME_RESULT"]) assert.equal(projectHouseActivity({ ...input, game: { gameType, phase } }).type, "media");
-  for (const [gameType, phase] of [["draw", "DRAWING"], ["quiz", "REVEAL"], ["cards", "PLAYING"]] as const) assert.equal(projectHouseActivity({ ...input, game: { gameType, phase } }).type, "game");
-});
 test("activity: allowlist ignores secrets, bounds metadata, distinguishes declared audio", () => {
-  const dangerous = { ...input, media: { ...input.media, title: "a".repeat(800) + "\n", type: "audio", token: "private", playbackUrl: "private", grant: "private" }, game: null, secretWord: "private", myHand: ["private"] };
+  const dangerous = { ...input, media: { ...input.media, title: "a".repeat(800) + "\n", type: "audio", token: "private", playbackUrl: "private", grant: "private" } };
   const projected = projectHouseActivity(dangerous);
   assert.ok(projected.label.startsWith("Ouvindo ")); assert.ok(projected.label.length <= 180);
-  assert.doesNotMatch(JSON.stringify(projected), /private|token|grant|playbackUrl|secretWord|myHand/);
+  assert.doesNotMatch(JSON.stringify(projected), /private|token|grant|playbackUrl/);
 });
 test("activity: URL or credential-looking titles never enter a House summary", () => {
   for (const title of ["https://drive.example/private?token=secret", "Watch www.private.test", "Bearer secret", "data:text/html,secret", "Movie?access_token=secret"]) assert.equal(safeMediaTitle(title), "mídia");

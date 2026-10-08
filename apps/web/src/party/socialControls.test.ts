@@ -16,16 +16,12 @@ const defaults: ComponentProps<typeof PartySocialControls> = {
 };
 const render = (props: Partial<typeof defaults>) => renderToStaticMarkup(createElement(PartySocialControls, { ...defaults, ...props }));
 
-test("mobile Media chat is pinned with People, Queue and Add actions; Games stays dismissible and media-free", () => {
-  const props = { children: "Chat", hidden: false, open: true, onClose: noop, onPeople: noop };
-  const media = renderToStaticMarkup(createElement(MobilePartyChat, { ...props, pinned: true, onQueue: noop, onAddMedia: noop, queueCount: 3 }));
+test("mobile Media chat is pinned with People, Queue and Add actions", () => {
+  const media = renderToStaticMarkup(createElement(MobilePartyChat, { children: "Chat", hidden: false, onPeople: noop, onQueue: noop, onAddMedia: noop, queueCount: 3 }));
   assert.match(media, /aria-label="Pessoas da Party"/);
   assert.match(media, /aria-label="Fila da Party, 3 itens"/);
   assert.match(media, /aria-label="Adicionar mídia"/);
   assert.doesNotMatch(media, /Fechar chat/);
-  const games = renderToStaticMarkup(createElement(MobilePartyChat, props));
-  assert.match(games, /Fechar chat/);
-  assert.doesNotMatch(games, /Fila da Party|Adicionar mídia/);
 });
 
 test("FF3.1 call off exposes entry while connected status stays accessible and quiet", () => {

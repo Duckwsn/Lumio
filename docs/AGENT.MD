@@ -23,7 +23,7 @@ Landing pública
   -> conectar Party realtime
 ```
 
-O Home não deve inicializar Socket.IO, WebRTC, busca de mídia ou componentes pesados da Party. Esses recursos pertencem às rotas `/house/:houseId/media` e `/house/:houseId/games` e devem continuar lazy-loaded quando possível.
+O Home não deve inicializar WebRTC, busca de mídia ou componentes pesados da Party. A conexão autenticada leve de presença do Home é permitida; player e Call pertencem à rota `/house/:houseId/media` e devem continuar lazy-loaded quando possível.
 Na Landing pública, a demonstração da Party é apenas visual e local: sem socket, player/provider, WebRTC, permissões ou dados privados. Os recursos anunciados devem existir no produto; a instalação PWA só recebe botão quando o navegador oferece um prompt funcional.
 
 ## Regras de backend
@@ -51,9 +51,9 @@ Na Landing pública, a demonstração da Party é apenas visual e local: sem soc
 
 ## Invariantes de mídia
 
-- GX3 substituiu MainStage por `MediaExperienceStage` e `GamesExperienceStage`, selecionados pelas rotas dedicadas. Trocar experiência não cria outra Party/socket/call/chat nem envia game leave/join; participação continua voluntária.
-- Trocas de experiência preservam fila, mídia e sync autoritativos, Chat, Call e presença. O provider local é desmontado ao sair de `/media` e recriado ao voltar; não mantenha iframe YouTube nem vídeo Drive ocultos em Jogos. A pausa após o último Media viewer é decisão do servidor, com registro efêmero por socket e proteção de revisão/ocorrência.
-- Tela compartilhada pertence à Party/Call e pode ser apresentada em ambas as experiências; não conta como Media viewer. Fullscreen pertence à superfície da experiência; sair de fullscreen não deve trocar Jogos por mídia.
+- `MediaExperienceStage` é a única superfície da Party; mídia, Chat, Call e presença compartilham o mesmo shell. `/house/:houseId/games` é apenas alias histórico para `/media`.
+- O provider local é desmontado ao sair da Party e recriado ao voltar. A pausa após o último Media viewer é decisão do servidor, com registro efêmero por socket e proteção de revisão/ocorrência.
+- Tela compartilhada pertence à Party/Call e não conta como Media viewer. Fullscreen não deve trocar a rota nem alterar a mídia autoritativa.
 - Ambiente é apresentação local do mesmo engine; o iframe oficial do YouTube permanece visível também nessa apresentação. Trocar Ambiente/Vídeo/fullscreen nunca muda `mediaId`, `revision` ou a sessão da Call. Metadados de apresentação vêm da mídia atual, sem inferir artista/álbum/letras ou expor URL temporária do Drive.
 
 - Existe uma única Party, uma única fila e um único UniversalPlayer.
@@ -154,14 +154,14 @@ Uma tarefa está pronta quando:
 
 ## Houses V2 / resumo de atividade
 
-- Home continua usando apenas o socket autenticado leve e GET/refresh; nunca faz `room:join`, Call ou captura de dispositivo para mostrar atividade. `HouseSummary.partyActivity` é projeção pública no servidor, não snapshot de Game/Room/Drive.
-- Party ativa significa pelo menos uma identidade com `inParty`; online na Casa é eixo separado. Resumo: share ativo > jogo em fase de partida > mídia tocando > Party ocupada. Lobby/resultado não equivalem a jogo em andamento; “Partida X ativa” não afirma que todos veem o jogo, pois a experiência local vem da rota.
-- Mudanças de mídia relevantes para Home emitem resumo, mas seek/playhead, strokes, timer, cartas, typing e speaking não. Deduplicate payload por socket. Em reconnect, indique que o último resumo está desatualizado até receber projeção nova; restart não restaura game/share efêmeros.
-- O card recebe somente até três membros públicos e rótulo público de atividade. Não transportar secretWord/answers/hands, tokens, tickets, grants, URLs de stream ou metadados privados. Sem migration/presence persistida por heartbeat. Veja `POST_1_0_S1_HOUSES_V2_REPORT.md`.
+- Home continua usando apenas o socket autenticado leve e GET/refresh; nunca faz `room:join`, Call ou captura de dispositivo para mostrar atividade. `HouseSummary.partyActivity` é projeção pública no servidor, não snapshot de Room/Drive.
+- Party ativa significa pelo menos uma identidade com `inParty`; online na Casa é eixo separado. Resumo: share ativo > mídia tocando > Party ocupada.
+- Mudanças de mídia relevantes para Home emitem resumo, mas seek/playhead, typing e speaking não. Deduplicate payload por socket. Em reconnect, indique que o último resumo está desatualizado até receber projeção nova; restart não restaura share efêmero.
+- O card recebe somente até três membros públicos e rótulo público de atividade. Não transportar tokens, tickets, grants, URLs de stream ou metadados privados. Sem migration/presence persistida por heartbeat. Veja `POST_1_0_S1_HOUSES_V2_REPORT.md`.
 
 ## Presence V2
 
-- `ONLINE` e `IDLE` significam conexão autenticada viva; `inParty` é um eixo separado, agregado por identidade na Party daquela Casa. Nenhum deles prova atenção, consumo de mídia ou participação em jogo. Não derive presença individual de Call, mic, Game, media ou `document.hidden`.
+- `ONLINE` e `IDLE` significam conexão autenticada viva; `inParty` é um eixo separado, agregado por identidade na Party daquela Casa. Nenhum deles prova atenção ou consumo de mídia. Não derive presença individual de Call, mic, media ou `document.hidden`.
 - Uma conta pode ter vários sockets. Só a saída da última conexão após cinco segundos marca offline; reconexão cancela o timer antigo. Logout explícito da última sessão encurta esse prazo. O transporte Socket.IO já fornece liveness, sem heartbeat customizado.
 - `GroupMember.lastSeenAt` representa o último trânsito efetivo da conta para offline, projetado nos vínculos de Casa; não atualize em join, fala, heartbeat ou alteração de atividade. `home:update` e `house:update` continuam filtrados por membership. Home não entra na Party/Call.
 - Preserve o socket Home único, sem presença global pública, dispositivo/IP/localização, status rico inventado ou migration para presença efêmera. Veja `POST_1_0_S2_PRESENCE_V2_REPORT.md`.
@@ -195,58 +195,12 @@ Uma tarefa está pronta quando:
 - Streaming Drive mantém Range, autorização, `no-store`, backpressure e cancelamento do upstream quando o cliente sai; não bufferizar o vídeo inteiro.
 - Logs HTTP/WS usam IDs técnicos e templates de rota, nunca payload privado ou tokens. Consulte `docs/PERFORMANCE_RESILIENCE_17.md` antes de alterar lifecycle, saúde ou infraestrutura.
 
-## Draw Game G1
+## Lumio 2.0 LX0 — Party Media-only
 
-- Desenhe e Adivinhe vive na Party e usa seu socket autenticado. Participação é explícita; GameHub/voltar à mídia são apresentação local, não leave do jogo.
-- Runtime é efêmero por roomId. Coordenador inicia, mas não ganha privilégios da House. Ordem, fase, prazo, segredo e pontos são server-authoritative.
-- `game:snapshot` e `game:state` são projeções individuais; choices/secretWord só para drawer ativo. Só resultados revelam revealedWord. Nunca room-broadcast de segredo.
-- Pontos normalizados, lotes de até 32/50ms e pintura imperativa. Metadados não reenviam board; revisão de jogo/board é distinta de mídia/fila. Undo/clear precisam impedir append antigo.
-- Preserve YouTube visível, chat estrutural, RTC e screen stream. Não criar profile/chat/call, banco ou engine paralelos. Consulte `POST_1_0_G1_DRAW_GAME_REPORT.md` para protocolo, limites e QA manual.
-
-## Party Games G2
-
-- O composer tem modos explícitos: palpites vão direto para `game:action/guess`, nunca primeiro para `chat:message`. Somente o backend compara e pontua; acerto gera evento público sem texto da resposta.
-- Rascunhos de conversa/palpite pertencem à Party e são separados. Fullscreen reutiliza o mesmo composer/estado, sem segundo histórico. Drawer, observador, quem acertou e apresentação em mídia usam conversa normal.
-- Contexto social do jogo recebe somente metadados públicos, sem board/choices/secretWord. Feed visual aparece no Chat; protocolo de jogo permanece separado.
-- Ctrl/Cmd+Z e botão Desfazer usam o mesmo undo autoritativo. Ignore edição de texto, overlays, repeat, redo e fase/usuário inelegíveis. Nunca faça undo só local.
-- `roundPoints` e timestamps do feed são calculados no runtime, não inferidos do palpite no cliente. Preserve projeções individuais, limites, batching e o único engine/RTC. Consulte `POST_1_0_G2_PARTY_GAMES_EXPERIENCE_V2_REPORT.md`.
-
-## Draw Game G3
-
-- G3 substitui duas voltas por targetScore (50/100/150/200), default 100/Geral. Só coordenador participante online configura no LOBBY, com revisão exata. Não reduzir validação a disabled do frontend.
-- Rotação é circular sem total fixo; skip de ausentes é bounded e não aumenta a contagem de rodadas jogadas. Vitória é verificada após ROUND_RESULT; maior score vence, empate compartilha vitória. `winnerIds` vem do servidor.
-- Score por acerto: 6 + floor(4 * fração_restante) - min(2, acertos_anteriores); drawer +2 com cap 6/rodada. Rematch volta ao lobby da mesma sessão, conserva configuração/ativos e zera partida.
-- Banco local categorizado/usedWords é privado. Ofereça somente palavras inéditas até esgotar; então recicla pool. Não enviar banco, cursor ou histórico de palavras ao contexto social.
-- No mobile, Chat do drawer é hidden, nunca desmontado por papel. Guesser recebe canvas menor/lista maior; drafts/identidade/socket/RTC/provider preservados. VisualViewport curto compacta navegação apenas durante foco do composer, sem UA hacks.
-- Leia `POST_1_0_G3_DRAW_GAME_V3_REPORT.md` e calibre alterações com `scripts/draw-match-calibration.ts`. Evidências Chromium/fixtures não equivalem a providers, WAN ou aparelhos reais.
-
-## Party Games G4 / Quiz
-
-- PartyGames roteia runtimes específicos e reserva uma sessão por roomId, inclusive lobby/resultado. Navegar Media/Hub/jogo não envia leave/end; trocar tipo exige encerramento autorizado confirmado. Não criar Party/socket/Chat/Call paralelos.
-- Use gameType explícito nas projeções e ações novas; Draw usa envelope com roomId externo igual ao interno. Payload Draw legado estrito é compatibilidade, não modelo para jogos futuros.
-- Quiz mantém deck, correctIndex e respostas/pontos provisórios somente no servidor. QUESTION projeta só ownAnswer da própria identidade e contagens agregadas; score/correctness/distribuição só em REVEAL. Nunca reutilizar chat:message/guess para votar.
-
-## Party Games G5 / Lumio Cartas
-
-- Registry tem três jogos reais: Draw, Quiz, Cards. CardGameRuntime mantém regras próprias dentro da exclusão de uma sessão por Party; não criar SDK, sockets ou Party paralelos.
-- Cards: 96 instâncias com IDs opacos; conservação compra + descarte + mãos = 96, sem duplicação. Deck, outras mãos e decisões privadas nunca são públicos. Projete myHand/legalCardIds/myPending só para a identidade autenticada participante; fanout individual obrigatório.
-- Servidor valida session/round/revision exatos, fase, turno, deadline, ownership, legalidade e cor. Última! acompanha a jogada atomicamente; efeito final precede winner. Sem stacking/challenge; compra jogável exige decisão explícita, timeout não joga automaticamente.
-- Reconexão preserva mão própria/deadline, não repete jogada. Desconexão não recicla mão; leave explícito recicla e revoga participação. Timer local não publica ticks. Mão mobile tem scroll local/toque/confirmar e fullscreen em paisagem, sem remontar Chat/Call/Media.
-- QA determinístico permanece em harness local descartável, sem flags/endpoints de debug em produção. Leia `POST_1_0_G5_LUMIO_CARD_GAME_REPORT.md` para regras, evidências e limites de QA real.
-
-## Party Games G6 / reconexão
-
-- Uma queda breve conserva a última projeção autorizada na superfície do jogo e os metadados públicos de papel/rodada no Chat; ações e palpites aguardam a projeção autenticada recuperada. Não repetir mutações após timeout de ack. Retornar ao Hub/Mídia não envia leave/end.
-- Bloqueio de clique não deve serializar lotes de desenho nem impedir sync de recuperação. Foco de escolha de palavra/cor ocorre após controles serem habilitados. Coordenador que abriu o lobby sem participar também entra na tolerância existente de desconexão e pode transferir coordenação após ela.
-- Configure/start/rematch/end validam autoridade e revisão exata. Answer permite revisão não-futura apenas da mesma session/round, uma vez por ativo online, antes do deadline; cliente não determina acerto/pontos. Reconnect conserva lock, espectadores/offline não bloqueiam early finish.
-- Banco PT-BR estável é privado; seleção sem repetição na partida, ordem de quatro alternativas única para todos. Não importar banco no frontend. Timer visual não envia eventos por segundo. Consulte `POST_1_0_G4_PARTY_GAMES_EXPANSION_QUIZ_REPORT.md` para fórmula, limites e QA manual.
-
-## GX4.1 — Game Design System
-
-- `apps/web/src/games/GameDesignSystem.tsx` e `gameDesignSystem.css` são apresentação composável para Hub/Draw/Quiz/Cartas. `GameShell`, `GameHud`, `GameStage`, `GameLobby`, `GameActionBar`, `GameResult`, `GameTimer` e `GamePhase` não podem possuir socket, RTC, regras, resultado calculado nem estado privado; recebem somente projeções já autorizadas pelos jogos.
-- Preserve as classes de teste/compatibilidade (`draw-*`, `quiz-*`, `card-*`), hierarquia do canvas 4:3, mão privada horizontal, deadlines server-side, Chat/Call únicos, rotas GX3 e Media provider exclusivo da rota de mídia. `GameTimer` só formata segundos; não publica ticks nem redefine prazo.
-- CSS scoped em `.game-hub`; não sobrescrever tema global da Party. Catálogo acessível mantém nome curto “Nome N–M jogadores” mesmo com descrição visual. Ver `docs/GAME_DESIGN_SYSTEM.md` e `docs/POST_1_0_GX4_1_GAME_DESIGN_SYSTEM_REPORT.md` antes de GX4.2–GX4.4.
-- A navegação Mídia/Jogos pertence exclusivamente ao seletor `.party-experience-nav`. Não reintroduzir “Voltar à mídia” no GameHub/resultado nem usar Escape para trocar rota; “Voltar aos jogos” só retorna ao Hub.
+- Game Hub, Draw, Quiz, Cards e seus eventos Socket.IO foram removidos. Não reintroduzir rotas, runtimes, Chat de palpite ou CSS de jogos sem decisão explícita de produto.
+- `/house/:houseId/games` redireciona para `/house/:houseId/media` por compatibilidade de links históricos. A URL canônica é somente `/media`.
+- Chat mobile é fixo ao player; os controles da Call ficam junto ao composer e Pessoas/Fila/Adicionar mídia no cabeçalho. Desktop mantém Mic, áudio, Chat, Share e Pessoas diretamente acessíveis.
+- `experience:media:enter/leave` e o viewer registry continuam necessários para a política de pausa quando o último espectador sai, inclusive refresh/desconexão e múltiplas abas.
 
 ## Social Library M2
 

@@ -5,7 +5,6 @@ import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { io } from "socket.io-client";
 
 const root = path.resolve(__dirname, "..");
@@ -38,7 +37,7 @@ test.beforeAll(async () => {
   apiPort = await freePort();
   webPort = await freePort();
   const origin = `http://127.0.0.1:${webPort}`;
-  server = spawn(process.execPath, ["--import", "tsx", "--import", pathToFileURL(path.join(root, "e2e/fixtures/cardDeckLoader.mjs")).href, "src/index.ts"], {
+  server = spawn(process.execPath, ["--import", "tsx", "src/index.ts"], {
     cwd: path.join(root, "apps/server"),
     env: { ...process.env, PORT: String(apiPort), NODE_ENV: "development", PERSISTENCE_MODE: "file", AUTH_STORE_FILE: path.join(directory, "auth.json"), EMAIL_PROVIDER: "dev-file", EMAIL_DEV_OUTBOX_FILE: path.join(directory, "mail.jsonl"), APP_PUBLIC_URL: origin, CLIENT_ORIGIN: origin, RTC_STUN_URLS: "", RTC_TURN_URLS: "", RTC_TURN_USERNAME: "", RTC_TURN_CREDENTIAL: "", YOUTUBE_API_KEY: "", GOOGLE_CLIENT_ID: "", GOOGLE_CLIENT_SECRET: "", GOOGLE_TOKEN_ENCRYPTION_KEY: "" },
     stdio: ["ignore", "pipe", "pipe"],
@@ -61,7 +60,7 @@ test.afterAll(async () => {
 });
 
 
-const shots = path.join(root, "artifacts/frontfix/ff31", process.env.FF31_VISUAL_PASS === "pass1" ? "pass1" : "pass2");
+const shots = path.join(root, "test-results", "lx0", "ff31");
 
 test("FF3.1 direct social actions and mobile Media keep video, chat and composer visible", async ({ browser, request }) => {
   test.setTimeout(180_000);
@@ -74,7 +73,7 @@ test("FF3.1 direct social actions and mobile Media keep video, chat and composer
   const session = await (await request.post(`${api}/api/auth/login`, { data: { email, password } })).json();
   const headers = { Authorization: `Bearer ${session.token}` };
   const houses = [];
-  for (const name of ["Noite da Turma", "Cinema de sábado", "Jogos de domingo"]) {
+  for (const name of ["Noite da Turma", "Cinema de sábado", "Domingo da turma"]) {
     const response = await request.post(`${api}/api/houses`, { headers, data: { name } });
     expect(response.ok()).toBe(true); houses.push((await response.json()).house);
   }
@@ -108,7 +107,8 @@ test("FF3.1 direct social actions and mobile Media keep video, chat and composer
   const socket = io(api, { autoConnect: false, auth: { token: session.token }, transports: ["websocket"], extraHeaders: { Origin: origin } });
   try {
     await page.goto(`${origin}/app`); await expect(page.locator(".house-card-v2")).toHaveCount(3);
-    await expect(page.locator(".house-featured")).toHaveCSS("background-image", "none");
+    await expect(page.locator(".house-list-item")).toHaveCount(3);
+    await expect(page.locator(".house-featured, .house-secondary")).toHaveCount(0);
     await capture("home-desktop");
     for (const [width, height] of [[390,844],[320,568],[430,932]]) {
       await page.setViewportSize({ width, height }); await capture(`home-${width}`);
@@ -147,6 +147,8 @@ test("FF3.1 direct social actions and mobile Media keep video, chat and composer
     await capture("share-active-desktop");
     await controls.getByRole("button", { name: "Parar compartilhamento de tela", exact: true }).click();
     await page.setViewportSize({ width: 390, height: 844 }); await capture("media-390-integrated");
+    await expect(page.locator(".media-context")).toBeHidden();
+    await expect(page.locator(".now-playing h2")).toBeHidden();
     await expect(page.getByRole("textbox", { name:"Mensagem", exact:true })).not.toBeFocused();
     await expect(page.getByRole("button", { name:/^(Abrir|Fechar|Ocultar) chat$/ })).toHaveCount(0);
     await expect(controls).toHaveCount(0);
@@ -201,14 +203,9 @@ test("FF3.1 direct social actions and mobile Media keep video, chat and composer
     const menuBox = await page.locator(".mobile-call-menu").boundingBox(); expect(menuBox!.y).toBeGreaterThanOrEqual(0);
     await capture("media-390-keyboard-call-menu"); await page.keyboard.press("Escape");
     await page.setViewportSize({ width:390,height:844 });
-    await page.getByRole("button", { name:"Jogos",exact:true }).click();
-    await expect(page.locator(".media-context, iframe.provider-player")).toHaveCount(0);
-    await expect(page.locator(".mobile-party-chat")).toBeHidden();
-    await page.getByRole("button", { name:"Abrir chat",exact:true }).click();
     await expect(page.getByRole("textbox", { name:"Mensagem",exact:true })).toHaveValue("Continuo assistindo enquanto escrevo");
-    await page.getByRole("button", { name:"Fechar chat",exact:true }).click(); await capture("games-hub-mobile");
-    await page.setViewportSize({ width:1440,height:900 }); await capture("games-hub-desktop");
-    await page.getByRole("button", { name:"Assistir/Ouvir",exact:true }).click();
+    await capture("media-chat-preserved-mobile");
+    await page.setViewportSize({ width:1440,height:900 }); await capture("media-chat-preserved-desktop");
     await controls.getByRole("button", { name:"Abrir chat",exact:true }).click();
     await expect(page.getByRole("textbox", { name:"Mensagem",exact:true })).toHaveValue("Continuo assistindo enquanto escrevo");
     await controls.getByRole("button", { name:/^Ativar microfone/ }).click();

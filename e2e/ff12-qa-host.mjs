@@ -6,7 +6,6 @@ import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { fileURLToPath } from "node:url";
 import { io } from "socket.io-client";
 
@@ -38,7 +37,7 @@ const apiPort = await freePort();
 const webPort = await freePort();
 const api = `http://127.0.0.1:${apiPort}`;
 const web = `http://127.0.0.1:${webPort}`;
-children.push(spawn(process.execPath, ["--import", "tsx", "--import", pathToFileURL(path.join(root, "e2e/fixtures/cardDeckLoader.mjs")).href, "src/index.ts"], {
+children.push(spawn(process.execPath, ["--import", "tsx", "src/index.ts"], {
   cwd: path.join(root, "apps/server"),
   env: { ...process.env, PORT: String(apiPort), NODE_ENV: "development", PERSISTENCE_MODE: "file", AUTH_STORE_FILE: path.join(temp, "auth.json"), EMAIL_PROVIDER: "dev-file", EMAIL_DEV_OUTBOX_FILE: path.join(temp, "mail.jsonl"), APP_PUBLIC_URL: web, CLIENT_ORIGIN: web, RTC_STUN_URLS: "", RTC_TURN_URLS: "", RTC_TURN_USERNAME: "", RTC_TURN_CREDENTIAL: "", YOUTUBE_API_KEY: "", GOOGLE_CLIENT_ID: "", GOOGLE_CLIENT_SECRET: "", GOOGLE_TOKEN_ENCRYPTION_KEY: "" },
   stdio: "ignore",
