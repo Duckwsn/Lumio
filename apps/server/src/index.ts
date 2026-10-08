@@ -58,6 +58,7 @@ import { bootFailureFields, type BootStage } from "./bootDiagnostics.js";
 import { projectHouseActivity, safeMediaTitle } from "./houseActivity.js";
 import { projectLibraryMedia, publicHistory } from "./socialLibrary.js";
 import { MediaViewerRegistry } from "./mediaViewerRegistry.js";
+import { BoundedRateLimiter } from "./boundedRateLimiter.js";
 
 // npm workspaces execute this package with apps/server as the working directory.
 // Resolve the project-level environment file from this module so dev and dist agree.
@@ -153,6 +154,7 @@ app.use((_request, response, next) => {
   response.setHeader("X-Frame-Options", "DENY");
   response.setHeader("Content-Security-Policy", "frame-ancestors 'none'");
   response.setHeader("Permissions-Policy", "camera=(), microphone=(self), display-capture=(self)");
+  if (process.env.NODE_ENV === "production") response.setHeader("Strict-Transport-Security", "max-age=31536000");
   response.setHeader("Cache-Control", "no-store");
   next();
 });
@@ -174,35 +176,26 @@ app.use((request, response, next) => {
   next();
 });
 
-const authAttempts = new Map<string, { count: number; resetAt: number }>();
+const authAttempts = new BoundedRateLimiter(20_000);
 const googleChallenges = new Map<string, { mode: "login" | "link"; userId?: string; expiresAt: number }>();
 const authRateLimit = (request: express.Request, response: express.Response, bucket?: string) => {
   const now = Date.now();
-  if (authAttempts.size > 10_000) for (const [key, entry] of authAttempts) if (entry.resetAt <= now) authAttempts.delete(key);
-  if (authAttempts.size > 20_000) { response.status(429).json({ message: "Muitas tentativas. Aguarde alguns minutos e tente novamente." }); return false; }
   const email = typeof request.body?.email === "string" ? request.body.email.trim().toLowerCase() : "";
   const route = bucket ?? request.route?.path ?? request.path;
-  const keys = [`${route}:ip:${request.ip ?? "local"}`];
-  if (email) keys.push(`${route}:email:${crypto.createHash("sha256").update(email).digest("hex")}`);
-  let limited = false;
-  for (const key of keys) {
-    const entry = authAttempts.get(key);
-    const next = entry && entry.resetAt > now ? { count: entry.count + 1, resetAt: entry.resetAt } : { count: 1, resetAt: now + 15 * 60_000 };
-    authAttempts.set(key, next);
-    if (next.count > (key.includes(":email:") ? 8 : 30)) limited = true;
+  if (!authAttempts.consume(`${route}:ip:${request.ip ?? "local"}`, 30, 15 * 60_000, now)) {
+    response.status(429).json({ message: "Muitas tentativas. Aguarde alguns minutos e tente novamente." });
+    return false;
   }
-  if (limited) response.status(429).json({ message: "Muitas tentativas. Aguarde alguns minutos e tente novamente." });
-  return !limited;
+  if (email && !authAttempts.consume(`${route}:email:${crypto.createHash("sha256").update(email).digest("hex")}`, 8, 15 * 60_000, now)) {
+    response.status(429).json({ message: "Muitas tentativas. Aguarde alguns minutos e tente novamente." });
+    return false;
+  }
+  return true;
 };
-const apiAttempts = new Map<string, { count: number; resetAt: number }>();
+const apiAttempts = new BoundedRateLimiter(20_000);
 const apiRateLimit = (request: express.Request, response: express.Response, userId: string, ceiling: number) => {
-  const now = Date.now(), key = `${request.route?.path ?? request.path}:${userId}`;
-  if (apiAttempts.size > 10_000) for (const [id, entry] of apiAttempts) if (entry.resetAt <= now) apiAttempts.delete(id);
-  if (apiAttempts.size > 20_000) { response.status(429).json({ message: "Muitas solicitações. Aguarde um minuto." }); return false; }
-  const prior = apiAttempts.get(key);
-  const next = prior && prior.resetAt > now ? { count: prior.count + 1, resetAt: prior.resetAt } : { count: 1, resetAt: now + 60_000 };
-  apiAttempts.set(key, next);
-  if (next.count <= ceiling) return true;
+  const key = `${request.route?.path ?? request.path}:${userId}`;
+  if (apiAttempts.consume(key, ceiling, 60_000)) return true;
   response.status(429).json({ message: "Muitas solicitações. Aguarde um minuto." });
   return false;
 };
@@ -520,6 +513,7 @@ app.post("/api/auth/logout", async (request, response) => {
 app.get("/api/houses", (request, response) => { const user = requireUser(request, response); if (!user) return; return response.json({ houses: houseSummaries(user.id) }); });
 app.post("/api/houses", async (request, response) => {
   const user = requireUser(request, response); if (!user) return;
+  if (!apiRateLimit(request, response, user.id, 10)) return;
   const parsed = z.object({ name: z.string().trim().min(2).max(48) }).safeParse(request.body); if (!parsed.success) return response.status(400).json({ message: "Informe um nome para a Casa." });
   const house = social.createHouse(user, parsed.data.name); try { await saveHouse(house.id); } catch { return response.status(503).json({ message: "Casa indisponível no momento." }); } store.addHouseRoom({ houseId: house.id, houseName: house.name, roomId: house.primaryRoomId }); if (activeUserSockets.has(user.id)) social.setPresence(house.id, user.id, "ONLINE"); emitHouse(house.id);
   return response.status(201).json({ house: social.details(house.id, user.id) });
@@ -580,6 +574,7 @@ app.get("/api/invites/:token", (request, response) => { if (!authRateLimit(reque
 app.post("/api/invites/:token/accept", async (request, response) => { if (!authRateLimit(request, response, "invite-entry")) return; const user = requireUser(request, response); if (!user) return; const invite = social.getInvite(request.params.token); if (invite && deletingHouses.has(invite.houseId)) return response.status(410).json({ status: "INVALID" }); const result = social.acceptInvite(request.params.token, user); if (!result.ok) return response.status(410).json(result); try { await saveHouse(result.houseId); } catch { return response.status(503).json({ message: "Convite indisponível no momento." }); } if (activeUserSockets.has(user.id)) social.setPresence(result.houseId, user.id, "ONLINE"); emitHouse(result.houseId); return response.json(result); });
 app.post("/api/houses/:houseId/invites", async (request, response) => {
   const user = requireHousePermission(request, response, "INVITE_CREATE"); if (!user) return;
+  if (!apiRateLimit(request, response, user.id, 10)) return;
   const parsed = z.object({ expiresInHours: z.union([z.literal(1), z.literal(24), z.literal(168)]), maxUses: z.number().int().min(1).max(100).default(1), role: houseRoleSchema.optional() }).safeParse(request.body); if (!parsed.success) return response.status(400).json({ message: "Configuração de convite inválida." });
   const invite = social.createInvite(request.params.houseId, user, parsed.data); if (!invite) return response.status(404).json({ message: "Casa não encontrada." }); try { await saveHouse(request.params.houseId); } catch { return response.status(503).json({ message: "Convite indisponível no momento." }); } emitHouse(request.params.houseId); return response.status(201).json({ invite });
 });
@@ -888,7 +883,7 @@ const persistLastSeen = async (userId: string) => {
 };
 const registerConnection = (roomId: string, userId: string, socketId: string) => { const room = roomConnections.get(roomId) ?? new Map<string, Set<string>>(); const set = room.get(userId) ?? new Set<string>(); set.add(socketId); room.set(userId, set); roomConnections.set(roomId, room); const key = `${roomId}:${userId}`; const timer = offlineTimers.get(key); if (timer) clearTimeout(timer); offlineTimers.delete(key); return set.size; };
 const callSockets = new CallRegistry();
-const socketEventAttempts = new Map<string, { count: number; resetAt: number }>();
+const socketEventAttempts = new BoundedRateLimiter(40_000);
 const screenOwnerSockets = new Map<string, string>();
 const leaveCall = (roomId: string, user: User, socketId: string) => {
   if (!callSockets.leave(roomId, user.id, socketId)) return;
@@ -928,11 +923,7 @@ io.on("connection", (socket) => {
     if (event !== eventNames.roomLeave && (!payload || typeof payload !== "object" || Array.isArray(payload))) return next(new Error("Payload inválido."));
     if (event !== eventNames.roomJoin && joinedRoomId) { const house = social.getByRoom(joinedRoomId); if (deletingRooms.has(joinedRoomId) || !house || !social.isMember(house.id, user.id)) return next(new Error("Acesso à Casa revogado.")); }
     const ceiling = event === eventNames.chatMessage ? 20 : event === eventNames.chatTyping ? 60 : event === eventNames.voiceSignal ? 600 : 120;
-    const now = Date.now(), key = `${user.id}:${event}`, bucket = socketEventAttempts.get(key);
-    if (socketEventAttempts.size > 20_000) for (const [id, entry] of socketEventAttempts) if (entry.resetAt <= now) socketEventAttempts.delete(id);
-    if (socketEventAttempts.size > 40_000) return next(new Error("Muitas ações em pouco tempo."));
-    if (!bucket || bucket.resetAt < now) socketEventAttempts.set(key, { count: 1, resetAt: now + 60_000 });
-    else if (++bucket.count > ceiling) return next(new Error("Muitas ações em pouco tempo."));
+    if (!socketEventAttempts.consume(`${user.id}:${event}`, ceiling, 60_000, Date.now())) return next(new Error("Muitas ações em pouco tempo."));
     next();
   });
 

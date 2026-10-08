@@ -35,6 +35,19 @@ test("local signup/login, normalized uniqueness, hashed password and persisted s
   assert.equal(reloaded.resolveSession(token), undefined);
 });
 
+test("expired sessions are not restored or authorized after their recorded expiry", (context) => {
+  const { store, file, cleanup } = fixture(); context.after(cleanup);
+  const user = store.createLocal("Duck", "duck@example.test", "long-pass-123");
+  store.consumeVerification(store.issueToken(user.id, "EMAIL_VERIFICATION", 60_000, 0)!);
+  const token = store.createSession(user.id);
+  const persisted = JSON.parse(fs.readFileSync(file, "utf8")) as { sessions: Array<{ expiresAt: number }> };
+  persisted.sessions[0].expiresAt = Date.now() - 1;
+  fs.writeFileSync(file, JSON.stringify(persisted));
+  const reloaded = new AuthStore(file, 1);
+  assert.equal(reloaded.resolveSession(token), undefined);
+  assert.equal(reloaded.snapshot().sessions.length, 0);
+});
+
 test("new Google user returns by provider sub and never receives Drive authorization", (context) => {
   const { store, file, cleanup } = fixture(); context.after(cleanup);
   const first = store.loginGoogle(google());
