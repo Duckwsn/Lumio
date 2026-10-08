@@ -3,6 +3,26 @@ import assert from "node:assert/strict";
 import { RoomStore } from "./store.js";
 import { projectLibraryMedia } from "./socialLibrary.js";
 
+test("unknown media duration preserves authoritative position and seek", () => {
+  const store = new RoomStore();
+  const user = { id: "media-owner", displayName: "Owner", color: "#fff" };
+  const item = { id: "unknown-duration", provider: "google-drive" as const, providerMediaId: "unknown-duration-file", type: "video" as const, title: "Unknown duration", duration: 0, addedBy: user, addedAt: new Date().toISOString() };
+  store.addQueueItem("cinema", item);
+  store.changeMedia("cinema", item);
+  assert.equal(store.getRoom("cinema")?.currentMedia.duration, 0);
+  const withoutDuration = { ...item, id: "also-unknown", providerMediaId: "also-unknown-file", duration: undefined };
+  store.addQueueItem("cinema", withoutDuration);
+  store.changeMedia("cinema", withoutDuration);
+  assert.equal(store.getRoom("cinema")?.currentMedia.duration, 0, "unknown duration must not become a fictitious length");
+  store.changeMedia("cinema", item);
+  const seek = store.updateMedia("cinema", user.id, "seek", 30);
+  assert.equal(seek?.position, 30);
+  store.updateMedia("cinema", user.id, "play", 30);
+  const room = store.getRoom("cinema")!;
+  room.currentMedia.startedAt = Date.now() - 3_000;
+  assert.ok(store.getEffectiveMedia(room.currentMedia).position >= 33);
+});
+
 test("M3 occurrence retries are idempotent while intentional duplicates remain distinct", () => {
   const store = new RoomStore();
   const user = { id: "m3-owner", displayName: "Owner", color: "#fff" };

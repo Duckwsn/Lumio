@@ -5,7 +5,7 @@ import type { MediaItem } from "@lumio/shared";
 
 const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.readonly";
 const FOLDER = "application/vnd.google-apps.folder";
-const VIDEO = new Set(["video/mp4", "video/webm", "video/ogg"]);
+const PLAYABLE = new Set(["video/mp4", "video/webm", "video/ogg", "audio/mpeg", "audio/mp4", "audio/ogg", "audio/webm", "audio/wav"]);
 const FIELDS = "id,name,mimeType,size,modifiedTime,videoMediaMetadata(durationMillis),capabilities(canDownload)";
 const validId = (id: string) => /^[\w-]{10,200}$/.test(id);
 type Connection = { accessToken: string; refreshToken: string; expiresAt: number; email?: string; accountId?: string; scope: string };
@@ -17,7 +17,7 @@ export interface DriveVaultAdapter {
 type TokenResponse = { access_token?: string; refresh_token?: string; expires_in?: number; scope?: string };
 type File = { id: string; name: string; mimeType: string; size?: string; modifiedTime?: string; videoMediaMetadata?: { durationMillis?: string }; capabilities?: { canDownload?: boolean } };
 type Ticket = { roomId: string; fileId: string; ownerId: string; viewerId: string; sessionHash: string; expiresAt: number };
-export type DriveEntry = { id: string; name: string; kind: "folder" | "video"; item?: MediaItem; mimeType?: string; size?: string };
+export type DriveEntry = { id: string; name: string; kind: "folder" | "video" | "audio"; item?: MediaItem; mimeType?: string; size?: string };
 export class DriveError extends Error {
   constructor(public readonly code: "RECONNECT" | "UNAVAILABLE" | "FORBIDDEN" | "NOT_FOUND" | "RATE_LIMIT" | "BAD_REQUEST", message: string) { super(message); }
 }
@@ -153,19 +153,19 @@ export class GoogleDriveService {
     return response.json() as Promise<File>;
   }
   private media(file: File): MediaItem {
-    return { id: `drive:${file.id}`, provider: "google-drive", providerMediaId: file.id, type: "video", title: file.name, duration: file.videoMediaMetadata?.durationMillis ? Number(file.videoMediaMetadata.durationMillis) / 1000 : undefined, mimeType: file.mimeType, metadata: { size: file.size, modifiedTime: file.modifiedTime } };
+    return { id: `drive:${file.id}`, provider: "google-drive", providerMediaId: file.id, type: file.mimeType.startsWith("audio/") ? "audio" : "video", title: file.name, duration: file.videoMediaMetadata?.durationMillis ? Number(file.videoMediaMetadata.durationMillis) / 1000 : undefined, mimeType: file.mimeType, metadata: { size: file.size, modifiedTime: file.modifiedTime } };
   }
   async resolve(userId: string, input: string) {
     const match = input.match(/\/file\/d\/([\w-]+)/) ?? input.match(/[?&]id=([\w-]+)/);
     const file = await this.getFile(userId, match?.[1] ?? input.trim());
-    if (!VIDEO.has(file.mimeType) || file.capabilities?.canDownload === false) throw new DriveError("FORBIDDEN", "Este vídeo não pode ser reproduzido no navegador.");
+    if (!PLAYABLE.has(file.mimeType) || file.capabilities?.canDownload === false) throw new DriveError("FORBIDDEN", "Este arquivo não pode ser reproduzido no navegador.");
     return this.media(file);
   }
   async listFolder(userId: string, folderId = "root", pageToken?: string) {
     if (folderId !== "root" && (await this.getFile(userId, folderId)).mimeType !== FOLDER) throw new DriveError("BAD_REQUEST", "Pasta inválida.");
     const url = new URL("https://www.googleapis.com/drive/v3/files");
     const parent = folderId.replaceAll("\\", "\\\\").replaceAll("'", "\\'");
-    url.searchParams.set("q", `'${parent}' in parents and trashed = false and (mimeType = '${FOLDER}' or mimeType = 'video/mp4' or mimeType = 'video/webm' or mimeType = 'video/ogg')`);
+    url.searchParams.set("q", `'${parent}' in parents and trashed = false and (mimeType = '${FOLDER}' or ${[...PLAYABLE].map((mimeType) => `mimeType = '${mimeType}'`).join(" or ")})`);
     url.searchParams.set("pageSize", "100"); url.searchParams.set("orderBy", "folder,name_natural");
     url.searchParams.set("fields", `nextPageToken,files(${FIELDS})`);
     if (pageToken) url.searchParams.set("pageToken", pageToken);
@@ -175,7 +175,7 @@ export class GoogleDriveService {
     const entries: DriveEntry[] = [];
     for (const file of data.files ?? []) {
       if (file.mimeType === FOLDER) entries.push({ id: file.id, name: file.name, kind: "folder" });
-      else if (VIDEO.has(file.mimeType) && file.capabilities?.canDownload !== false) entries.push({ id: file.id, name: file.name, kind: "video", mimeType: file.mimeType, size: file.size, item: this.media(file) });
+      else if (PLAYABLE.has(file.mimeType) && file.capabilities?.canDownload !== false) entries.push({ id: file.id, name: file.name, kind: file.mimeType.startsWith("audio/") ? "audio" : "video", mimeType: file.mimeType, size: file.size, item: this.media(file) });
     }
     entries.sort((a, b) => a.kind === b.kind ? a.name.localeCompare(b.name, "pt-BR", { numeric: true }) : a.kind === "folder" ? -1 : 1);
     return { entries, nextPageToken: data.nextPageToken };

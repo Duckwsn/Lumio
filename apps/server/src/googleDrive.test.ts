@@ -24,12 +24,14 @@ test("OAuth PKCE, encrypted connection, paginated folder navigation, grants and 
       return Response.json({ files: [
         { id: "folder00001", name: "Filmes", mimeType: "application/vnd.google-apps.folder" },
         { id: "video000001", name: "A.mp4", mimeType: "video/mp4", capabilities: { canDownload: true } },
+        { id: "audio000001", name: "Trilha.mp3", mimeType: "audio/mpeg", capabilities: { canDownload: true } },
         { id: "document001", name: "segredo.pdf", mimeType: "application/pdf" },
         { id: "video000003", name: "Bloqueado.mp4", mimeType: "video/mp4", capabilities: { canDownload: false } },
       ], nextPageToken: "page-2" });
     }
     if (url.pathname.endsWith("/folder00001")) return Response.json({ id: "folder00001", name: "Filmes", mimeType: "application/vnd.google-apps.folder" });
     if (url.pathname.endsWith("/video000001")) return Response.json({ id: "video000001", name: "A.mp4", mimeType: "video/mp4", capabilities: { canDownload: true }, videoMediaMetadata: { durationMillis: "123000" } });
+    if (url.pathname.endsWith("/audio000001")) return Response.json({ id: "audio000001", name: "Trilha.mp3", mimeType: "audio/mpeg", capabilities: { canDownload: true } });
     return new Response(null, { status: 404 });
   }) as typeof fetch;
   try {
@@ -44,7 +46,9 @@ test("OAuth PKCE, encrypted connection, paginated folder navigation, grants and 
     assert.equal(drive.getStatus("viewer").connected, false);
     assert.equal(fs.readFileSync(vault, "utf8").includes("private-refresh"), false);
     const page1 = await drive.listFolder("owner");
-    assert.deepEqual(page1.entries.map((entry) => entry.name), ["Filmes", "A.mp4"]);
+    assert.deepEqual(page1.entries.map((entry) => entry.name), ["Filmes", "A.mp4", "Trilha.mp3"]);
+    assert.equal(page1.entries.find((entry) => entry.id === "audio000001")?.item?.type, "audio");
+    assert.equal((await drive.resolve("owner", "audio000001")).type, "audio");
     assert.equal(page1.nextPageToken, "page-2");
     const page2 = await drive.listFolder("owner", "root", page1.nextPageToken);
     assert.deepEqual(page2.entries.map((entry) => entry.name), ["B.webm"]);

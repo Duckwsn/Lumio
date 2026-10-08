@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { MediaState } from "@lumio/shared";
-import { DriveProvider, YouTubeProvider, MediaController, type MediaProviderAdapter } from "./MediaProvider";
+import { DriveProvider, YouTubeProvider, MediaController, expectedPosition, youtubePlaybackError, type MediaProviderAdapter } from "./MediaProvider";
 import { shouldDismissSheet } from "../components/MobileBottomSheet";
 
 const media = (provider: "youtube" | "google-drive", revision: number): MediaState => ({ mediaId: `${provider}-${revision}`, provider, type: "video", title: "Teste", state: "paused", position: 0, duration: 60, playbackRate: 1, startedAt: null, updatedAt: 0, controlledBy: "test", revision });
@@ -12,6 +12,20 @@ test("secondary sheet dismissal combines distance and downward velocity", () => 
   assert.equal(shouldDismissSheet(20, 400, 0.5), true);
   assert.equal(shouldDismissSheet(0, 400, 0.5), false);
   assert.equal(shouldDismissSheet(20, 400, -0.5), false);
+});
+
+test("unknown duration does not rewind a late-joining player to zero", () => {
+  const now = Date.now();
+  assert.equal(expectedPosition({ ...media("youtube", 1), state: "playing", position: 12, duration: 0, startedAt: now - 3_000 }, now), 15);
+  assert.equal(expectedPosition({ ...media("youtube", 1), state: "playing", position: 58, duration: 60, startedAt: now - 5_000 }, now), 60);
+});
+
+test("official YouTube errors distinguish embed restriction, missing video and origin configuration", () => {
+  assert.equal(youtubePlaybackError(101).code, "EMBED_RESTRICTED");
+  assert.equal(youtubePlaybackError(150).code, "EMBED_RESTRICTED");
+  assert.equal(youtubePlaybackError(100).code, "MEDIA_UNAVAILABLE");
+  assert.equal(youtubePlaybackError(153).code, "PROVIDER_ERROR");
+  assert.equal(youtubePlaybackError(5).code, "UNSUPPORTED_FORMAT");
 });
 
 test("YouTube reconciles either readiness order, latest media and autoplay gesture locally", async () => {
@@ -44,6 +58,68 @@ test("YouTube reconciles either readiness order, latest media and autoplay gestu
     blocked = false; controller.resumeFromGesture(); assert.equal(state, 1); assert.ok(position >= 22);
     assert.equal(plays, 2);
   } finally { controller.destroy(); globalThis.window = previousWindow; }
+});
+
+test("YouTube API script failure is bounded and a user retry can recover", async () => {
+  const previousWindow = globalThis.window, previousDocument = globalThis.document;
+  const scripts: Array<EventTarget & { src: string; async: boolean; isConnected: boolean; remove: () => void }> = [];
+  const documentMock = {
+    querySelector: () => null,
+    createElement: () => {
+      const script = Object.assign(new EventTarget(), { src: "", async: false, isConnected: false, remove() { script.isConnected = false; } });
+      scripts.push(script); return script;
+    },
+    head: { append: (script: (typeof scripts)[number]) => { script.isConnected = true; } },
+  };
+  globalThis.window = { setTimeout, clearTimeout } as unknown as Window & typeof globalThis;
+  globalThis.document = documentMock as unknown as Document;
+  const errors: string[] = [];
+  let cues = 0;
+  const controller = new MediaController({ youtube: () => new YouTubeProvider({ id: "retry-iframe" } as HTMLIFrameElement, () => undefined) }, (message) => errors.push(message));
+  try {
+    const initial = controller.sync(media("youtube", 1));
+    scripts[0].dispatchEvent(new Event("error"));
+    await initial;
+    assert.match(errors.at(-1) ?? "", /carregar o player do YouTube/);
+    assert.equal(scripts[0].isConnected, false);
+    class Player {
+      constructor(_id: string, options: { events: { onReady: () => void } }) { queueMicrotask(options.events.onReady); }
+      cueVideoById() { cues++; } getCurrentTime() { return 0; } getDuration() { return 60; }
+      getPlayerState() { return 2; } getPlaybackRate() { return 1; }
+      getAvailablePlaybackRates() { return [1]; } pauseVideo() {} destroy() {}
+    }
+    globalThis.window.YT = { Player } as unknown as NonNullable<Window["YT"]>;
+    await controller.retry(media("youtube", 1));
+    assert.equal(cues, 1);
+    assert.equal(errors.at(-1), "");
+  } finally { controller.destroy(); globalThis.window = previousWindow; globalThis.document = previousDocument; }
+});
+
+test("a late YouTube ended event for the prior video cannot advance the new one", async () => {
+  const previousWindow = globalThis.window;
+  let events: { onReady: () => void; onStateChange: (event: { data: number }) => void };
+  let videoId = "";
+  const emitted: string[] = [];
+  class Player {
+    constructor(_id: string, options: { events: typeof events }) { events = options.events; }
+    cueVideoById(input: { videoId: string }) { if (!videoId) videoId = input.videoId; }
+    getVideoUrl() { return `https://www.youtube.com/watch?v=${videoId}`; }
+    getCurrentTime() { return 0; } getDuration() { return 60; } getPlayerState() { return 2; }
+    getPlaybackRate() { return 1; } getAvailablePlaybackRates() { return [1]; }
+    pauseVideo() {} destroy() {}
+  }
+  globalThis.window = { YT: { Player } } as unknown as Window & typeof globalThis;
+  const provider = new YouTubeProvider({ id: "stale-iframe" } as HTMLIFrameElement, (event) => emitted.push(event.type));
+  try {
+    const first = provider.sync(media("youtube", 1));
+    await Promise.resolve(); events!.onReady(); await first;
+    await provider.sync(media("youtube", 2));
+    events!.onStateChange({ data: 0 });
+    assert.equal(emitted.includes("ended"), false);
+    videoId = "youtube-2";
+    events!.onStateChange({ data: 0 });
+    assert.equal(emitted.filter((type) => type === "ended").length, 1);
+  } finally { provider.destroy(); globalThis.window = previousWindow; }
 });
 
 test("Drive pending metadata applies the latest paused revision instead of old PLAYING", async () => {
@@ -127,6 +203,43 @@ test("Drive ticket request is aborted when provider is destroyed", async () => {
     assert.equal(observedSignal?.aborted, true);
     assert.equal(video.src, "");
   } finally { globalThis.fetch = previousFetch; }
+});
+
+test("Drive unsupported codec reports a permanent error without renewing a ticket", () => {
+  const events: string[] = [];
+  const video = Object.assign(new EventTarget(), { error: { code: 4 }, pause: () => undefined, removeAttribute: () => undefined, load: () => undefined }) as unknown as HTMLVideoElement;
+  const provider = new DriveProvider(video, "http://localhost:4000", "test", "room", (event) => { if (event.type === "error") events.push(event.code); });
+  try {
+    video.dispatchEvent(new Event("error"));
+    assert.deepEqual(events, ["UNSUPPORTED_FORMAT"]);
+  } finally { provider.destroy(); }
+});
+
+test("Drive network failure renews one ticket and preserves the playback position", async () => {
+  const previousFetch = globalThis.fetch;
+  let tickets = 0, plays = 0;
+  globalThis.fetch = (async () => Response.json({ url: `/api/google-drive/playback/test-${++tickets}` })) as typeof fetch;
+  const events: string[] = [];
+  const video = Object.assign(new EventTarget(), {
+    src: "", error: { code: 2 }, readyState: 1, paused: false, ended: false, playbackRate: 1,
+    currentTime: 18, duration: 60, canPlayType: () => "probably", load: () => undefined,
+    pause: () => undefined, play: async () => { plays++; }, removeAttribute: () => undefined,
+  }) as unknown as HTMLVideoElement;
+  const provider = new DriveProvider(video, "http://localhost:4000", "test", "room", (event) => events.push(event.type));
+  try {
+    await provider.sync({ ...media("google-drive", 1), state: "playing", position: 18, startedAt: Date.now() });
+    assert.equal(tickets, 1);
+    video.dispatchEvent(new Event("error"));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(tickets, 2);
+    video.currentTime = 0;
+    video.dispatchEvent(new Event("loadedmetadata"));
+    assert.ok(video.currentTime >= 18);
+    assert.ok(plays >= 1);
+    video.dispatchEvent(new Event("error"));
+    assert.equal(tickets, 2);
+    assert.ok(events.includes("error"));
+  } finally { provider.destroy(); globalThis.fetch = previousFetch; }
 });
 
 test("a stale Drive ticket cannot replace the newer video", async () => {

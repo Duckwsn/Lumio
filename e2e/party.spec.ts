@@ -705,6 +705,12 @@ test("mobile contextual Party Chat, secondary tools, late join and player idle c
     await assertPortraitLayout();
     await expect(page.getByRole("textbox", { name: "Mensagem" })).toHaveValue("Rascunho preservado");
     await expect(page.getByRole("button", { name: "Fechar chat", exact: true })).toHaveCount(0);
+    // Keep one real Media viewer while this tab reloads. Otherwise GX3's
+    // intentional zero-viewer pause may fire during a slow CI navigation.
+    const remainingViewer = await context.newPage();
+    await remainingViewer.goto(page.url());
+    await expect(remainingViewer.locator(".now-playing h2")).toHaveText(item.title);
+    await expect.poll(() => remainingViewer.evaluate(() => (window as any).qaPlayer.created)).toBe(1);
     await page.locator(".player-touch-surface").tap({ position: { x: 20, y: 20 } });
     await page.getByRole("button", { name: "Pausar", exact: true }).tap();
     await page.reload();
@@ -859,7 +865,7 @@ test("M1 three clients keep playback shared and Ambiente local through late join
         (window as any).qaM1 = { created: 0, destroyed: 0, state: -1, position: 0 };
         (window as any).YT = { Player: class {
           events: any;
-          constructor(_id: string, options: any) { (window as any).qaM1.created++; this.events = options.events; queueMicrotask(() => this.events.onReady()); }
+          constructor(_id: string, options: any) { (window as any).qaM1.created++; this.events = options.events; (window as any).qaM1.events = this.events; queueMicrotask(() => this.events.onReady()); }
           cueVideoById() {} seekTo(value: number) { (window as any).qaM1.position = value; }
           playVideo() { (window as any).qaM1.state = 1; this.events.onStateChange({ data: 1 }); }
           pauseVideo() { (window as any).qaM1.state = 2; this.events.onStateChange({ data: 2 }); }
@@ -884,6 +890,7 @@ test("M1 three clients keep playback shared and Ambiente local through late join
     await expect(b.locator(".now-playing h2")).toHaveText(first.title);
     await expect.poll(() => a.evaluate(() => (window as any).qaM1.created)).toBe(1);
     await expect.poll(() => b.evaluate(() => (window as any).qaM1.created)).toBe(1);
+    const firstIframeSource = await a.locator("iframe.provider-player").getAttribute("src");
     await b.getByRole("button", { name: "Entrar no Ambiente", exact: true }).click();
     await expect(b.locator(".music-presentation")).toBeVisible();
     await expect(a.locator(".music-presentation")).toHaveCount(0);
@@ -907,6 +914,7 @@ test("M1 three clients keep playback shared and Ambiente local through late join
       expect((await socket.timeout(5000).emitWithAck("media:change", { roomId: house.primaryRoomId, item: next })).ok).toBe(true);
     }
     for (const page of [a, b, c]) await expect(page.locator(".now-playing h2")).toHaveText(third.title);
+    expect(await a.locator("iframe.provider-player").getAttribute("src")).toBe(firstIframeSource);
     await expect(b.locator(".music-presentation strong")).toHaveText(third.title);
     await expect(a.locator(".music-presentation")).toHaveCount(0);
     await expect(c.locator(".music-presentation")).toHaveCount(0);
@@ -914,6 +922,20 @@ test("M1 three clients keep playback shared and Ambiente local through late join
     fs.mkdirSync(path.join(root, "artifacts/m1"), { recursive: true });
     await b.screenshot({ path: "artifacts/m1/m1-multi-client-b-ambient.png" });
     await a.screenshot({ path: "artifacts/m1/m1-multi-client-a-video.png" });
+    await a.clock.install();
+    await a.evaluate(() => { (window as any).qaM1.state = 3; (window as any).qaM1.events.onStateChange({ data: 3 }); });
+    await expect(a.getByText("Aguardando vídeo…")).toBeVisible();
+    await a.clock.fastForward(15_100);
+    await expect(a.getByText("Carregamento demorado")).toBeVisible();
+    await a.screenshot({ path: "artifacts/m1/m1-buffering-recovery.png" });
+    await a.getByRole("button", { name: "Tentar novamente" }).click();
+    await expect.poll(() => a.evaluate(() => (window as any).qaM1.state)).toBe(1);
+    const audio = { ...item("9bZkp7q19f0", "M1 áudio sintético"), type: "audio" };
+    expect((await socket.timeout(5000).emitWithAck("queue:add", { roomId: house.primaryRoomId, item: audio })).ok).toBe(true);
+    expect((await socket.timeout(5000).emitWithAck("media:change", { roomId: house.primaryRoomId, item: audio })).ok).toBe(true);
+    await expect(a.locator(".music-presentation strong")).toHaveText(audio.title);
+    await expect(a.getByRole("button", { name: "Sair do Ambiente" })).toHaveCount(0);
+    await a.screenshot({ path: "artifacts/m1/m1-audio-presentation.png" });
   } finally { socket.disconnect(); for (const context of contexts) await context.close(); }
 });
 

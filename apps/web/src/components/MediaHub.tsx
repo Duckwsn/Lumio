@@ -316,7 +316,7 @@ function PlaylistPicker({ playlists, item, roomId, request, onAdd, onCreated, on
 }
 
 type DrivePage = { entries: DriveEntry[]; nextPageToken?: string };
-type DriveEntry = { id: string; name: string; kind: "folder" | "video"; item?: MediaItem; mimeType?: string; size?: string };
+type DriveEntry = { id: string; name: string; kind: "folder" | "video" | "audio"; item?: MediaItem; mimeType?: string; size?: string };
 const sortDriveEntries = (entries: DriveEntry[]) => entries.sort((a, b) => a.kind === b.kind ? a.name.localeCompare(b.name, "pt-BR", { numeric: true }) : a.kind === "folder" ? -1 : 1);
 
 function DriveExplorer({ status, request, onRefresh, onAdd, onPlayNext, onSave, onFavorite, onPlaylist, savedKeys, favoriteKeys, playlists, onError }: { status: DriveStatus; request: <T>(path: string, init?: RequestInit) => Promise<T>; onRefresh: () => Promise<void>; onAdd: (item: MediaItem, playNow: boolean) => void; onPlayNext: (item: MediaItem) => void; onSave: (item: MediaItem) => void; onFavorite: (item: MediaItem) => void; onPlaylist: (item: MediaItem) => void; savedKeys: Set<string>; favoriteKeys: Set<string>; playlists: Playlist[]; onError: (message: string) => void }) {
@@ -369,7 +369,7 @@ function DriveExplorer({ status, request, onRefresh, onAdd, onPlayNext, onSave, 
     {loading && !page.entries.length ? <p className="drive-hint" role="status">Carregando pasta…</p> : null}
     {error ? <div className="hub-message" role="alert">{error}<button onClick={() => void load(folderId, undefined, true)}>Tentar novamente</button></div> : null}
     {!loading && !error && !page.entries.length ? <div className="hub-empty compact"><Folder /><h3>Nenhum vídeo nesta pasta</h3><p>Pastas e vídeos compatíveis aparecerão aqui.</p></div> : null}
-    <div className="drive-entry-list">{page.entries.filter((entry) => entry.kind === "folder").map((entry) => <button className="drive-folder" key={entry.id} onClick={() => openFolder(entry)}><Folder size={21} /><span>{entry.name}</span><span aria-hidden="true">›</span></button>)}{page.entries.some((entry) => entry.kind === "video" && entry.item) ? <MediaList title="Vídeos desta pasta" items={page.entries.filter((entry) => entry.kind === "video" && entry.item).map((entry) => entry.item!)} savedKeys={savedKeys} favoriteKeys={favoriteKeys} playlists={playlists} onAdd={onAdd} onPlayNext={onPlayNext} onSave={onSave} onFavorite={onFavorite} onPlaylist={onPlaylist} /> : null}</div>
+    <div className="drive-entry-list">{page.entries.filter((entry) => entry.kind === "folder").map((entry) => <button className="drive-folder" key={entry.id} onClick={() => openFolder(entry)}><Folder size={21} /><span>{entry.name}</span><span aria-hidden="true">›</span></button>)}{page.entries.some((entry) => entry.kind !== "folder" && entry.item) ? <MediaList title="Mídias desta pasta" items={page.entries.filter((entry) => entry.kind !== "folder" && entry.item).map((entry) => entry.item!)} savedKeys={savedKeys} favoriteKeys={favoriteKeys} playlists={playlists} onAdd={onAdd} onPlayNext={onPlayNext} onSave={onSave} onFavorite={onFavorite} onPlaylist={onPlaylist} /> : null}</div>
     {page.nextPageToken ? <button className="load-more" onClick={() => void load(folderId, page.nextPageToken)} disabled={loading}>{loading ? "Carregando…" : "Carregar mais"}</button> : null}
   </section>;
 }
